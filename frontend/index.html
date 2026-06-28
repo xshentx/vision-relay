@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Proxy</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">CP</div>
+        <div>
+          <h1>Codex Proxy</h1>
+          <p>多模态中转</p>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item active" type="button" data-page="home">概览</button>
+        <button class="nav-item" type="button" data-page="text">文本模型</button>
+        <button class="nav-item" type="button" data-page="vision">视觉模型</button>
+        <button class="nav-item" type="button" data-page="access">客户端接入</button>
+        <button class="nav-item" type="button" data-page="logs">对话日志</button>
+        <button class="nav-item" type="button" data-page="playground">测试台</button>
+      </nav>
+
+      <div class="side-note">
+        <span class="dot"></span>
+        <span>本地服务</span>
+        <strong id="serviceState">检测中</strong>
+      </div>
+    </aside>
+
+    <main class="content">
+      <section class="page active" data-page-panel="home">
+      <section class="hero" id="overview">
+        <div>
+          <p class="eyebrow">Desktop multimodal relay</p>
+          <h2>让文本模型接住图片请求</h2>
+          <p class="hero-copy">客户端请求进入本机代理后，图片先由视觉模型解析为文本，再交给 Codex、Responses、Chat Completions 或其他文本上游继续处理。</p>
+        </div>
+        <div class="hero-actions">
+          <span class="status" id="status">未加载</span>
+          <button class="ghost" id="reloadConfig" type="button">刷新</button>
+        </div>
+      </section>
+
+      <section class="metric-grid">
+        <div class="metric">
+          <span>OpenAI</span>
+          <strong>/v1/responses</strong>
+          <small>Codex / Responses ready</small>
+        </div>
+        <div class="metric">
+          <span>Chat</span>
+          <strong>/v1/chat/completions</strong>
+          <small>OpenAI compatible</small>
+        </div>
+        <div class="metric">
+          <span>Native APIs</span>
+          <strong>Anthropic / Gemini / Ollama</strong>
+          <small>图片字段自动转文本</small>
+        </div>
+      </section>
+      </section>
+
+      <form id="configForm" class="layout">
+        <section class="page panel span-7" id="text" data-page-panel="text">
+          <div class="panel-head">
+            <div>
+              <h3>文本模型</h3>
+              <p>保存多个文本上游，切换当前客户端请求最终转发到哪个文本模型。</p>
+            </div>
+            <button class="secondary" id="addTextProfile" type="button">新增</button>
+          </div>
+          <div class="profile-list" id="textProfileList" aria-label="文本模型列表"></div>
+        </section>
+
+        <section class="page panel span-7" id="vision" data-page-panel="vision">
+          <div class="panel-head">
+            <div>
+              <h3>视觉模型</h3>
+              <p>图片会先交给这里选中的视觉模型解析，再把解析结果交给文本模型。</p>
+            </div>
+            <button class="secondary" id="addVisionProfile" type="button">新增</button>
+          </div>
+          <div class="profile-list" id="visionProfileList" aria-label="视觉模型列表"></div>
+          <div class="hint" id="visionModelHint">视觉模型需要能描述图片内容。不要使用 llama-guard、safety、moderation 这类安全分类模型，否则只会返回 safe/unsafe。</div>
+        </section>
+
+        <section class="page panel span-5" id="access" data-page-panel="access">
+          <div class="panel-head compact">
+            <div>
+              <h3>客户端接入</h3>
+              <p>同一个客户端 Key 可用于多种接口形态：Responses、Chat Completions、Anthropic、Gemini、Ollama 等。</p>
+            </div>
+          </div>
+
+          <div class="key-head">
+            <label>
+              客户端名称
+              <input id="clientKeyName" placeholder="例如 Cherry Studio、Open WebUI、手机端">
+            </label>
+            <button class="secondary" id="generateKey" type="button">生成 Key</button>
+          </div>
+          <div class="key-list" id="clientKeyList"></div>
+
+          <div class="endpoint-list">
+            <div class="endpoint-row">
+              <span>OpenAI Base</span>
+              <code id="openaiBaseEndpoint"></code>
+            </div>
+            <div class="endpoint-row">
+              <span>Responses</span>
+              <code id="responsesEndpoint"></code>
+            </div>
+            <div class="endpoint-row">
+              <span>Chat</span>
+              <code id="chatEndpoint"></code>
+            </div>
+            <div class="endpoint-row">
+              <span>Anthropic Base</span>
+              <code id="anthropicBaseEndpoint"></code>
+            </div>
+            <div class="endpoint-row">
+              <span>Anthropic 消息</span>
+              <code id="anthropicMessagesEndpoint"></code>
+            </div>
+            <div class="endpoint-row">
+              <span>Gemini Base</span>
+              <code id="geminiBaseEndpoint"></code>
+            </div>
+            <div class="endpoint-row">
+              <span>Gemini 例子</span>
+              <code id="geminiGenerateEndpoint"></code>
+            </div>
+            <div class="endpoint-row">
+              <span>Ollama Chat</span>
+              <code id="ollamaChatEndpoint"></code>
+            </div>
+            <div class="endpoint-row">
+              <span>Ollama Generate</span>
+              <code id="ollamaGenerateEndpoint"></code>
+            </div>
+          </div>
+
+          <div class="client-snippet">
+            <div>
+              <h4>OpenCode 图片接入</h4>
+              <p>自定义 OpenAI-compatible 模型需要声明图片附件能力，否则 OpenCode 会在本地拦截图片，不会把图片发到中转服务。</p>
+            </div>
+            <pre><code id="opencodeConfig"></code></pre>
+          </div>
+
+          <div class="client-snippet">
+            <div>
+              <h4>Codex 客户端接入</h4>
+              <p>Codex 走 Responses 接口。把 Base URL 指向本机中转后，图片会先交给视觉模型解析，再转给当前文本模型继续完成代码任务。</p>
+            </div>
+            <pre><code id="codexConfig"></code></pre>
+          </div>
+
+          <div class="client-snippet">
+            <div>
+              <h4>Claude Code 客户端接入</h4>
+              <p>Claude Code 走 Anthropic Messages 接口。中转会把 Anthropic 请求转换到当前文本模型，并保留工具调用和图片识别结果。</p>
+            </div>
+            <pre><code id="claudeCodeConfig"></code></pre>
+          </div>
+        </section>
+
+        <section class="page panel span-12" id="logs" data-page-panel="logs">
+          <div class="panel-head">
+            <div>
+              <h3>对话日志</h3>
+              <p>记录客户端请求、使用的密钥、模型、Token 用量、缓存命中、首 token 和耗时。</p>
+            </div>
+            <div class="panel-actions">
+              <button class="secondary" id="refreshLogs" type="button">刷新</button>
+              <button class="danger" id="clearLogs" type="button">清空</button>
+            </div>
+          </div>
+          <div class="log-list" id="logList"></div>
+          <div class="log-pager">
+            <label>
+              每页
+              <select id="logPageSize">
+                <option value="10">10 条</option>
+                <option value="20" selected>20 条</option>
+                <option value="50">50 条</option>
+                <option value="100">100 条</option>
+              </select>
+            </label>
+            <span id="logPageInfo">第 1 / 1 页，共 0 条</span>
+            <div class="log-pager-actions">
+              <button class="secondary" id="prevLogPage" type="button">上一页</button>
+              <button class="secondary" id="nextLogPage" type="button">下一页</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="page panel span-12" id="playground" data-page-panel="playground">
+          <div class="panel-head">
+            <div>
+              <h3>请求测试台</h3>
+              <p>上传图片后可分别测试 Chat Completions 和 Codex / Responses 请求形态。</p>
+            </div>
+            <div class="segmented" role="tablist" aria-label="测试接口">
+              <button class="segment active" type="button" data-mode="chat">Chat</button>
+              <button class="segment" type="button" data-mode="responses">Responses</button>
+            </div>
+          </div>
+
+          <div class="playground-grid">
+            <div class="composer">
+              <label>
+                需求
+                <textarea id="prompt" rows="5" placeholder="例如：读图后总结关键信息，并给出下一步建议"></textarea>
+              </label>
+              <label class="upload">
+                <input id="image" type="file" accept="image/*">
+                <span>选择图片</span>
+                <small id="fileName">支持 data URL、本地上传、远程图片 URL</small>
+              </label>
+            </div>
+
+            <div class="preview-wrap">
+              <div class="preview" id="preview"></div>
+              <button id="send" type="button">发送测试</button>
+            </div>
+          </div>
+
+          <div class="debug-output">
+            <div class="debug-title">图片模型返回</div>
+            <pre id="visionOutput">尚未触发图片解析</pre>
+          </div>
+          <pre id="output"></pre>
+        </section>
+      </form>
+    </main>
+  </div>
+
+  <dialog class="modal" id="profileModal">
+    <form class="modal-card" id="profileModalForm">
+      <div class="modal-head">
+        <div>
+          <h3 id="profileModalTitle">新增模型</h3>
+          <p id="profileModalHelp">创建后会自动切换到新模型并保存。</p>
+        </div>
+        <button class="icon-button" id="closeProfileModal" type="button" aria-label="关闭">×</button>
+      </div>
+
+      <div class="modal-grid">
+        <label>
+          方案名称
+          <input id="modalProfileName" required placeholder="例如 Z.ai GLM 5.1">
+        </label>
+        <label>
+          类型
+          <select id="modalProfileProvider">
+            <option value="openai">OpenAI / Compatible</option>
+            <option value="anthropic">Anthropic Messages</option>
+            <option value="gemini">Gemini generateContent</option>
+            <option value="ollama">Ollama</option>
+          </select>
+        </label>
+        <label>
+          Base URL
+          <input id="modalProfileBaseURL" required placeholder="https://api.openai.com">
+        </label>
+        <label>
+          API Key
+          <input id="modalProfileAPIKey" type="password" autocomplete="off" placeholder="上游模型 Key">
+        </label>
+        <label>
+          <span id="modalProfileModelLabel">强制模型名</span>
+          <div class="model-picker-line">
+            <input id="modalProfileModel" placeholder="留空则使用客户端请求里的 model">
+            <button class="secondary" id="fetchModels" type="button">获取模型</button>
+          </div>
+        </label>
+        <div class="model-picker-panel" id="modelPickerPanel" hidden>
+          <input id="modelSearch" placeholder="搜索模型">
+          <select id="modelSelect" size="6"></select>
+          <div class="model-picker-status" id="modelPickerStatus">点击模型即可填入。</div>
+        </div>
+        <label id="modalProfileProxyWrap">
+          网络代理 URL
+          <input id="modalProfileProxyURL" placeholder="例如 http://127.0.0.1:7890">
+        </label>
+      </div>
+
+      <div class="modal-actions">
+        <button class="ghost-light" id="cancelProfileModal" type="button">取消</button>
+        <button id="profileModalSubmit" type="submit">创建并切换</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="/app.js"></script>
+</body>
+</html>

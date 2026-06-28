@@ -1,0 +1,36 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Build outputs
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+dist/
+build/
+bin/
+tmp/
+temp/
+
+# Go test/build artifacts
+*.test
+coverage.out
+
+# Frontend dependencies/cache
+node_modules/
+.vite/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
