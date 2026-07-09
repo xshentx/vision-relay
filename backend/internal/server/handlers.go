@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"codex-proxy/frontend"
+	"vision-relay/frontend"
 )
 
 func (a *app) handleWeb(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +59,8 @@ func (a *app) handleTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	req["model"] = firstString(req["model"], a.currentConfig().TextModelOverride, "local-text-model")
+	cfg := a.currentConfig()
+	req["model"] = firstString(effectiveTextModel(cfg, firstString(req["model"])), "local-text-model")
 	req["messages"] = []any{
 		map[string]any{"role": "user", "content": req["content"]},
 	}
@@ -105,7 +106,8 @@ func (a *app) processOpenAIChat(ctx context.Context, body []byte, header http.He
 		}
 		parsed = append(parsed, pm)
 	}
-	if hasImage {
+	imageAugmented := false
+	if hasImage && shouldAugmentImages(cfg) {
 		rawMessages, _ := payload["messages"].([]any)
 		for i := range parsed {
 			if len(parsed[i].Images) == 0 {
@@ -120,10 +122,15 @@ func (a *app) processOpenAIChat(ctx context.Context, body []byte, header http.He
 					msg["content"] = buildAugmentedContent(parsed[i].Text, analysis)
 				}
 			}
+			imageAugmented = true
 		}
 	}
-	if cfg.TextModelOverride != "" {
-		payload["model"] = cfg.TextModelOverride
+	if imageAugmented {
+		removeImageViewTools(payload)
+	}
+	model := effectiveTextModel(cfg, firstString(payload["model"]))
+	if model != "" {
+		payload["model"] = model
 	}
 	ensureStreamUsage(payload)
 	sanitizeOpenAIChatPayload(payload)
@@ -152,10 +159,14 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	if cfg.TextModelOverride != "" {
-		payload["model"] = cfg.TextModelOverride
+	if changed {
+		removeImageViewTools(payload)
 	}
-	if normalizeProvider(cfg.TextProvider) == "openai" {
+	model := effectiveTextModel(cfg, firstString(payload["model"]))
+	if model != "" {
+		payload["model"] = model
+	}
+	if normalizeProvider(cfg.TextProvider) == "openai" && normalizeWireAPI(cfg.TextWireAPI) != "responses" {
 		chatPayload := responsesPayloadToChatCompletions(payload)
 		ensureStreamUsage(chatPayload)
 		sanitizeOpenAIChatPayload(chatPayload)
@@ -173,7 +184,7 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := body
-	if changed || cfg.TextModelOverride != "" {
+	if changed || model != "" {
 		out, _ = json.Marshal(payload)
 	}
 	resp, err := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, canonicalRequestURI(r.URL.RequestURI()), out, r.Header)
@@ -185,6 +196,9 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) augmentOpenAIResponses(ctx context.Context, cfg config, payload map[string]any) (bool, error) {
+	if !shouldAugmentImages(cfg) {
+		return false, nil
+	}
 	input, ok := payload["input"]
 	if !ok {
 		return false, nil
@@ -229,6 +243,70 @@ func (a *app) augmentOpenAIResponses(ctx context.Context, cfg config, payload ma
 	return changed, nil
 }
 
+func removeImageViewTools(payload map[string]any) {
+	rawTools, ok := payload["tools"].([]any)
+	if !ok || len(rawTools) == 0 {
+		return
+	}
+	tools := make([]any, 0, len(rawTools))
+	removed := map[string]bool{}
+	for _, item := range rawTools {
+		tool, _ := item.(map[string]any)
+		name := toolName(tool)
+		if isImageViewToolName(name) {
+			removed[name] = true
+			continue
+		}
+		tools = append(tools, item)
+	}
+	if len(removed) == 0 {
+		return
+	}
+	if len(tools) == 0 {
+		delete(payload, "tools")
+	} else {
+		payload["tools"] = tools
+	}
+	if choice, _ := payload["tool_choice"].(map[string]any); isImageViewToolName(toolChoiceName(choice)) {
+		delete(payload, "tool_choice")
+	}
+}
+
+func toolName(tool map[string]any) string {
+	if tool == nil {
+		return ""
+	}
+	if name := firstString(tool["name"]); name != "" {
+		return name
+	}
+	if fn, _ := tool["function"].(map[string]any); fn != nil {
+		return firstString(fn["name"])
+	}
+	return ""
+}
+
+func toolChoiceName(choice map[string]any) string {
+	if choice == nil {
+		return ""
+	}
+	if name := firstString(choice["name"]); name != "" {
+		return name
+	}
+	if fn, _ := choice["function"].(map[string]any); fn != nil {
+		return firstString(fn["name"])
+	}
+	return ""
+}
+
+func isImageViewToolName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "view_image", "open_image", "inspect_image", "read_image":
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
@@ -243,30 +321,33 @@ func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	messages, _ := payload["messages"].([]any)
 	changed := false
-	for _, item := range messages {
-		msg, ok := item.(map[string]any)
-		if !ok {
-			continue
+	if shouldAugmentImages(cfg) {
+		for _, item := range messages {
+			msg, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			pm := parseAnthropicContent(msg["content"])
+			if len(pm.Images) == 0 {
+				continue
+			}
+			analysis, err := a.describeImages(r.Context(), cfg, pm)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+			msg["content"] = buildAugmentedContent(pm.Text, analysis)
+			changed = true
 		}
-		pm := parseAnthropicContent(msg["content"])
-		if len(pm.Images) == 0 {
-			continue
-		}
-		analysis, err := a.describeImages(r.Context(), cfg, pm)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, err)
-			return
-		}
-		msg["content"] = buildAugmentedContent(pm.Text, analysis)
-		changed = true
 	}
-	if cfg.TextModelOverride != "" {
-		payload["model"] = cfg.TextModelOverride
+	model := effectiveTextModel(cfg, firstString(payload["model"]))
+	if model != "" {
+		payload["model"] = model
 	}
 	if normalizeProvider(cfg.TextProvider) == "openai" {
 		chatPayload := anthropicPayloadToChatCompletions(payload)
-		if cfg.TextModelOverride != "" {
-			chatPayload["model"] = cfg.TextModelOverride
+		if model != "" {
+			chatPayload["model"] = model
 		}
 		stream, _ := payload["stream"].(bool)
 		if stream {
@@ -287,7 +368,7 @@ func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := body
-	if changed || cfg.TextModelOverride != "" {
+	if changed || model != "" {
 		out, _ = json.Marshal(payload)
 	}
 	resp, err := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, canonicalRequestURI(r.URL.RequestURI()), out, r.Header)
@@ -343,28 +424,30 @@ func (a *app) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	contents, _ := payload["contents"].([]any)
 	changed := false
-	for _, item := range contents {
-		content, ok := item.(map[string]any)
-		if !ok {
-			continue
+	if shouldAugmentImages(cfg) {
+		for _, item := range contents {
+			content, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			pm := parseGeminiParts(content["parts"])
+			if len(pm.Images) == 0 {
+				continue
+			}
+			analysis, err := a.describeImages(r.Context(), cfg, pm)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+			content["parts"] = []any{map[string]any{"text": buildAugmentedContent(pm.Text, analysis)}}
+			changed = true
 		}
-		pm := parseGeminiParts(content["parts"])
-		if len(pm.Images) == 0 {
-			continue
-		}
-		analysis, err := a.describeImages(r.Context(), cfg, pm)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, err)
-			return
-		}
-		content["parts"] = []any{map[string]any{"text": buildAugmentedContent(pm.Text, analysis)}}
-		changed = true
 	}
 	out := body
 	if changed {
 		out, _ = json.Marshal(payload)
 	}
-	resp, err := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, r.URL.RequestURI(), out, r.Header)
+	resp, err := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, geminiRequestURIWithEffectiveModel(cfg, r.URL.RequestURI()), out, r.Header)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -386,29 +469,32 @@ func (a *app) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	}
 	messages, _ := payload["messages"].([]any)
 	changed := false
-	for _, item := range messages {
-		msg, ok := item.(map[string]any)
-		if !ok {
-			continue
+	if shouldAugmentImages(cfg) {
+		for _, item := range messages {
+			msg, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			pm := parseOllamaMessage(msg)
+			if len(pm.Images) == 0 {
+				continue
+			}
+			analysis, err := a.describeImages(r.Context(), cfg, pm)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+			msg["content"] = buildAugmentedContent(pm.Text, analysis)
+			delete(msg, "images")
+			changed = true
 		}
-		pm := parseOllamaMessage(msg)
-		if len(pm.Images) == 0 {
-			continue
-		}
-		analysis, err := a.describeImages(r.Context(), cfg, pm)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, err)
-			return
-		}
-		msg["content"] = buildAugmentedContent(pm.Text, analysis)
-		delete(msg, "images")
-		changed = true
 	}
-	if cfg.TextModelOverride != "" {
-		payload["model"] = cfg.TextModelOverride
+	model := effectiveTextModel(cfg, firstString(payload["model"]))
+	if model != "" {
+		payload["model"] = model
 	}
 	out := body
-	if changed || cfg.TextModelOverride != "" {
+	if changed || model != "" {
 		out, _ = json.Marshal(payload)
 	}
 	resp, err := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, r.URL.RequestURI(), out, r.Header)
@@ -431,23 +517,26 @@ func (a *app) handleOllamaGenerate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	pm := parseOllamaGenerate(payload)
 	changed := false
-	if len(pm.Images) > 0 {
-		analysis, err := a.describeImages(r.Context(), cfg, pm)
-		if err != nil {
-			writeError(w, http.StatusBadGateway, err)
-			return
+	if shouldAugmentImages(cfg) {
+		pm := parseOllamaGenerate(payload)
+		if len(pm.Images) > 0 {
+			analysis, err := a.describeImages(r.Context(), cfg, pm)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, err)
+				return
+			}
+			payload["prompt"] = buildAugmentedContent(pm.Text, analysis)
+			delete(payload, "images")
+			changed = true
 		}
-		payload["prompt"] = buildAugmentedContent(pm.Text, analysis)
-		delete(payload, "images")
-		changed = true
 	}
-	if cfg.TextModelOverride != "" {
-		payload["model"] = cfg.TextModelOverride
+	model := effectiveTextModel(cfg, firstString(payload["model"]))
+	if model != "" {
+		payload["model"] = model
 	}
 	out := body
-	if changed || cfg.TextModelOverride != "" {
+	if changed || model != "" {
 		out, _ = json.Marshal(payload)
 	}
 	resp, err := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, r.URL.RequestURI(), out, r.Header)
@@ -471,4 +560,31 @@ func (a *app) handleRawProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeUpstream(w, resp)
+}
+
+func geminiRequestURIWithEffectiveModel(cfg config, requestURI string) string {
+	models := textModelOverrides(cfg)
+	if len(models) == 0 {
+		return requestURI
+	}
+	prefixes := []string{"/v1beta/models/", "/v1/models/"}
+	for _, prefix := range prefixes {
+		if !strings.HasPrefix(requestURI, prefix) {
+			continue
+		}
+		suffixStart := len(prefix)
+		suffixIndex := strings.Index(requestURI[suffixStart:], ":")
+		if suffixIndex < 0 {
+			return requestURI
+		}
+		modelStart := suffixStart
+		modelEnd := suffixStart + suffixIndex
+		requested := requestURI[modelStart:modelEnd]
+		model := effectiveTextModel(cfg, requested)
+		if model == "" {
+			return requestURI
+		}
+		return requestURI[:modelStart] + model + requestURI[modelEnd:]
+	}
+	return requestURI
 }

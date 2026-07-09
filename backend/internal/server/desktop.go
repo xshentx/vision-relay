@@ -25,7 +25,7 @@ func runClientWindow(rawURL string) {
 	defer runtime.UnlockOSThread()
 	w := webview.New(false)
 	defer w.Destroy()
-	w.SetTitle("Codex Proxy")
+	w.SetTitle(appDisplayName)
 	setNativeWindowIcon(w.Window())
 	w.SetSize(1180, 820, webview.HintNone)
 	w.Navigate(rawURL)
@@ -64,10 +64,10 @@ func runTrayApp(rawURL string, shutdown func()) {
 
 	systray.Run(func() {
 		systray.SetIcon(appIcon)
-		systray.SetTitle("Codex Proxy")
-		systray.SetTooltip("Codex Proxy 正在运行")
-		mOpen := systray.AddMenuItem("打开窗口", "Open Codex Proxy")
-		mQuit := systray.AddMenuItem("退出", "Exit Codex Proxy")
+		systray.SetTitle(appDisplayName)
+		systray.SetTooltip(appDisplayName + " 正在运行")
+		mOpen := systray.AddMenuItem("打开窗口", "Open "+appDisplayName)
+		mQuit := systray.AddMenuItem("退出", "Exit "+appDisplayName)
 		go func() {
 			openWindow()
 			for {

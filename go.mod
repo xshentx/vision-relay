@@ -1,4 +1,4 @@
-module codex-proxy
+module vision-relay
 
 go 1.25.0
 

@@ -80,6 +80,161 @@ func TestAugmentOpenAIResponsesConvertsImagesToText(t *testing.T) {
 	if !strings.Contains(text, "summarize") || !strings.Contains(text, "image says hello") {
 		t.Fatalf("augmented text missing expected content: %s", text)
 	}
+	if !strings.Contains(text, "不要再调用 view_image") {
+		t.Fatalf("augmented text should prevent image tool loops: %s", text)
+	}
+}
+
+func TestAugmentOpenAIResponsesCachesVisionDescriptions(t *testing.T) {
+	visionCalls := 0
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		visionCalls++
+		writeJSON(w, http.StatusOK, map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{
+						"content": "cached image description",
+					},
+				},
+			},
+		})
+	}))
+	defer visionServer.Close()
+
+	a := &app{httpClient: visionServer.Client()}
+	cfg := config{
+		VisionProvider: "openai",
+		VisionBaseURL:  visionServer.URL,
+		VisionAPIKey:   "vision-key",
+		VisionModel:    "vision-test",
+		VisionPrompt:   "extract image facts",
+	}
+	newPayload := func() map[string]any {
+		return map[string]any{
+			"model": "codex-text",
+			"input": []any{
+				map[string]any{
+					"role": "user",
+					"content": []any{
+						map[string]any{"type": "input_text", "text": "describe"},
+						map[string]any{"type": "input_image", "image_url": "data:image/png;base64,aGVsbG8="},
+					},
+				},
+			},
+		}
+	}
+
+	for i := 0; i < 2; i++ {
+		payload := newPayload()
+		changed, err := a.augmentOpenAIResponses(context.Background(), cfg, payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !changed {
+			t.Fatal("expected payload to change")
+		}
+		input := payload["input"].([]any)
+		msg := input[0].(map[string]any)
+		content := msg["content"].([]any)
+		text := content[0].(map[string]any)["text"].(string)
+		if !strings.Contains(text, "cached image description") {
+			t.Fatalf("augmented text missing cached description: %s", text)
+		}
+	}
+	if visionCalls != 1 {
+		t.Fatalf("expected one vision upstream call, got %d", visionCalls)
+	}
+	if !a.lastVision.Cached {
+		t.Fatalf("second vision debug entry should be cached: %#v", a.lastVision)
+	}
+}
+
+func TestDescribeImagesCachesEachImageIndependently(t *testing.T) {
+	visionCalls := 0
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		visionCalls++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		messages := payload["messages"].([]any)
+		content := messages[0].(map[string]any)["content"].([]any)
+		imageURL := content[1].(map[string]any)["image_url"].(map[string]any)["url"].(string)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"choices": []any{
+				map[string]any{
+					"message": map[string]any{
+						"content": "description for " + imageURL,
+					},
+				},
+			},
+		})
+	}))
+	defer visionServer.Close()
+
+	a := &app{httpClient: visionServer.Client()}
+	cfg := config{
+		VisionProvider: "openai",
+		VisionBaseURL:  visionServer.URL,
+		VisionAPIKey:   "vision-key",
+		VisionModel:    "vision-test",
+		VisionPrompt:   "extract image facts",
+	}
+	imageA := imageRef{URL: "data:image/png;base64,QQ=="}
+	imageB := imageRef{URL: "data:image/png;base64,Qg=="}
+	imageC := imageRef{URL: "data:image/png;base64,Qw=="}
+
+	first, err := a.describeImages(context.Background(), cfg, parsedMessage{
+		Text:   "describe",
+		Images: []imageRef{imageA, imageB},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if visionCalls != 2 {
+		t.Fatalf("expected two first-pass vision calls, got %d", visionCalls)
+	}
+	if !strings.Contains(first, "[图片 1 识别结果]") || !strings.Contains(first, "[图片 2 识别结果]") {
+		t.Fatalf("multi-image descriptions should be numbered: %s", first)
+	}
+
+	second, err := a.describeImages(context.Background(), cfg, parsedMessage{
+		Text:   "describe",
+		Images: []imageRef{imageA, imageC},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if visionCalls != 3 {
+		t.Fatalf("expected only the new image to be described, got %d calls", visionCalls)
+	}
+	if !strings.Contains(second, imageA.URL) || !strings.Contains(second, imageC.URL) {
+		t.Fatalf("cached and new image descriptions should both be present: %s", second)
+	}
+	if a.lastVision.Cached {
+		t.Fatalf("mixed cached/new batch should not be marked fully cached: %#v", a.lastVision)
+	}
+}
+
+func TestRemoveImageViewToolsKeepsOtherTools(t *testing.T) {
+	payload := map[string]any{
+		"tools": []any{
+			map[string]any{"type": "function", "name": "view_image"},
+			map[string]any{"type": "function", "function": map[string]any{"name": "shell"}},
+		},
+		"tool_choice": map[string]any{"type": "function", "name": "view_image"},
+	}
+	removeImageViewTools(payload)
+	tools := payload["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("expected only non-image tools to remain: %#v", payload["tools"])
+	}
+	if toolName(tools[0].(map[string]any)) != "shell" {
+		t.Fatalf("wrong tool remained: %#v", tools[0])
+	}
+	if _, ok := payload["tool_choice"]; ok {
+		t.Fatalf("image tool choice should be removed: %#v", payload["tool_choice"])
+	}
 }
 
 func TestAugmentOpenAIResponsesConvertsFileImagePartsToText(t *testing.T) {
@@ -178,6 +333,95 @@ func TestProcessOpenAIChatConvertsFileImagePartsToText(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
+func TestProcessOpenAIChatSkipsVisionWhenDisabled(t *testing.T) {
+	textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		messages := payload["messages"].([]any)
+		msg := messages[0].(map[string]any)
+		content := msg["content"].([]any)
+		if len(content) != 2 {
+			t.Fatalf("image payload should be forwarded unchanged: %#v", content)
+		}
+		if content[1].(map[string]any)["type"] != "image_url" {
+			t.Fatalf("image part should not be converted to text: %#v", content)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": "ok"}}},
+		})
+	}))
+	defer textServer.Close()
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("vision upstream should not be called when disabled")
+	}))
+	defer visionServer.Close()
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			TextProvider:   "openai",
+			TextBaseURL:    textServer.URL,
+			VisionProvider: "openai",
+			VisionBaseURL:  visionServer.URL,
+			VisionAPIKey:   "vision-key",
+			VisionModel:    "vision-test",
+			VisionEnabled:  boolPtr(false),
+		}),
+		httpClient: textServer.Client(),
+	}
+	body := []byte(`{"model":"glm-5.1","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}]}`)
+	resp, _, err := a.processOpenAIChat(context.Background(), body, nil, "/v1/chat/completions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+}
+
+func TestProcessOpenAIChatBypassesVisionWhenTextSupportsImages(t *testing.T) {
+	textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		messages := payload["messages"].([]any)
+		msg := messages[0].(map[string]any)
+		content := msg["content"].([]any)
+		if len(content) != 2 {
+			t.Fatalf("image payload should be forwarded unchanged: %#v", content)
+		}
+		if content[1].(map[string]any)["type"] != "image_url" {
+			t.Fatalf("image part should be preserved: %#v", content)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"choices": []any{map[string]any{"message": map[string]any{"content": "ok"}}},
+		})
+	}))
+	defer textServer.Close()
+	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("vision upstream should not be called when text model supports images")
+	}))
+	defer visionServer.Close()
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			TextProvider:       "openai",
+			TextBaseURL:        textServer.URL,
+			TextSupportsImages: true,
+			VisionProvider:     "openai",
+			VisionBaseURL:      visionServer.URL,
+			VisionAPIKey:       "vision-key",
+			VisionModel:        "vision-test",
+			VisionEnabled:      boolPtr(true),
+		}),
+		httpClient: textServer.Client(),
+	}
+	body := []byte(`{"model":"glm-5.1","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}]}`)
+	resp, _, err := a.processOpenAIChat(context.Background(), body, nil, "/v1/chat/completions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+}
+
 func TestProcessOpenAIChatRepairsToolCallID(t *testing.T) {
 	textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
@@ -257,7 +501,7 @@ func TestResponsesPayloadToChatCompletionsMapsCodexToolHistory(t *testing.T) {
 			map[string]any{
 				"type":    "function_call_output",
 				"call_id": "call_shell_1",
-				"output":  "G:\\codex-proxy",
+				"output":  "G:\\vision-relay",
 			},
 		},
 		"tools": []any{
@@ -281,6 +525,72 @@ func TestResponsesPayloadToChatCompletionsMapsCodexToolHistory(t *testing.T) {
 	tool := messages[1].(map[string]any)
 	if toolCall["id"] != "call_shell_1" || tool["tool_call_id"] != "call_shell_1" {
 		t.Fatalf("tool call history was not mapped: %#v", messages)
+	}
+}
+
+func TestResponsesPayloadToChatCompletionsConvertsResponsesTools(t *testing.T) {
+	payload := map[string]any{
+		"model": "z-ai/glm-5.2",
+		"input": "hi",
+		"tools": []any{
+			map[string]any{
+				"type":        "function",
+				"name":        "shell",
+				"description": "Run a shell command",
+				"parameters": map[string]any{
+					"type": "object",
+				},
+			},
+			map[string]any{
+				"type": "web_search_preview",
+			},
+		},
+		"tool_choice": map[string]any{
+			"type": "function",
+			"name": "shell",
+		},
+		"parallel_tool_calls": true,
+	}
+	chat := responsesPayloadToChatCompletions(payload)
+	tools := chat["tools"].([]any)
+	if len(tools) != 1 {
+		t.Fatalf("unexpected tools: %#v", tools)
+	}
+	fn := tools[0].(map[string]any)["function"].(map[string]any)
+	if fn["name"] != "shell" || fn["description"] != "Run a shell command" {
+		t.Fatalf("responses tool was not converted: %#v", tools[0])
+	}
+	choice := chat["tool_choice"].(map[string]any)
+	choiceFn := choice["function"].(map[string]any)
+	if choice["type"] != "function" || choiceFn["name"] != "shell" {
+		t.Fatalf("tool choice was not converted: %#v", choice)
+	}
+	if chat["parallel_tool_calls"] != true {
+		t.Fatalf("parallel tool calls was not preserved: %#v", chat)
+	}
+}
+
+func TestResponsesPayloadToChatCompletionsPreservesImages(t *testing.T) {
+	payload := map[string]any{
+		"model": "z-ai/glm-5.2",
+		"input": []any{
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "input_text", "text": "describe"},
+					map[string]any{"type": "input_image", "image_url": "data:image/png;base64,aGVsbG8="},
+				},
+			},
+		},
+	}
+	chat := responsesPayloadToChatCompletions(payload)
+	messages := chat["messages"].([]any)
+	content := messages[0].(map[string]any)["content"].([]any)
+	if len(content) != 2 {
+		t.Fatalf("expected text and image content: %#v", content)
+	}
+	if content[1].(map[string]any)["type"] != "image_url" {
+		t.Fatalf("image content was not preserved: %#v", content)
 	}
 }
 
@@ -321,6 +631,50 @@ func TestOpenAIResponsesStreamingIsConvertedForCodexClient(t *testing.T) {
 	out := rec.Body.String()
 	if !strings.Contains(out, "response.output_text.delta") || !strings.Contains(out, "response.completed") || !strings.Contains(out, "你好") {
 		t.Fatalf("bad responses stream: %s", out)
+	}
+}
+
+func TestOpenAIResponsesCanUseNativeResponsesUpstream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := payload["input"]; !ok {
+			t.Fatalf("responses payload should be forwarded natively: %#v", payload)
+		}
+		if _, ok := payload["messages"]; ok {
+			t.Fatalf("responses payload should not be converted to chat completions: %#v", payload)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":          "resp-test",
+			"object":      "response",
+			"status":      "completed",
+			"model":       "gpt-5",
+			"output_text": "ok",
+		})
+	}))
+	defer upstream.Close()
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			TextProvider: "openai",
+			TextBaseURL:  upstream.URL,
+			TextWireAPI:  "responses",
+		}),
+		httpClient: upstream.Client(),
+	}
+	body := `{"model":"gpt-5","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	a.handleOpenAIResponses(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"output_text":"ok"`) {
+		t.Fatalf("native responses body was not returned: %s", rec.Body.String())
 	}
 }
 
@@ -458,6 +812,9 @@ func TestChatCompletionToResponses(t *testing.T) {
 			"prompt_tokens":     float64(3),
 			"completion_tokens": float64(4),
 			"total_tokens":      float64(7),
+			"prompt_tokens_details": map[string]any{
+				"cached_tokens": float64(2),
+			},
 		},
 	}
 	resp := chatCompletionToResponses(chat)
@@ -467,6 +824,10 @@ func TestChatCompletionToResponses(t *testing.T) {
 	usage := resp["usage"].(map[string]any)
 	if usage["input_tokens"] != int64(3) || usage["output_tokens"] != int64(4) {
 		t.Fatalf("bad usage mapping: %#v", usage)
+	}
+	details := usage["input_tokens_details"].(map[string]any)
+	if details["cached_tokens"] != int64(2) {
+		t.Fatalf("bad cache usage mapping: %#v", usage)
 	}
 }
 
@@ -537,6 +898,253 @@ func TestOpenAIModelsAdvertisesImageSupport(t *testing.T) {
 	capabilities := model["capabilities"].(map[string]any)
 	if capabilities["attachments"] != true || capabilities["vision"] != true {
 		t.Fatalf("model capabilities do not advertise images: %#v", model)
+	}
+}
+
+func TestOpenAIModelsDoesNotAdvertiseImageSupportWhenDisabled(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"object": "list",
+			"data": []any{
+				map[string]any{"id": "glm-5.1", "object": "model"},
+			},
+		})
+	}))
+	defer upstream.Close()
+	a := &app{
+		cfg: config{
+			TextProvider:  "openai",
+			TextBaseURL:   upstream.URL,
+			VisionEnabled: boolPtr(false),
+		},
+		httpClient: upstream.Client(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/models", nil)
+	rec := httptest.NewRecorder()
+	a.handleRoute(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	data := payload["data"].([]any)
+	model := data[0].(map[string]any)
+	if model["attachment"] == true || model["supports_images"] == true || model["vision"] == true {
+		t.Fatalf("model should not advertise image support: %#v", model)
+	}
+}
+
+func TestOpenAIModelsAdvertisesImageSupportWhenTextSupportsImages(t *testing.T) {
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			TextProvider:       "openai",
+			TextModelOverride:  "native-vision-text",
+			TextSupportsImages: true,
+			VisionEnabled:      boolPtr(false),
+		}),
+		httpClient: http.DefaultClient,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/models", nil)
+	rec := httptest.NewRecorder()
+	a.handleRoute(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	data := payload["data"].([]any)
+	model := data[0].(map[string]any)
+	if model["attachment"] != true || model["supports_images"] != true || model["vision"] != true {
+		t.Fatalf("model should advertise direct image support: %#v", model)
+	}
+}
+
+func TestOpenAIModelsUsesForcedTextModelWhenConfigured(t *testing.T) {
+	called := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		writeJSON(w, http.StatusOK, map[string]any{
+			"object": "list",
+			"data": []any{
+				map[string]any{"id": "upstream-model", "object": "model"},
+			},
+		})
+	}))
+	defer upstream.Close()
+	a := &app{
+		cfg: config{
+			TextProvider:      "openai",
+			TextBaseURL:       upstream.URL,
+			TextModelOverride: "z-ai/glm-5.2",
+		},
+		httpClient: upstream.Client(),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/models", nil)
+	rec := httptest.NewRecorder()
+	a.handleRoute(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	if called {
+		t.Fatal("upstream model list should not be called when a forced model is configured")
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	data := payload["data"].([]any)
+	if len(data) != 1 {
+		t.Fatalf("expected one effective model, got %#v", data)
+	}
+	model := data[0].(map[string]any)
+	if model["id"] != "z-ai/glm-5.2" {
+		t.Fatalf("wrong effective model: %#v", model)
+	}
+	if model["attachment"] != true {
+		t.Fatalf("effective model should advertise image support: %#v", model)
+	}
+}
+
+func TestOpenAIModelsUsesMultipleForcedTextModelsWhenConfigured(t *testing.T) {
+	a := &app{
+		cfg: config{
+			TextProvider:       "openai",
+			TextModelOverrides: []string{"model-a", "model-b"},
+			VisionEnabled:      boolPtr(true),
+		},
+		httpClient: http.DefaultClient,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/models", nil)
+	rec := httptest.NewRecorder()
+	a.handleRoute(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	data := payload["data"].([]any)
+	if len(data) != 2 {
+		t.Fatalf("expected two effective models, got %#v", data)
+	}
+	first := data[0].(map[string]any)
+	second := data[1].(map[string]any)
+	if first["id"] != "model-a" || second["id"] != "model-b" {
+		t.Fatalf("wrong effective models: %#v", data)
+	}
+	if first["attachment"] != true || second["attachment"] != true {
+		t.Fatalf("effective models should advertise image support: %#v", data)
+	}
+}
+
+func TestOpenAIModelsUsesTextModelMappingNames(t *testing.T) {
+	a := &app{
+		cfg: config{
+			TextProvider: "openai",
+			TextModelMappings: []textModelMapping{
+				{Name: "DeepSeek V4 Flash", Model: "deepseek-v4-flash", ContextWindow: 128000},
+			},
+			VisionEnabled: boolPtr(true),
+		},
+		httpClient: http.DefaultClient,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/models", nil)
+	rec := httptest.NewRecorder()
+	a.handleRoute(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	data := payload["data"].([]any)
+	model := data[0].(map[string]any)
+	if model["id"] != "DeepSeek V4 Flash" || int(model["context_window"].(float64)) != 128000 {
+		t.Fatalf("wrong mapped model payload: %#v", model)
+	}
+}
+
+func TestOpenAIChatKeepsRequestedModelWhenAllowedByTextProfile(t *testing.T) {
+	var upstreamModel string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		upstreamModel = firstString(payload["model"])
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion",
+			"model":   upstreamModel,
+			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "ok"}}},
+		})
+	}))
+	defer upstream.Close()
+	a := &app{
+		cfg: config{
+			TextProvider:       "openai",
+			TextBaseURL:        upstream.URL,
+			TextModelOverrides: []string{"model-a", "model-b"},
+		},
+		httpClient: upstream.Client(),
+	}
+	body := []byte(`{"model":"model-b","messages":[{"role":"user","content":"hello"}]}`)
+	resp, status, err := a.processOpenAIChat(context.Background(), body, nil, "/v1/chat/completions")
+	if err != nil {
+		t.Fatalf("process chat failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if status != http.StatusOK {
+		t.Fatalf("bad status %d", status)
+	}
+	if upstreamModel != "model-b" {
+		t.Fatalf("requested model should be kept, got %q", upstreamModel)
+	}
+}
+
+func TestOpenAIChatMapsDisplayedModelToActualModel(t *testing.T) {
+	var upstreamModel string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		upstreamModel = firstString(payload["model"])
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion",
+			"model":   upstreamModel,
+			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "ok"}}},
+		})
+	}))
+	defer upstream.Close()
+	a := &app{
+		cfg: config{
+			TextProvider: "openai",
+			TextBaseURL:  upstream.URL,
+			TextModelMappings: []textModelMapping{
+				{Name: "DeepSeek V4 Flash", Model: "deepseek-v4-flash"},
+			},
+		},
+		httpClient: upstream.Client(),
+	}
+	body := []byte(`{"model":"DeepSeek V4 Flash","messages":[{"role":"user","content":"hello"}]}`)
+	resp, status, err := a.processOpenAIChat(context.Background(), body, nil, "/v1/chat/completions")
+	if err != nil {
+		t.Fatalf("process chat failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if status != http.StatusOK {
+		t.Fatalf("bad status %d", status)
+	}
+	if upstreamModel != "deepseek-v4-flash" {
+		t.Fatalf("displayed model should map to actual model, got %q", upstreamModel)
 	}
 }
 
@@ -678,6 +1286,28 @@ func TestFillUsageFromSSE(t *testing.T) {
 	}
 }
 
+func TestFillUsageFromResponsesCompletedSSE(t *testing.T) {
+	var log requestLog
+	body := []byte("data: {\"type\":\"response.completed\",\"response\":{\"model\":\"deepseek-ai/deepseek-v4-pro\",\"usage\":{\"input_tokens\":31,\"output_tokens\":9,\"total_tokens\":40,\"input_tokens_details\":{\"cached_tokens\":7}}}}\n\n")
+	fillUsageFromSSE(&log, body)
+	if log.Model != "deepseek-ai/deepseek-v4-pro" || log.InputTokens != 31 || log.OutputTokens != 9 || log.TotalTokens != 40 || log.CacheHitTokens != 7 {
+		t.Fatalf("bad responses SSE usage: %#v", log)
+	}
+}
+
+func TestLoggingResponseWriterKeepsUsageTail(t *testing.T) {
+	rec := httptest.NewRecorder()
+	lrw := newLoggingResponseWriter(rec, time.Now())
+	_, _ = lrw.Write([]byte("data: " + strings.Repeat("x", maxLogBodySize+4096) + "\n\n"))
+	_, _ = lrw.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"model\":\"tail-model\",\"usage\":{\"input_tokens\":13,\"output_tokens\":17,\"total_tokens\":30}}}\n\n"))
+
+	var log requestLog
+	fillUsageFromSSE(&log, lrw.logBody())
+	if log.Model != "tail-model" || log.InputTokens != 13 || log.OutputTokens != 17 || log.TotalTokens != 30 {
+		t.Fatalf("tail usage was not parsed: %#v", log)
+	}
+}
+
 func TestRouteLogsOnlyStatusForHTMLUpstreamErrors(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -710,10 +1340,13 @@ func TestRouteLogsOnlyStatusForHTMLUpstreamErrors(t *testing.T) {
 	if logs[0].Error != "HTTP 524" {
 		t.Fatalf("html error body should not be stored: %#v", logs[0])
 	}
+	if logs[0].FirstTokenMS != 0 {
+		t.Fatalf("error response should not record first token latency: %#v", logs[0])
+	}
 }
 
 func TestDatabaseStoresConfigAndLogsWithoutBodies(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "codex-proxy.db")
+	dbPath := filepath.Join(t.TempDir(), appSlug+".db")
 	db, err := openAppDB(dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -733,17 +1366,19 @@ func TestDatabaseStoresConfigAndLogsWithoutBodies(t *testing.T) {
 	}
 	a := &app{db: db}
 	a.appendRequestLog(requestLog{
-		At:           time.Now(),
-		Method:       http.MethodPost,
-		Path:         "/v1/chat/completions",
-		Protocol:     "Chat Completions",
-		Model:        "glm-5.1",
-		Status:       200,
-		FirstTokenMS: 12,
-		InputTokens:  3,
-		OutputTokens: 4,
-		RequestText:  "secret input",
-		ResponseText: "secret output",
+		At:               time.Now(),
+		Method:           http.MethodPost,
+		Path:             "/v1/chat/completions",
+		Protocol:         "Chat Completions",
+		Model:            "glm-5.1",
+		UpstreamName:     "Text Channel A",
+		UpstreamProvider: "openai",
+		Status:           200,
+		FirstTokenMS:     12,
+		InputTokens:      3,
+		OutputTokens:     4,
+		RequestText:      "secret input",
+		ResponseText:     "secret output",
 	})
 	logs := a.currentLogs()
 	if len(logs) != 1 {
@@ -757,6 +1392,9 @@ func TestDatabaseStoresConfigAndLogsWithoutBodies(t *testing.T) {
 	}
 	if logs[0].FirstTokenMS != 12 {
 		t.Fatalf("first token latency was not stored: %#v", logs[0])
+	}
+	if logs[0].UpstreamName != "Text Channel A" || logs[0].UpstreamProvider != "openai" {
+		t.Fatalf("upstream identity was not stored: %#v", logs[0])
 	}
 }
 

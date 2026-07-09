@@ -317,8 +317,15 @@ func encodeMessages(parsed []parsedMessage) []any {
 func buildAugmentedContent(userText, analysis string) string {
 	userText = strings.TrimSpace(userText)
 	analysis = strings.TrimSpace(analysis)
+	prefix := strings.Join([]string{
+		"[Vision Relay 已完成图片识别]",
+		"下面的图片识别结果就是用户所发图片的可见内容。",
+		"必须直接根据这些识别结果回答用户问题；不要再调用 view_image/open_image/inspect_image/read_image；不要说无法查看图片或需要再看图片。",
+		"",
+		"[图片识别结果]",
+	}, "\n")
 	if userText == "" {
-		return "[图片识别结果，仅供文本模型参考，最终回答由文本模型完成]\n" + analysis
+		return prefix + "\n" + analysis
 	}
-	return userText + "\n\n[图片识别结果，仅供文本模型参考，最终回答由文本模型完成]\n" + analysis
+	return "[用户原始请求]\n" + userText + "\n\n" + prefix + "\n" + analysis
 }

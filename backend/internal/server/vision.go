@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"time"
 )
 
+const maxVisionCacheEntries = 128
+
 func (a *app) describeImages(ctx context.Context, cfg config, pm parsedMessage) (string, error) {
 	if len(pm.Images) == 0 {
 		return "", nil
@@ -19,8 +22,40 @@ func (a *app) describeImages(ctx context.Context, cfg config, pm parsedMessage) 
 	ep := a.visionEndpoint(cfg)
 	if ep.APIKey == "" && ep.Provider != "ollama" {
 		err := errors.New("vision api key is empty")
-		a.recordVisionDebug(ep, pm, "", err)
+		a.recordVisionDebug(ep, pm, "", false, err)
 		return "", err
+	}
+	if len(pm.Images) == 1 {
+		text, cached, err := a.describeOneImage(ctx, cfg, ep, pm)
+		a.recordVisionDebug(ep, pm, text, cached, err)
+		return text, err
+	}
+
+	parts := make([]string, 0, len(pm.Images))
+	allCached := true
+	for i, img := range pm.Images {
+		single := pm
+		single.Images = []imageRef{img}
+		text, cached, err := a.describeOneImage(ctx, cfg, ep, single)
+		if err != nil {
+			err = fmt.Errorf("image %d: %w", i+1, err)
+			a.recordVisionDebug(ep, pm, strings.Join(parts, "\n\n"), false, err)
+			return "", err
+		}
+		if !cached {
+			allCached = false
+		}
+		parts = append(parts, fmt.Sprintf("[图片 %d 识别结果]\n%s", i+1, strings.TrimSpace(text)))
+	}
+	text := strings.Join(parts, "\n\n")
+	a.recordVisionDebug(ep, pm, text, allCached, nil)
+	return text, nil
+}
+
+func (a *app) describeOneImage(ctx context.Context, cfg config, ep endpoint, pm parsedMessage) (string, bool, error) {
+	cacheKey := visionCacheKey(ep, cfg.VisionPrompt, pm)
+	if text, ok := a.cachedVisionText(cacheKey); ok {
+		return text, true, nil
 	}
 	var (
 		text string
@@ -36,11 +71,13 @@ func (a *app) describeImages(ctx context.Context, cfg config, pm parsedMessage) 
 	default:
 		text, err = a.describeWithOpenAI(ctx, ep, cfg.VisionPrompt, pm)
 	}
-	a.recordVisionDebug(ep, pm, text, err)
-	return text, err
+	if err == nil && strings.TrimSpace(text) != "" {
+		a.storeVisionText(cacheKey, text)
+	}
+	return text, false, err
 }
 
-func (a *app) recordVisionDebug(ep endpoint, pm parsedMessage, text string, err error) {
+func (a *app) recordVisionDebug(ep endpoint, pm parsedMessage, text string, cached bool, err error) {
 	info := visionDebugInfo{
 		At:         time.Now(),
 		Provider:   ep.Provider,
@@ -48,6 +85,7 @@ func (a *app) recordVisionDebug(ep endpoint, pm parsedMessage, text string, err 
 		UserText:   pm.Text,
 		ImageCount: len(pm.Images),
 		Text:       text,
+		Cached:     cached,
 	}
 	if err != nil {
 		info.Error = err.Error()
@@ -55,6 +93,45 @@ func (a *app) recordVisionDebug(ep endpoint, pm parsedMessage, text string, err 
 	a.mu.Lock()
 	a.lastVision = info
 	a.mu.Unlock()
+}
+
+func (a *app) cachedVisionText(key string) (string, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.visionCache == nil {
+		return "", false
+	}
+	text, ok := a.visionCache[key]
+	return text, ok
+}
+
+func (a *app) storeVisionText(key, text string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.visionCache == nil || len(a.visionCache) >= maxVisionCacheEntries {
+		a.visionCache = make(map[string]string)
+	}
+	a.visionCache[key] = text
+}
+
+func visionCacheKey(ep endpoint, prompt string, pm parsedMessage) string {
+	h := sha256.New()
+	writeHashPart(h, ep.Provider)
+	writeHashPart(h, ep.BaseURL)
+	writeHashPart(h, ep.ModelOverride)
+	writeHashPart(h, prompt)
+	writeHashPart(h, pm.Text)
+	for _, img := range pm.Images {
+		writeHashPart(h, img.MediaType)
+		writeHashPart(h, img.URL)
+		writeHashPart(h, img.Base64)
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func writeHashPart(h interface{ Write([]byte) (int, error) }, value string) {
+	_, _ = h.Write([]byte(value))
+	_, _ = h.Write([]byte{0})
 }
 
 func visionPromptText(prompt string, userText string) string {

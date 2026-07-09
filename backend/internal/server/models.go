@@ -28,23 +28,28 @@ func (a *app) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.currentConfig()
+	imageCapable := relayImageInputEnabled(cfg)
+	if len(textModelOverrides(cfg)) > 0 {
+		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), imageCapable))
+		return
+	}
 	resp, err := a.forwardRaw(r.Context(), a.textEndpoint(cfg), http.MethodGet, canonicalRequestURI(r.URL.RequestURI()), nil, r.Header)
 	if err != nil {
-		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg)))
+		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), imageCapable))
 		return
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg)))
+		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), imageCapable))
 		return
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg)))
+		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), imageCapable))
 		return
 	}
-	writeJSON(w, http.StatusOK, augmentModelListPayload(payload))
+	writeJSON(w, http.StatusOK, augmentModelListPayload(payload, imageCapable))
 }
 
 func (a *app) handleListModels(w http.ResponseWriter, r *http.Request) {
@@ -69,28 +74,40 @@ func (a *app) handleListModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func defaultModelListPayload(cfg config) map[string]any {
-	id := firstString(cfg.TextModelOverride, "local-text-model")
+	mappings := textModelMappings(cfg)
+	if len(mappings) == 0 {
+		mappings = []textModelMapping{{Name: "local-text-model", Model: "local-text-model"}}
+	}
+	data := make([]any, 0, len(mappings))
+	for _, mapping := range mappings {
+		model := map[string]any{
+			"id":       mapping.Name,
+			"object":   "model",
+			"created":  time.Now().Unix(),
+			"owned_by": appSlug,
+		}
+		if mapping.ContextWindow > 0 {
+			model["context_window"] = mapping.ContextWindow
+			model["max_context_window"] = mapping.ContextWindow
+		}
+		data = append(data, model)
+	}
 	return map[string]any{
 		"object": "list",
-		"data": []any{
-			map[string]any{
-				"id":       id,
-				"object":   "model",
-				"created":  time.Now().Unix(),
-				"owned_by": "codex-proxy",
-			},
-		},
+		"data":   data,
 	}
 }
 
-func augmentModelListPayload(payload map[string]any) map[string]any {
+func augmentModelListPayload(payload map[string]any, imageCapable bool) map[string]any {
 	data, _ := payload["data"].([]any)
 	for _, item := range data {
 		model, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		markModelImageCapable(model)
+		if imageCapable {
+			markModelImageCapable(model)
+		}
 	}
 	if _, ok := payload["object"]; !ok {
 		payload["object"] = "list"

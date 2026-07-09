@@ -2,7 +2,9 @@ package server
 
 import (
 	"database/sql"
+	"encoding/json"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -19,12 +21,17 @@ type config struct {
 	TextBaseURL           string               `json:"text_base_url"`
 	TextAPIKey            string               `json:"text_api_key"`
 	TextModelOverride     string               `json:"text_model_override"`
+	TextModelOverrides    []string             `json:"text_model_overrides,omitempty"`
+	TextModelMappings     []textModelMapping   `json:"text_model_mappings,omitempty"`
+	TextWireAPI           string               `json:"text_wire_api"`
+	TextSupportsImages    bool                 `json:"text_supports_images"`
 	ProxyURL              string               `json:"proxy_url"`
 	VisionProvider        string               `json:"vision_provider"`
 	VisionBaseURL         string               `json:"vision_base_url"`
 	VisionAPIKey          string               `json:"vision_api_key"`
 	VisionModel           string               `json:"vision_model"`
 	VisionPrompt          string               `json:"vision_prompt"`
+	VisionEnabled         *bool                `json:"vision_enabled"`
 	ClientAPIKeys         []string             `json:"client_api_keys,omitempty"`
 	ClientAPIKeyEntries   []clientAPIKeyEntry  `json:"client_api_key_entries"`
 	OpenWindow            bool                 `json:"open_window"`
@@ -32,13 +39,17 @@ type config struct {
 }
 
 type textModelProfile struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Provider      string `json:"provider"`
-	BaseURL       string `json:"base_url"`
-	APIKey        string `json:"api_key"`
-	ModelOverride string `json:"model_override"`
-	ProxyURL      string `json:"proxy_url"`
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	Provider       string             `json:"provider"`
+	BaseURL        string             `json:"base_url"`
+	APIKey         string             `json:"api_key"`
+	ModelOverride  string             `json:"model_override"`
+	ModelOverrides []string           `json:"model_overrides,omitempty"`
+	ModelMappings  []textModelMapping `json:"model_mappings,omitempty"`
+	WireAPI        string             `json:"wire_api"`
+	SupportsImages bool               `json:"supports_images"`
+	ProxyURL       string             `json:"proxy_url"`
 }
 
 type visionModelProfile struct {
@@ -51,17 +62,51 @@ type visionModelProfile struct {
 }
 
 type modelProfile struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	TextProvider      string `json:"text_provider"`
-	TextBaseURL       string `json:"text_base_url"`
-	TextAPIKey        string `json:"text_api_key"`
-	TextModelOverride string `json:"text_model_override"`
-	ProxyURL          string `json:"proxy_url"`
-	VisionProvider    string `json:"vision_provider"`
-	VisionBaseURL     string `json:"vision_base_url"`
-	VisionAPIKey      string `json:"vision_api_key"`
-	VisionModel       string `json:"vision_model"`
+	ID                 string             `json:"id"`
+	Name               string             `json:"name"`
+	TextProvider       string             `json:"text_provider"`
+	TextBaseURL        string             `json:"text_base_url"`
+	TextAPIKey         string             `json:"text_api_key"`
+	TextModelOverride  string             `json:"text_model_override"`
+	TextModelOverrides []string           `json:"text_model_overrides,omitempty"`
+	TextModelMappings  []textModelMapping `json:"text_model_mappings,omitempty"`
+	TextWireAPI        string             `json:"text_wire_api"`
+	TextSupportsImages bool               `json:"text_supports_images"`
+	ProxyURL           string             `json:"proxy_url"`
+	VisionProvider     string             `json:"vision_provider"`
+	VisionBaseURL      string             `json:"vision_base_url"`
+	VisionAPIKey       string             `json:"vision_api_key"`
+	VisionModel        string             `json:"vision_model"`
+}
+
+type textModelMapping struct {
+	Name          string  `json:"name"`
+	Model         string  `json:"model"`
+	ContextWindow flexInt `json:"context_window,omitempty"`
+}
+
+type flexInt int
+
+func (v *flexInt) UnmarshalJSON(data []byte) error {
+	var number int
+	if err := json.Unmarshal(data, &number); err == nil {
+		*v = flexInt(number)
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return err
+	}
+	if text == "" {
+		*v = 0
+		return nil
+	}
+	parsed, err := strconv.Atoi(text)
+	if err != nil {
+		return err
+	}
+	*v = flexInt(parsed)
+	return nil
 }
 
 type clientAPIKeyEntry struct {
@@ -74,20 +119,22 @@ type endpoint struct {
 	BaseURL       string
 	APIKey        string
 	ModelOverride string
+	WireAPI       string
 	ProxyURL      string
 }
 
 type app struct {
-	mu         sync.RWMutex
-	cfg        config
-	configPath string
-	dbPath     string
-	db         *sql.DB
-	httpClient *http.Client
-	lastVision visionDebugInfo
-	logMu      sync.Mutex
-	logs       []requestLog
-	nextLogID  int64
+	mu          sync.RWMutex
+	cfg         config
+	configPath  string
+	dbPath      string
+	db          *sql.DB
+	httpClient  *http.Client
+	lastVision  visionDebugInfo
+	visionCache map[string]string
+	logMu       sync.Mutex
+	logs        []requestLog
+	nextLogID   int64
 }
 
 type requestLog struct {
@@ -97,6 +144,8 @@ type requestLog struct {
 	Path             string    `json:"path"`
 	Protocol         string    `json:"protocol"`
 	Model            string    `json:"model"`
+	UpstreamName     string    `json:"upstream_name"`
+	UpstreamProvider string    `json:"upstream_provider"`
 	ClientName       string    `json:"client_name"`
 	ClientKeyPreview string    `json:"client_key_preview"`
 	Status           int       `json:"status"`
@@ -119,6 +168,7 @@ type visionDebugInfo struct {
 	UserText   string    `json:"user_text"`
 	ImageCount int       `json:"image_count"`
 	Text       string    `json:"text"`
+	Cached     bool      `json:"cached,omitempty"`
 	Error      string    `json:"error,omitempty"`
 }
 

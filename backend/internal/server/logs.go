@@ -14,12 +14,15 @@ import (
 const (
 	maxLogs        = 300
 	maxLogBodySize = 256 * 1024
+	maxLogTailSize = 64 * 1024
 )
 
 type loggingResponseWriter struct {
 	http.ResponseWriter
 	status       int
 	body         bytes.Buffer
+	tail         []byte
+	written      int
 	started      time.Time
 	firstTokenMS int64
 }
@@ -35,8 +38,9 @@ func (w *loggingResponseWriter) WriteHeader(status int) {
 
 func (w *loggingResponseWriter) Write(p []byte) (int, error) {
 	if len(p) > 0 && w.firstTokenMS == 0 {
-		w.firstTokenMS = time.Since(w.started).Milliseconds()
+		w.firstTokenMS = maxInt64(1, time.Since(w.started).Milliseconds())
 	}
+	w.written += len(p)
 	if w.body.Len() < maxLogBodySize {
 		remaining := maxLogBodySize - w.body.Len()
 		if len(p) > remaining {
@@ -45,7 +49,41 @@ func (w *loggingResponseWriter) Write(p []byte) (int, error) {
 			_, _ = w.body.Write(p)
 		}
 	}
+	w.writeTail(p)
 	return w.ResponseWriter.Write(p)
+}
+
+func (w *loggingResponseWriter) writeTail(p []byte) {
+	if len(p) == 0 {
+		return
+	}
+	if len(p) >= maxLogTailSize {
+		w.tail = append(w.tail[:0], p[len(p)-maxLogTailSize:]...)
+		return
+	}
+	w.tail = append(w.tail, p...)
+	if len(w.tail) > maxLogTailSize {
+		copy(w.tail, w.tail[len(w.tail)-maxLogTailSize:])
+		w.tail = w.tail[:maxLogTailSize]
+	}
+}
+
+func (w *loggingResponseWriter) logBody() []byte {
+	head := w.body.Bytes()
+	if len(w.tail) == 0 || len(head) < maxLogBodySize {
+		return head
+	}
+	tail := w.tail
+	if overlap := len(head) + len(tail) - w.written; overlap > 0 && overlap < len(tail) {
+		tail = tail[overlap:]
+	} else if overlap >= len(tail) {
+		return head
+	}
+	out := make([]byte, 0, len(head)+1+len(tail))
+	out = append(out, head...)
+	out = append(out, '\n')
+	out = append(out, tail...)
+	return out
 }
 
 func (a *app) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +193,10 @@ func (a *app) appendRequestLog(log requestLog) {
 }
 
 func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, status int, started time.Time, firstTokenValues ...int64) {
+	firstTokenMS := firstInt64FromSlice(firstTokenValues)
+	if status >= 400 || !isSSELogBody(responseBody) {
+		firstTokenMS = 0
+	}
 	log := requestLog{
 		At:           started,
 		Method:       r.Method,
@@ -162,8 +204,9 @@ func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, st
 		Protocol:     protocolName(r.URL.Path),
 		Status:       status,
 		DurationMS:   time.Since(started).Milliseconds(),
-		FirstTokenMS: firstInt64FromSlice(firstTokenValues),
+		FirstTokenMS: firstTokenMS,
 	}
+	log.UpstreamName, log.UpstreamProvider = a.upstreamLogIdentity()
 	log.ClientName, log.ClientKeyPreview = a.clientLogIdentity(r)
 	if payload := decodeJSONMap(body); payload != nil {
 		log.Model = requestModel(payload)
@@ -184,6 +227,27 @@ func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, st
 		log.Error = statusText(status)
 	}
 	a.appendRequestLog(log)
+}
+
+func isSSELogBody(body []byte) bool {
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		return strings.HasPrefix(line, "data:")
+	}
+	return false
+}
+
+func (a *app) upstreamLogIdentity() (string, string) {
+	cfg := a.currentConfig()
+	for _, profile := range cfg.TextModelProfiles {
+		if profile.ID == cfg.ActiveTextProfileID {
+			return firstString(profile.Name, "未命名文本模型"), normalizeProvider(profile.Provider)
+		}
+	}
+	return firstString(cfg.TextModelOverride, "当前文本上游"), normalizeProvider(cfg.TextProvider)
 }
 
 func captureRequestBody(r *http.Request) ([]byte, error) {
@@ -332,35 +396,47 @@ func statusText(status int) string {
 }
 
 func fillUsageFromPayload(log *requestLog, payload map[string]any) {
+	if log.Model == "" {
+		log.Model = firstString(payload["model"])
+	}
+	if response, _ := payload["response"].(map[string]any); response != nil {
+		fillUsageFromPayload(log, response)
+	}
 	if usage, _ := payload["usage"].(map[string]any); usage != nil {
-		log.InputTokens = firstInt64(usage["prompt_tokens"], usage["input_tokens"])
-		log.OutputTokens = firstInt64(usage["completion_tokens"], usage["output_tokens"])
-		log.TotalTokens = firstInt64(usage["total_tokens"])
-		if log.TotalTokens == 0 {
-			log.TotalTokens = log.InputTokens + log.OutputTokens
-		}
+		setIfNonZero(&log.InputTokens, firstInt64(usage["prompt_tokens"], usage["input_tokens"]))
+		setIfNonZero(&log.OutputTokens, firstInt64(usage["completion_tokens"], usage["output_tokens"]))
+		setIfNonZero(&log.TotalTokens, firstInt64(usage["total_tokens"]))
 		if details, _ := usage["prompt_tokens_details"].(map[string]any); details != nil {
-			log.CacheHitTokens += numberAsInt64(details["cached_tokens"])
+			log.CacheHitTokens += firstInt64(details["cached_tokens"], details["cache_read_tokens"])
+			log.CacheWriteTokens += firstInt64(details["cache_creation_tokens"], details["cache_write_tokens"])
 		}
 		if details, _ := usage["input_tokens_details"].(map[string]any); details != nil {
-			log.CacheHitTokens += numberAsInt64(details["cached_tokens"])
+			log.CacheHitTokens += firstInt64(details["cached_tokens"], details["cache_read_tokens"])
+			log.CacheWriteTokens += firstInt64(details["cache_creation_tokens"], details["cache_write_tokens"])
 		}
-		log.CacheHitTokens += numberAsInt64(usage["cache_read_input_tokens"])
+		log.CacheHitTokens += firstInt64(usage["cache_read_input_tokens"], usage["cache_read_tokens"])
+		log.CacheWriteTokens += firstInt64(usage["cache_creation_input_tokens"], usage["cache_creation_tokens"], usage["cache_write_input_tokens"], usage["cache_write_tokens"])
 	}
 	if usage, _ := payload["usageMetadata"].(map[string]any); usage != nil {
-		log.InputTokens = firstInt64(usage["promptTokenCount"])
-		log.OutputTokens = firstInt64(usage["candidatesTokenCount"])
-		log.TotalTokens = firstInt64(usage["totalTokenCount"])
-		log.CacheHitTokens = firstInt64(usage["cachedContentTokenCount"])
+		setIfNonZero(&log.InputTokens, firstInt64(usage["promptTokenCount"]))
+		setIfNonZero(&log.OutputTokens, firstInt64(usage["candidatesTokenCount"]))
+		setIfNonZero(&log.TotalTokens, firstInt64(usage["totalTokenCount"]))
+		setIfNonZero(&log.CacheHitTokens, firstInt64(usage["cachedContentTokenCount"]))
 	}
 	if usage, _ := payload["usage"].(map[string]any); usage != nil {
-		log.InputTokens = firstInt64(log.InputTokens, usage["input_tokens"])
-		log.OutputTokens = firstInt64(log.OutputTokens, usage["output_tokens"])
+		setIfNonZero(&log.InputTokens, firstInt64(usage["input_tokens"]))
+		setIfNonZero(&log.OutputTokens, firstInt64(usage["output_tokens"]))
 	}
-	log.InputTokens = firstInt64(log.InputTokens, payload["prompt_eval_count"])
-	log.OutputTokens = firstInt64(log.OutputTokens, payload["eval_count"])
+	setIfNonZero(&log.InputTokens, firstInt64(payload["prompt_eval_count"]))
+	setIfNonZero(&log.OutputTokens, firstInt64(payload["eval_count"]))
 	if log.TotalTokens == 0 {
 		log.TotalTokens = log.InputTokens + log.OutputTokens
+	}
+}
+
+func setIfNonZero(target *int64, value int64) {
+	if value != 0 {
+		*target = value
 	}
 }
 
@@ -423,6 +499,13 @@ func firstInt64FromSlice(values []int64) int64 {
 		}
 	}
 	return 0
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func trimText(text string) string {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Codex Proxy</title>
+  <title>Vision Relay</title>
   <link rel="icon" href="/favicon.ico">
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -12,9 +12,9 @@
   <div class="app">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">CP</div>
+        <div class="brand-mark">VR</div>
         <div>
-          <h1>Codex Proxy</h1>
+          <h1>Vision Relay</h1>
           <p>多模态中转</p>
         </div>
       </div>
@@ -24,7 +24,7 @@
         <button class="nav-item" type="button" data-page="text">文本模型</button>
         <button class="nav-item" type="button" data-page="vision">视觉模型</button>
         <button class="nav-item" type="button" data-page="access">客户端接入</button>
-        <button class="nav-item" type="button" data-page="logs">对话日志</button>
+        <button class="nav-item" type="button" data-page="logs">使用日志</button>
         <button class="nav-item" type="button" data-page="playground">测试台</button>
       </nav>
 
@@ -37,35 +37,137 @@
 
     <main class="content">
       <section class="page active" data-page-panel="home">
-      <section class="hero" id="overview">
-        <div>
-          <p class="eyebrow">Desktop multimodal relay</p>
-          <h2>让文本模型接住图片请求</h2>
-          <p class="hero-copy">客户端请求进入本机代理后，图片先由视觉模型解析为文本，再交给 Codex、Responses、Chat Completions 或其他文本上游继续处理。</p>
-        </div>
-        <div class="hero-actions">
-          <span class="status" id="status">未加载</span>
-          <button class="ghost" id="reloadConfig" type="button">刷新</button>
-        </div>
-      </section>
+        <section class="hero" id="overview">
+          <div class="hero-copy-block">
+            <p class="eyebrow">Desktop multimodal relay</p>
+            <h2>让文本模型接住图片请求</h2>
+            <p class="hero-copy">客户端请求进入本机中转后，图片先由视觉模型解析为文本，再交给 Responses、Chat Completions、Codex 或其他文本上游继续处理。</p>
+            <div class="hero-tags" aria-label="支持入口">
+              <span>Responses</span>
+              <span>Chat Completions</span>
+              <span>Anthropic</span>
+              <span>Gemini</span>
+              <span>Ollama</span>
+            </div>
+          </div>
+          <div class="relay-hero-panel" aria-label="中转链路">
+            <div class="hero-actions">
+              <span class="status" id="status">未加载</span>
+              <button class="ghost" id="reloadConfig" type="button">刷新</button>
+            </div>
+            <div class="relay-stack">
+              <div class="relay-node">
+                <span>01</span>
+                <strong>客户端请求</strong>
+                <small>多协议入口</small>
+              </div>
+              <div class="relay-node accent">
+                <span>02</span>
+                <strong>视觉解析</strong>
+                <small>图片转文本上下文</small>
+              </div>
+              <div class="relay-node">
+                <span>03</span>
+                <strong>文本上游</strong>
+                <small>流式返回给客户端</small>
+              </div>
+            </div>
+          </div>
+        </section>
 
-      <section class="metric-grid">
-        <div class="metric">
-          <span>OpenAI</span>
-          <strong>/v1/responses</strong>
-          <small>Codex / Responses ready</small>
-        </div>
-        <div class="metric">
-          <span>Chat</span>
-          <strong>/v1/chat/completions</strong>
-          <small>OpenAI compatible</small>
-        </div>
-        <div class="metric">
-          <span>Native APIs</span>
-          <strong>Anthropic / Gemini / Ollama</strong>
-          <small>图片字段自动转文本</small>
-        </div>
-      </section>
+        <section class="metric-grid overview-metrics">
+          <div class="metric">
+            <span>本机地址</span>
+            <strong id="homeBaseURL">-</strong>
+            <small>所有客户端统一接入</small>
+          </div>
+          <div class="metric">
+            <span>文本模型</span>
+            <strong id="homeTextModel">-</strong>
+            <small id="homeTextProvider">-</small>
+          </div>
+          <div class="metric">
+            <span>视觉模型</span>
+            <strong id="homeVisionModel">-</strong>
+            <small id="homeVisionProvider">-</small>
+          </div>
+          <div class="metric">
+            <span>客户端 Key</span>
+            <strong id="homeKeyCount">0</strong>
+            <small>本机鉴权令牌</small>
+          </div>
+        </section>
+
+        <section class="overview-grid">
+          <article class="home-panel">
+            <div class="panel-head compact">
+              <div>
+                <h3>入口矩阵</h3>
+                <p>不同客户端可以保持自己的协议形态，图片字段在本机统一转换。</p>
+              </div>
+            </div>
+            <div class="route-matrix">
+              <div class="route-item">
+                <span>OpenAI</span>
+                <strong>/v1/responses</strong>
+                <small>Codex / Responses</small>
+              </div>
+              <div class="route-item">
+                <span>Chat</span>
+                <strong>/v1/chat/completions</strong>
+                <small>OpenAI compatible</small>
+              </div>
+              <div class="route-item">
+                <span>Anthropic</span>
+                <strong>/v1/messages</strong>
+                <small>Claude Code compatible</small>
+              </div>
+              <div class="route-item">
+                <span>Gemini</span>
+                <strong>/v1beta/models/{model}:generateContent</strong>
+                <small>inline_data / file_data</small>
+              </div>
+              <div class="route-item">
+                <span>Ollama</span>
+                <strong>/api/chat</strong>
+                <small>images 字段</small>
+              </div>
+              <div class="route-item">
+                <span>透传</span>
+                <strong>/v1/models</strong>
+                <small>模型列表自动标记图片能力</small>
+              </div>
+            </div>
+          </article>
+
+          <article class="home-panel config-panel">
+            <div class="panel-head compact">
+              <div>
+                <h3>当前配置</h3>
+                <p>当前生效的文本上游、视觉上游和网络状态。</p>
+              </div>
+            </div>
+            <div class="config-list">
+              <div>
+                <span>文本上游</span>
+                <strong id="homeTextProfile">-</strong>
+              </div>
+              <div>
+                <span>视觉上游</span>
+                <strong id="homeVisionProfile">-</strong>
+              </div>
+              <div>
+                <span>本地服务</span>
+                <strong id="homeProxyState">在线</strong>
+              </div>
+            </div>
+            <div class="quick-actions">
+              <button class="secondary home-jump" type="button" data-target-page="text">文本模型</button>
+              <button class="secondary home-jump" type="button" data-target-page="vision">视觉模型</button>
+              <button class="secondary home-jump" type="button" data-target-page="playground">测试台</button>
+            </div>
+          </article>
+        </section>
       </section>
 
       <form id="configForm" class="layout">
@@ -88,6 +190,13 @@
             </div>
             <button class="secondary" id="addVisionProfile" type="button">新增</button>
           </div>
+          <label class="toggle-line">
+            <input id="visionEnabled" type="checkbox">
+            <span>
+              <strong>开启视觉模型能力</strong>
+              <small>开启后文本模型可通过视觉模型识别图片；关闭后请求直接走文本模型，不再调用视觉模型。</small>
+            </span>
+          </label>
           <div class="profile-list" id="visionProfileList" aria-label="视觉模型列表"></div>
           <div class="hint" id="visionModelHint">视觉模型需要能描述图片内容。不要使用 llama-guard、safety、moderation 这类安全分类模型，否则只会返回 safe/unsafe。</div>
         </section>
@@ -149,25 +258,31 @@
           </div>
 
           <div class="client-snippet">
-            <div>
+            <div class="client-snippet-head">
+              <div>
               <h4>OpenCode 图片接入</h4>
               <p>自定义 OpenAI-compatible 模型需要声明图片附件能力，否则 OpenCode 会在本地拦截图片，不会把图片发到中转服务。</p>
+              </div>
             </div>
             <pre><code id="opencodeConfig"></code></pre>
           </div>
 
           <div class="client-snippet">
-            <div>
+            <div class="client-snippet-head">
+              <div>
               <h4>Codex 客户端接入</h4>
               <p>Codex 走 Responses 接口。把 Base URL 指向本机中转后，图片会先交给视觉模型解析，再转给当前文本模型继续完成代码任务。</p>
+              </div>
             </div>
             <pre><code id="codexConfig"></code></pre>
           </div>
 
           <div class="client-snippet">
-            <div>
+            <div class="client-snippet-head">
+              <div>
               <h4>Claude Code 客户端接入</h4>
               <p>Claude Code 走 Anthropic Messages 接口。中转会把 Anthropic 请求转换到当前文本模型，并保留工具调用和图片识别结果。</p>
+              </div>
             </div>
             <pre><code id="claudeCodeConfig"></code></pre>
           </div>
@@ -176,7 +291,7 @@
         <section class="page panel span-12" id="logs" data-page-panel="logs">
           <div class="panel-head">
             <div>
-              <h3>对话日志</h3>
+              <h3>使用日志</h3>
               <p>记录客户端请求、使用的密钥、模型、Token 用量、缓存命中、首 token 和耗时。</p>
             </div>
             <div class="panel-actions">
@@ -207,7 +322,7 @@
           <div class="panel-head">
             <div>
               <h3>请求测试台</h3>
-              <p>上传图片后可分别测试 Chat Completions 和 Codex / Responses 请求形态。</p>
+              <p>上传图片后可分别测试 Chat Completions 和 Responses 请求形态。</p>
             </div>
             <div class="segmented" role="tablist" aria-label="测试接口">
               <button class="segment active" type="button" data-mode="chat">Chat</button>
@@ -268,6 +383,13 @@
             <option value="ollama">Ollama</option>
           </select>
         </label>
+        <label id="modalProfileWireAPIWrap">
+          上游接口
+          <select id="modalProfileWireAPI">
+            <option value="chat_completions">Chat Completions</option>
+            <option value="responses">Responses</option>
+          </select>
+        </label>
         <label>
           Base URL
           <input id="modalProfileBaseURL" required placeholder="https://api.openai.com">
@@ -276,21 +398,50 @@
           API Key
           <input id="modalProfileAPIKey" type="password" autocomplete="off" placeholder="上游模型 Key">
         </label>
-        <label>
+        <label id="modalProfileModelWrap">
           <span id="modalProfileModelLabel">强制模型名</span>
           <div class="model-picker-line">
-            <input id="modalProfileModel" placeholder="留空则使用客户端请求里的 model">
-            <button class="secondary" id="fetchModels" type="button">获取模型</button>
+            <textarea id="modalProfileModel" rows="3" placeholder="留空则使用客户端请求里的 model"></textarea>
+            <button class="secondary" id="fetchModels" type="button">获取模型列表</button>
           </div>
         </label>
+        <section class="model-mapping-section" id="modelMappingSection" hidden>
+          <div class="model-mapping-head">
+            <div>
+              <strong>模型映射</strong>
+              <small>生成 Codex model_catalog_json，让 /model 命令显示这些第三方模型名；表中条目按填写内容保存。</small>
+            </div>
+            <div class="model-mapping-actions">
+              <button class="secondary small-action" id="fetchModelsForMapping" type="button">获取模型列表</button>
+              <button class="secondary small-action" id="addModelMapping" type="button">添加模型</button>
+            </div>
+          </div>
+          <div class="model-mapping-grid">
+            <span>菜单显示名</span>
+            <span>实际请求模型</span>
+            <span>上下文窗口</span>
+            <span></span>
+          </div>
+          <div class="model-mapping-rows" id="modelMappingRows"></div>
+        </section>
         <div class="model-picker-panel" id="modelPickerPanel" hidden>
           <input id="modelSearch" placeholder="搜索模型">
-          <select id="modelSelect" size="6"></select>
+          <select id="modelSelect" size="6" multiple></select>
+          <div class="model-picker-actions">
+            <button class="secondary small-action" id="addFetchedModels" type="button">添加模型</button>
+          </div>
           <div class="model-picker-status" id="modelPickerStatus">点击模型即可填入。</div>
         </div>
         <label id="modalProfileProxyWrap">
           网络代理 URL
           <input id="modalProfileProxyURL" placeholder="例如 http://127.0.0.1:7890">
+        </label>
+        <label class="toggle-line modal-toggle-line" id="modalProfileSupportsImagesWrap">
+          <input id="modalProfileSupportsImages" type="checkbox">
+          <span>
+            <strong>文本模型支持多模态</strong>
+            <small>勾选后图片直接发到该文本模型；不勾选时，如视觉能力开启则先调用视觉模型识别。</small>
+          </span>
         </label>
       </div>
 

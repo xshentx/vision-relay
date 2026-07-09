@@ -49,8 +49,19 @@ func Run() {
 		if err := saveConfigToDB(db, cfg); err != nil {
 			log.Printf("database config migration warning: %v", err)
 		}
+	} else if *configFlag == "" {
+		if loaded, legacyErr := loadConfig(legacyConfigPath()); legacyErr == nil {
+			cfg = mergeConfig(cfg, loaded)
+			if err := saveConfigToDB(db, cfg); err != nil {
+				log.Printf("database legacy config migration warning: %v", err)
+			}
+		} else if !errors.Is(legacyErr, os.ErrNotExist) {
+			log.Printf("legacy config load warning: %v", legacyErr)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			log.Printf("config load warning: %v", err)
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		log.Printf("legacy config load warning: %v", err)
+		log.Printf("config load warning: %v", err)
 	}
 	if *addrFlag != "" {
 		cfg.Addr = *addrFlag
@@ -95,9 +106,20 @@ func Run() {
 	localURL := "http://" + cfg.Addr + "/"
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
+		if existingVisionRelayHealthy(localURL) {
+			log.Printf("%s already running on %s", appSlug, localURL)
+			if cfg.OpenWindow {
+				runClientWindow(localURL)
+				return
+			}
+			if cfg.OpenBrowser {
+				_ = openBrowser(localURL)
+			}
+			return
+		}
 		log.Fatal(err)
 	}
-	log.Printf("codex-proxy listening on %s", localURL)
+	log.Printf("%s listening on %s", appSlug, localURL)
 	log.Printf("database: %s", dbPath)
 	if cfg.OpenBrowser {
 		go func() {
@@ -128,4 +150,14 @@ func Run() {
 	if err := <-serverErr; err != nil {
 		log.Fatal(err)
 	}
+}
+
+func existingVisionRelayHealthy(localURL string) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(localURL + "healthz")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }

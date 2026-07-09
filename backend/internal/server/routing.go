@@ -51,7 +51,7 @@ func (a *app) handleRoute(w http.ResponseWriter, r *http.Request) {
 	default:
 		a.handleRawProxy(lrw, r)
 	}
-	a.logCompletedRequest(r, body, lrw.body.Bytes(), lrw.status, started, lrw.firstTokenMS)
+	a.logCompletedRequest(r, body, lrw.logBody(), lrw.status, started, lrw.firstTokenMS)
 }
 
 func isStaticRequest(r *http.Request) bool {

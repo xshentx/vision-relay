@@ -26,6 +26,7 @@ const claudeCodeConfig = document.querySelector("#claudeCodeConfig");
 const textProfileList = document.querySelector("#textProfileList");
 const addTextProfile = document.querySelector("#addTextProfile");
 const visionProfileList = document.querySelector("#visionProfileList");
+const visionEnabledInput = document.querySelector("#visionEnabled");
 const addVisionProfile = document.querySelector("#addVisionProfile");
 const profileModal = document.querySelector("#profileModal");
 const profileModalForm = document.querySelector("#profileModalForm");
@@ -36,19 +37,39 @@ const closeProfileModal = document.querySelector("#closeProfileModal");
 const cancelProfileModal = document.querySelector("#cancelProfileModal");
 const modalProfileName = document.querySelector("#modalProfileName");
 const modalProfileProvider = document.querySelector("#modalProfileProvider");
+const modalProfileWireAPIWrap = document.querySelector("#modalProfileWireAPIWrap");
+const modalProfileWireAPI = document.querySelector("#modalProfileWireAPI");
 const modalProfileBaseURL = document.querySelector("#modalProfileBaseURL");
 const modalProfileAPIKey = document.querySelector("#modalProfileAPIKey");
+const modalProfileModelWrap = document.querySelector("#modalProfileModelWrap");
 const modalProfileModelLabel = document.querySelector("#modalProfileModelLabel");
 const modalProfileModel = document.querySelector("#modalProfileModel");
 const fetchModels = document.querySelector("#fetchModels");
+const fetchModelsForMapping = document.querySelector("#fetchModelsForMapping");
+const addModelMapping = document.querySelector("#addModelMapping");
+const modelMappingSection = document.querySelector("#modelMappingSection");
+const modelMappingRows = document.querySelector("#modelMappingRows");
 const modelPickerPanel = document.querySelector("#modelPickerPanel");
 const modelSearch = document.querySelector("#modelSearch");
 const modelSelect = document.querySelector("#modelSelect");
+const addFetchedModels = document.querySelector("#addFetchedModels");
 const modelPickerStatus = document.querySelector("#modelPickerStatus");
 const modalProfileProxyWrap = document.querySelector("#modalProfileProxyWrap");
 const modalProfileProxyURL = document.querySelector("#modalProfileProxyURL");
+const modalProfileSupportsImagesWrap = document.querySelector("#modalProfileSupportsImagesWrap");
+const modalProfileSupportsImages = document.querySelector("#modalProfileSupportsImages");
 const navItems = [...document.querySelectorAll(".nav-item")];
 const pages = [...document.querySelectorAll("[data-page-panel]")];
+const homeJumpButtons = [...document.querySelectorAll(".home-jump")];
+const homeBaseURL = document.querySelector("#homeBaseURL");
+const homeTextModel = document.querySelector("#homeTextModel");
+const homeTextProvider = document.querySelector("#homeTextProvider");
+const homeVisionModel = document.querySelector("#homeVisionModel");
+const homeVisionProvider = document.querySelector("#homeVisionProvider");
+const homeKeyCount = document.querySelector("#homeKeyCount");
+const homeTextProfile = document.querySelector("#homeTextProfile");
+const homeVisionProfile = document.querySelector("#homeVisionProfile");
+const homeProxyState = document.querySelector("#homeProxyState");
 
 let imageDataUrl = "";
 let testMode = "chat";
@@ -57,12 +78,14 @@ let textProfiles = [];
 let activeTextProfileId = "";
 let visionProfiles = [];
 let activeVisionProfileId = "";
+let visionCapabilityEnabled = true;
 let toastTimer = 0;
 let currentConfig = {};
 let profileModalKind = "text";
 let profileModalMode = "create";
 let profileModalEditId = "";
 let fetchedModels = [];
+let modalModelMappings = [];
 let currentLogPage = 1;
 let currentLogTotal = 0;
 
@@ -95,6 +118,12 @@ navItems.forEach((item) => {
   });
 });
 
+homeJumpButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    showPage(button.dataset.targetPage);
+  });
+});
+
 function showPage(page) {
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.page === page));
   pages.forEach((panel) => panel.classList.toggle("active", panel.dataset.pagePanel === page));
@@ -113,11 +142,24 @@ function showToast(message, type = "info") {
   }, 3200);
 }
 
+async function readErrorMessage(res) {
+  try {
+    const payload = await res.json();
+    return payload?.error?.message || `HTTP ${res.status}`;
+  } catch {
+    return await res.text() || `HTTP ${res.status}`;
+  }
+}
+
 async function loadConfig() {
   const res = await fetch("/api/config");
   if (!res.ok) throw new Error(`config ${res.status}`);
   const cfg = await res.json();
   currentConfig = cfg;
+  visionCapabilityEnabled = cfg.vision_enabled !== false;
+  if (visionEnabledInput) {
+    visionEnabledInput.checked = visionCapabilityEnabled;
+  }
   const migrated = migrateProfiles(cfg);
   textProfiles = normalizeTextProfiles(cfg.text_model_profiles || migrated.textProfiles);
   activeTextProfileId = cfg.active_text_profile_id || migrated.activeTextProfileId || textProfiles[0].id;
@@ -144,6 +186,7 @@ async function loadConfig() {
   applyVisionProfile(activeVisionProfileId);
   clientKeys = normalizeClientKeys(cfg.client_api_key_entries || keysToEntries(cfg.client_api_keys || []));
   renderClientKeys();
+  renderOverview();
   setStatus("已加载");
   serviceState.textContent = "在线";
 }
@@ -212,6 +255,18 @@ addVisionProfile.addEventListener("click", () => {
   openProfileModal("vision", "create");
 });
 
+visionEnabledInput?.addEventListener("change", () => {
+  visionCapabilityEnabled = visionEnabledInput.checked;
+  renderVisionProfiles();
+  renderOpenCodeSnippet();
+  renderOverview();
+  const message = visionCapabilityEnabled ? "已开启视觉模型能力" : "已关闭视觉模型能力";
+  persistConfig(message).catch((err) => {
+    console.error(err);
+    showToast(`保存失败：${err.message || err}`, "error");
+  });
+});
+
 closeProfileModal.addEventListener("click", () => {
   closeModal();
 });
@@ -241,21 +296,33 @@ fetchModels.addEventListener("click", () => {
   });
 });
 
+fetchModelsForMapping.addEventListener("click", () => {
+  fetchProviderModels().catch((err) => {
+    console.error(err);
+    modelPickerPanel.hidden = false;
+    modelPickerStatus.textContent = `获取失败：${err.message || err}`;
+    showToast(`获取模型失败：${err.message || err}`, "error");
+  });
+});
+
+addModelMapping.addEventListener("click", () => {
+  addModelMappingRow();
+});
+
 modelSearch.addEventListener("input", () => {
   renderFetchedModels();
 });
 
 modelSelect.addEventListener("change", () => {
-  if (modelSelect.value) {
-    modalProfileModel.value = modelSelect.value;
-  }
+  updateSelectedModelStatus();
 });
 
 modelSelect.addEventListener("dblclick", () => {
-  if (modelSelect.value) {
-    modalProfileModel.value = modelSelect.value;
-    showToast(`已选择模型：${modelSelect.value}`, "success");
-  }
+  addSelectedModelsToModal(true);
+});
+
+addFetchedModels.addEventListener("click", () => {
+  addSelectedModelsToModal(true);
 });
 
 profileModal.addEventListener("click", (event) => {
@@ -278,6 +345,7 @@ async function persistConfig(successMessage = "配置已自动保存") {
   data.open_window = true;
   data.open_browser = false;
   data.vision_prompt = currentConfig.vision_prompt || "";
+  data.vision_enabled = visionCapabilityEnabled;
   syncClientKeyNames();
   data.client_api_key_entries = normalizeClientKeys(clientKeys);
   data.text_model_profiles = normalizeTextProfiles(textProfiles);
@@ -342,6 +410,7 @@ function renderClientKeys() {
     empty.textContent = "还没有客户端 Key。输入名称后点击“生成 Key”。";
     clientKeyList.appendChild(empty);
     renderOpenCodeSnippet();
+    renderOverview();
     return;
   }
   clientKeys.forEach((entry, index) => {
@@ -380,6 +449,7 @@ function renderClientKeys() {
     clientKeyList.appendChild(row);
   });
   renderOpenCodeSnippet();
+  renderOverview();
 }
 
 async function loadLogs(page = currentLogPage) {
@@ -398,7 +468,7 @@ function renderLogs(logs) {
   if (logs.length === 0) {
     const empty = document.createElement("div");
     empty.className = "key-empty";
-    empty.textContent = "暂无对话日志。客户端发起请求后会显示在这里。";
+    empty.textContent = "暂无使用日志。客户端发起请求后会显示在这里。";
     logList.appendChild(empty);
     return;
   }
@@ -415,17 +485,30 @@ function renderLogs(logs) {
       </div>
       <div class="log-metrics">
         <span>令牌：${escapeHTML(log.client_name || "-")}</span>
+        <span>上游：${escapeHTML(formatUpstream(log))}</span>
         <span>模型：${escapeHTML(log.model || "-")}</span>
         <span>输入：${formatNumber(log.input_tokens)} tok</span>
         <span>输出：${formatNumber(log.output_tokens)} tok</span>
         <span>总计：${formatNumber(log.total_tokens)} tok</span>
         <span>缓存命中：${formatNumber(log.cache_hit_tokens)} tok</span>
-        <span>首 token：${formatNumber(log.first_token_ms)} ms</span>
+        <span>首 token：${formatDuration(log.first_token_ms)}</span>
         <span>耗时：${formatNumber(log.duration_ms)} ms</span>
       </div>
     `;
     logList.appendChild(item);
   });
+}
+
+function formatUpstream(log) {
+  const name = String(log.upstream_name || "").trim();
+  const provider = String(log.upstream_provider || "").trim();
+  if (name && provider) return `${name} / ${provider}`;
+  return name || provider || "-";
+}
+
+function formatDuration(value) {
+  const n = Number(value || 0);
+  return n > 0 ? `${formatNumber(n)} ms` : "-";
 }
 
 function renderLogPager() {
@@ -463,10 +546,46 @@ async function copyClientKey(key) {
 function renderTextProfiles() {
   renderProfileList(textProfileList, textProfiles, activeTextProfileId, "text");
   renderOpenCodeSnippet();
+  renderOverview();
 }
 
 function renderVisionProfiles() {
   renderProfileList(visionProfileList, visionProfiles, activeVisionProfileId, "vision");
+  renderOverview();
+}
+
+function renderOverview() {
+  const textProfile = activeTextProfile();
+  const visionProfile = activeVisionProfile();
+  const keys = normalizeClientKeys(clientKeys);
+  if (homeBaseURL) homeBaseURL.textContent = location.host;
+  if (homeTextModel) homeTextModel.textContent = formatTextModelList(textProfile, "使用请求模型名");
+  if (homeTextProvider) homeTextProvider.textContent = profileHeadline(textProfile, "text");
+  if (homeVisionModel) homeVisionModel.textContent = visionProfile?.model || "未设置模型";
+  if (homeVisionProvider) homeVisionProvider.textContent = profileHeadline(visionProfile, "vision");
+  if (homeKeyCount) homeKeyCount.textContent = `${keys.length} 个`;
+  if (homeTextProfile) homeTextProfile.textContent = profileDetail(textProfile, "text");
+  if (homeVisionProfile) homeVisionProfile.textContent = profileDetail(visionProfile, "vision");
+  if (!visionCapabilityEnabled) {
+    if (homeVisionModel) homeVisionModel.textContent = "未开启";
+    if (homeVisionProvider) homeVisionProvider.textContent = "仅使用文本模型";
+    if (homeVisionProfile) homeVisionProfile.textContent = "关闭后不会调用视觉模型";
+  }
+  if (homeProxyState) homeProxyState.textContent = serviceState.textContent || "在线";
+}
+
+function profileHeadline(profile, kind) {
+  if (!profile) return "-";
+  const provider = profile.provider || "-";
+  const name = profile.name || (kind === "text" ? "文本模型" : "视觉模型");
+  return `${name} / ${provider}`;
+}
+
+function profileDetail(profile, kind) {
+  if (!profile) return "-";
+  const model = kind === "text" ? formatTextModelList(profile, "使用客户端请求模型名") : profile.model || "未设置模型";
+  const wire = kind === "text" ? ` · ${formatWireAPI(profile.wire_api)}` : "";
+  return `${profile.name || "未命名"} · ${profile.provider || "-"} · ${model}${wire}`;
 }
 
 function renderProfileList(container, profiles, activeId, kind) {
@@ -562,12 +681,21 @@ function openProfileModal(kind, mode, profileId = "") {
   profileModalSubmit.textContent = mode === "edit" ? "保存模型" : "创建模型";
   modalProfileName.value = profile?.name || (isText ? `文本模型 ${index}` : `视觉模型 ${index}`);
   modalProfileProvider.value = profile?.provider || "openai";
+  modalProfileWireAPI.value = isText ? normalizeWireAPI(profile?.wire_api) : "chat_completions";
   modalProfileBaseURL.value = profile?.base_url || "";
   modalProfileAPIKey.value = profile?.api_key || "";
   modalProfileModelLabel.textContent = isText ? "强制模型名" : "模型名";
-  modalProfileModel.placeholder = isText ? "留空则使用客户端请求里的 model" : "例如 gpt-4o-mini";
-  modalProfileModel.value = isText ? profile?.model_override || "" : profile?.model || "";
+  modalProfileModel.placeholder = isText ? "可填多个，换行或逗号分隔；留空则使用客户端请求里的 model" : "例如 gpt-4o-mini";
+  modalProfileModel.value = isText ? textProfileModels(profile).join("\n") : profile?.model || "";
+  modalModelMappings = isText ? textProfileMappings(profile) : [];
+  modalProfileModelWrap.hidden = isText;
+  modelMappingSection.hidden = !isText;
+  fetchModels.hidden = isText;
+  renderModelMappingRows();
   modalProfileProxyWrap.hidden = !isText;
+  modalProfileWireAPIWrap.hidden = !isText;
+  modalProfileSupportsImagesWrap.hidden = !isText;
+  modalProfileSupportsImages.checked = isText && profile?.supports_images === true;
   modalProfileProxyURL.value = isText ? profile?.proxy_url || "" : "";
   resetModelPicker();
   if (profileModal.showModal) {
@@ -597,8 +725,11 @@ async function fetchProviderModels() {
   modelPickerPanel.hidden = false;
   modelPickerStatus.textContent = "正在获取模型...";
   fetchModels.disabled = true;
+  if (fetchModelsForMapping) fetchModelsForMapping.disabled = true;
   const originalText = fetchModels.textContent;
+  const originalMappingText = fetchModelsForMapping?.textContent || "";
   fetchModels.textContent = "获取中...";
+  if (fetchModelsForMapping) fetchModelsForMapping.textContent = "获取中...";
   try {
     const res = await fetch("/api/models", {
       method: "POST",
@@ -624,12 +755,16 @@ async function fetchProviderModels() {
     fetchedModels = Array.isArray(payload.models) ? payload.models : [];
     renderFetchedModels();
     modelPickerStatus.textContent = fetchedModels.length
-      ? `已获取 ${fetchedModels.length} 个模型，点击可填入。`
+      ? `已获取 ${fetchedModels.length} 个模型，选择后点击“添加模型”。`
       : "没有获取到模型。";
     showToast(`已获取 ${fetchedModels.length} 个模型`, "success");
   } finally {
     fetchModels.disabled = false;
     fetchModels.textContent = originalText;
+    if (fetchModelsForMapping) {
+      fetchModelsForMapping.disabled = false;
+      fetchModelsForMapping.textContent = originalMappingText;
+    }
   }
 }
 
@@ -654,6 +789,92 @@ function renderFetchedModels() {
   }
 }
 
+function renderModelMappingRows() {
+  if (!modelMappingRows) return;
+  modelMappingRows.innerHTML = "";
+  if (modalModelMappings.length === 0) {
+    addModelMappingRow({name: "", model: "", context_window: ""}, false);
+    return;
+  }
+  modalModelMappings.forEach((mapping, index) => {
+    const row = document.createElement("div");
+    row.className = "model-mapping-row";
+    row.innerHTML = `
+      <input data-field="name" value="${escapeAttr(mapping.name || "")}" placeholder="例如：DeepSeek V4 Flash">
+      <input data-field="model" value="${escapeAttr(mapping.model || "")}" placeholder="例如：deepseek-v4-flash">
+      <input data-field="context_window" type="number" min="0" step="1" value="${escapeAttr(mapping.context_window || "")}" placeholder="例如：128000">
+      <button class="icon-button model-mapping-delete" type="button" aria-label="删除模型">×</button>
+    `;
+    row.querySelectorAll("input").forEach((input) => {
+      input.addEventListener("input", () => {
+        updateModelMappingFromRows();
+      });
+    });
+    row.querySelector(".model-mapping-delete").addEventListener("click", () => {
+      updateModelMappingFromRows();
+      modalModelMappings.splice(index, 1);
+      renderModelMappingRows();
+    });
+    modelMappingRows.appendChild(row);
+  });
+}
+
+function addModelMappingRow(mapping = {}, focus = true) {
+  updateModelMappingFromRows();
+  modalModelMappings.push(normalizeModelMapping(mapping));
+  renderModelMappingRows();
+  if (focus) {
+    const inputs = modelMappingRows.querySelectorAll(".model-mapping-row input");
+    inputs[Math.max(0, inputs.length - 3)]?.focus();
+  }
+}
+
+function updateModelMappingFromRows() {
+  if (!modelMappingRows) return;
+  modalModelMappings = [...modelMappingRows.querySelectorAll(".model-mapping-row")]
+    .map((row) => normalizeModelMapping({
+      name: row.querySelector('[data-field="name"]')?.value,
+      model: row.querySelector('[data-field="model"]')?.value,
+      context_window: row.querySelector('[data-field="context_window"]')?.value
+    }));
+}
+
+function addSelectedModelsToModal(showMessage) {
+  const selected = [...modelSelect.selectedOptions].map((option) => option.value);
+  if (selected.length === 0 && modelSelect.value) {
+    selected.push(modelSelect.value);
+  }
+  if (selected.length === 0) {
+    modelPickerStatus.textContent = "请先在模型列表中选择要添加的模型。";
+    return;
+  }
+  if (profileModalKind === "text") {
+    updateModelMappingFromRows();
+    const existing = new Set(modalModelMappings.map((mapping) => mapping.model || mapping.name).filter(Boolean));
+    selected.forEach((model) => {
+      if (!existing.has(model)) {
+        modalModelMappings.push({name: model, model, context_window: ""});
+        existing.add(model);
+      }
+    });
+    renderModelMappingRows();
+  } else {
+    modalProfileModel.value = selected[0] || modalProfileModel.value;
+  }
+  if (showMessage && selected.length > 0) {
+    showToast(`已选择 ${selected.length} 个模型`, "success");
+  }
+  updateSelectedModelStatus();
+}
+
+function updateSelectedModelStatus() {
+  if (!modelSelect || fetchedModels.length === 0) return;
+  const selectedCount = modelSelect.selectedOptions.length;
+  if (selectedCount > 0) {
+    modelPickerStatus.textContent = `已选择 ${selectedCount} 个模型，点击“添加模型”写入。`;
+  }
+}
+
 function resetModelPicker() {
   fetchedModels = [];
   modelSearch.value = "";
@@ -666,6 +887,7 @@ async function createProfileFromModal() {
   const isText = profileModalKind === "text";
   const isEdit = profileModalMode === "edit";
   if (isText) {
+    updateModelMappingFromRows();
     const id = isEdit ? profileModalEditId : `text-${Date.now().toString(36)}`;
     const profile = normalizeTextProfile({
       id,
@@ -673,7 +895,11 @@ async function createProfileFromModal() {
       provider: modalProfileProvider.value,
       base_url: modalProfileBaseURL.value,
       api_key: modalProfileAPIKey.value,
-      model_override: modalProfileModel.value,
+      model_override: firstModelOverride(modelMappingsToModels(modalModelMappings)),
+      model_overrides: modelMappingsToModels(modalModelMappings),
+      model_mappings: normalizeModelMappings(modalModelMappings),
+      wire_api: modalProfileWireAPI.value,
+      supports_images: modalProfileSupportsImages.checked,
       proxy_url: modalProfileProxyURL.value
     }, textProfiles.length);
     if (isEdit) {
@@ -727,6 +953,9 @@ function defaultProfileDraft(kind, index) {
       base_url: "",
       api_key: "",
       model_override: "",
+      model_overrides: [],
+      wire_api: "chat_completions",
+      supports_images: false,
       proxy_url: ""
     };
   }
@@ -755,54 +984,145 @@ function activeVisionProfile() {
   return visionProfiles.find((profile) => profile.id === activeVisionProfileId);
 }
 
+function textProfileModels(profile) {
+  if (!profile) return [];
+  return modelMappingsToModels(textProfileMappings(profile));
+}
+
+function textProfileDisplayModels(profile) {
+  return textProfileMappings(profile).map((mapping) => mapping.name || mapping.model).filter(Boolean);
+}
+
+function textProfileMappings(profile) {
+  if (!profile) return [];
+  return normalizeModelMappings(profile.model_mappings || profile.text_model_mappings || profile.model_overrides || profile.model_override);
+}
+
+function modelsForSnippet(profile) {
+  const models = textProfileDisplayModels(profile);
+  return models.length ? models : ["z-ai/glm-5.2"];
+}
+
+function formatTextModelList(profile, fallback) {
+  const models = textProfileDisplayModels(profile);
+  if (models.length === 0) return fallback;
+  if (models.length === 1) return models[0];
+  return `${models[0]} 等 ${models.length} 个模型`;
+}
+
+function parseModelOverrides(value) {
+  const values = Array.isArray(value) ? value : String(value || "").split(/[\n,，;；]+/);
+  const seen = new Set();
+  return values
+    .map((model) => String(model || "").trim())
+    .filter((model) => {
+      if (!model || seen.has(model)) return false;
+      seen.add(model);
+      return true;
+    });
+}
+
+function firstModelOverride(value) {
+  return parseModelOverrides(value)[0] || "";
+}
+
+function normalizeModelMapping(value) {
+  const name = String(value?.name || value?.display_name || "").trim();
+  const model = String(value?.model || value || "").trim();
+  const contextWindow = Number(value?.context_window || value?.contextWindow || 0);
+  return {
+    name: name || model,
+    model: model || name,
+    context_window: Number.isFinite(contextWindow) && contextWindow > 0 ? Math.floor(contextWindow) : 0
+  };
+}
+
+function normalizeModelMappings(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : parseModelOverrides(value).map((model) => ({name: model, model}));
+  const seen = new Set();
+  return raw
+    .map(normalizeModelMapping)
+    .filter((mapping) => {
+      const key = mapping.name || mapping.model;
+      if (!mapping.model || !key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function modelMappingsToModels(mappings) {
+  const seen = new Set();
+  return normalizeModelMappings(mappings)
+    .map((mapping) => mapping.model)
+    .filter((model) => {
+      if (!model || seen.has(model)) return false;
+      seen.add(model);
+      return true;
+    });
+}
+
+function visionInputModalities() {
+  return relayImageInputEnabled() ? ["text", "image"] : ["text"];
+}
+
+function relayImageInputEnabled() {
+  return activeTextProfile()?.supports_images === true || visionCapabilityEnabled;
+}
+
 function renderOpenCodeSnippet() {
   const profile = activeTextProfile();
-  const model = (profile?.model_override || "glm-5.1").trim();
+  const models = textProfileModels(profile);
+  const model = (models[0] || "z-ai/glm-5.2").trim();
   const key = normalizeClientKeys(clientKeys)[0]?.key || "请先生成客户端 Key";
+  const inputModalities = visionInputModalities();
   if (opencodeConfig) {
     opencodeConfig.textContent = JSON.stringify({
       "$schema": "https://opencode.ai/config.json",
       provider: {
-        "codex-proxy": {
+        "vision-relay": {
           npm: "@ai-sdk/openai-compatible",
-          name: "Codex Proxy",
+          name: "Vision Relay",
           options: {
             baseURL: `${location.origin}/v1`,
             apiKey: key
           },
-          models: {
-            [model]: {
-              name: model,
-              attachment: true,
-              attachments: true,
-              vision: true,
-              input_modalities: ["text", "image"],
+          models: Object.fromEntries(modelsForSnippet(profile).map((modelName) => [modelName, {
+              name: modelName,
+              attachment: relayImageInputEnabled(),
+              attachments: relayImageInputEnabled(),
+              vision: relayImageInputEnabled(),
+              input_modalities: inputModalities,
               output_modalities: ["text"],
               modalities: {
-                input: ["text", "image"],
+                input: inputModalities,
                 output: ["text"]
               }
-            }
-          }
+            }]))
         }
       },
-      model: `codex-proxy/${model}`
+      model: `vision-relay/${model}`
     }, null, 2);
   }
   if (codexConfig) {
     codexConfig.textContent = [
       `# %USERPROFILE%\\.codex\\config.toml`,
       `model = "${model}"`,
-      `model_provider = "codex-proxy"`,
+      `model_catalog_json = "%USERPROFILE%\\\\.codex\\\\vision-relay-model-catalog.json"`,
+      `model_provider = "openai"`,
+      `openai_base_url = "${location.origin}/v1"`,
+      `forced_login_method = "api"`,
+      `cli_auth_credentials_store = "file"`,
       ``,
-      `[model_providers.codex-proxy]`,
-      `name = "Codex Proxy"`,
-      `base_url = "${location.origin}/v1"`,
-      `env_key = "CODEX_PROXY_API_KEY"`,
-      `wire_api = "responses"`,
+      `# 当前项目 .codex\\config.toml`,
+      `model = "${model}"`,
+      `model_catalog_json = ".codex\\\\vision-relay-model-catalog.json"`,
+      `model_provider = "openai"`,
+      `openai_base_url = "${location.origin}/v1"`,
       ``,
       `# PowerShell`,
-      `$env:CODEX_PROXY_API_KEY = "${key}"`
+      `$env:OPENAI_API_KEY = "${key}"`
     ].join("\n");
   }
   if (claudeCodeConfig) {
@@ -849,6 +1169,10 @@ function migrateProfiles(cfg) {
         base_url: profile.text_base_url,
         api_key: profile.text_api_key,
         model_override: profile.text_model_override,
+        model_overrides: profile.text_model_overrides || profile.model_overrides,
+        model_mappings: profile.text_model_mappings || profile.model_mappings,
+        wire_api: profile.text_wire_api,
+        supports_images: profile.text_supports_images,
         proxy_url: profile.proxy_url
       }, index)),
       visionProfiles: cfg.model_profiles.map((profile, index) => normalizeVisionProfile({
@@ -877,6 +1201,10 @@ function textProfileFromConfig(cfg, id, name) {
     base_url: cfg.text_base_url,
     api_key: cfg.text_api_key,
     model_override: cfg.text_model_override,
+    model_overrides: cfg.text_model_overrides,
+    model_mappings: cfg.text_model_mappings,
+    wire_api: cfg.text_wire_api,
+    supports_images: cfg.text_supports_images,
     proxy_url: cfg.proxy_url
   }, 0);
 }
@@ -900,6 +1228,10 @@ function textProfileFromForm(id, name) {
     base_url: "https://api.openai.com",
     api_key: "",
     model_override: "",
+    model_overrides: [],
+    model_mappings: [],
+    wire_api: "chat_completions",
+    supports_images: false,
     proxy_url: ""
   }, 0);
 }
@@ -934,13 +1266,19 @@ function normalizeProfileList(profiles, normalizer, fallback) {
 }
 
 function normalizeTextProfile(profile, index) {
+  const modelMappings = normalizeModelMappings(profile.model_mappings || profile.text_model_mappings || profile.model_overrides || profile.text_model_overrides || profile.model_override);
+  const modelOverrides = modelMappingsToModels(modelMappings);
   return {
     id: String(profile.id || `text-${index + 1}`).trim(),
     name: String(profile.name || `文本模型 ${index + 1}`).trim(),
     provider: String(profile.provider || "openai").trim(),
     base_url: String(profile.base_url || "https://api.openai.com").trim(),
     api_key: String(profile.api_key || "").trim(),
-    model_override: String(profile.model_override || "").trim(),
+    model_override: modelOverrides[0] || "",
+    model_overrides: modelOverrides,
+    model_mappings: modelMappings,
+    wire_api: normalizeWireAPI(profile.wire_api),
+    supports_images: profile.supports_images === true,
     proxy_url: String(profile.proxy_url || "").trim()
   };
 }
@@ -958,9 +1296,18 @@ function normalizeVisionProfile(profile, index) {
 
 function profileSummary(profile, kind) {
   const provider = profile.provider || "openai";
-  const model = kind === "text" ? profile.model_override || "使用请求模型名" : profile.model || "未设置模型";
+  const model = kind === "text" ? formatTextModelList(profile, "使用请求模型名") : profile.model || "未设置模型";
   const base = profile.base_url || "未设置 Base URL";
-  return `${provider} · ${model} · ${base}`;
+  const wire = kind === "text" ? ` · ${formatWireAPI(profile.wire_api)}` : "";
+  return `${provider} · ${model}${wire} · ${base}`;
+}
+
+function normalizeWireAPI(value) {
+  return String(value || "").trim().toLowerCase() === "responses" ? "responses" : "chat_completions";
+}
+
+function formatWireAPI(value) {
+  return normalizeWireAPI(value) === "responses" ? "Responses" : "Chat Completions";
 }
 
 function defaultBaseURL(provider) {
@@ -1025,7 +1372,7 @@ imageInput.addEventListener("change", async () => {
 
 send.addEventListener("click", async () => {
   const prompt = document.querySelector("#prompt").value.trim() || "请描述这张图片。";
-  const model = activeTextProfile()?.model_override || "local-text-model";
+  const model = textProfileDisplayModels(activeTextProfile())[0] || "local-text-model";
   const headers = {"Content-Type": "application/json"};
   const localKey = firstLocalKey();
   if (localKey) {
@@ -1038,6 +1385,9 @@ send.addEventListener("click", async () => {
 
   output.textContent = `POST ${request.path}\n\n请求中...`;
   visionOutput.textContent = imageDataUrl ? "等待图片模型返回..." : "本次请求未上传图片";
+  if (imageDataUrl && !visionCapabilityEnabled) {
+    visionOutput.textContent = "视觉模型能力未开启，本次请求直接发送到文本模型";
+  }
   send.disabled = true;
   try {
     const res = await fetch(request.path, {
@@ -1061,6 +1411,10 @@ send.addEventListener("click", async () => {
 });
 
 async function refreshVisionDebug() {
+  if (!visionCapabilityEnabled) {
+    visionOutput.textContent = "视觉模型能力未开启，当前请求不会触发图片解析";
+    return;
+  }
   try {
     const res = await fetch("/api/debug/vision");
     if (!res.ok) return;

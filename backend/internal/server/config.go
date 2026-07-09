@@ -9,25 +9,31 @@ import (
 )
 
 const (
+	appDisplayName      = "Vision Relay"
+	appSlug             = "vision-relay"
+	legacyAppSlug       = "codex-proxy"
 	defaultAddr         = "127.0.0.1:8787"
 	defaultTextProvider = "openai"
+	defaultTextWireAPI  = "chat_completions"
 	defaultVisionModel  = "gpt-4o-mini"
 	defaultVisionPrompt = "你只是图片识别器，不是最终回答模型。只提取图片事实，禁止回答用户需求、禁止写代码、禁止给方案、禁止推理下一步。按图片复杂度输出必要细节，用简洁中文列出：1. 可见文字；2. 主要对象/页面结构；3. 颜色和布局；4. 与用户需求直接相关的细节。"
 )
 
 func defaultConfig() config {
 	cfg := config{
-		Addr:                env("CODEX_PROXY_ADDR", defaultAddr),
+		Addr:                envAny(defaultAddr, "VISION_RELAY_ADDR", "CODEX_PROXY_ADDR"),
 		TextProvider:        env("TEXT_PROVIDER", defaultTextProvider),
 		TextBaseURL:         env("TEXT_BASE_URL", "https://api.openai.com"),
 		TextAPIKey:          env("TEXT_API_KEY", ""),
 		TextModelOverride:   env("TEXT_MODEL_OVERRIDE", ""),
+		TextWireAPI:         env("TEXT_WIRE_API", defaultTextWireAPI),
 		ProxyURL:            env("PROXY_URL", ""),
 		VisionProvider:      env("VISION_PROVIDER", "openai"),
 		VisionBaseURL:       env("VISION_BASE_URL", "https://api.openai.com"),
 		VisionAPIKey:        env("VISION_API_KEY", ""),
 		VisionModel:         env("VISION_MODEL", defaultVisionModel),
 		VisionPrompt:        defaultVisionPrompt,
+		VisionEnabled:       boolPtr(env("VISION_ENABLED", "true") != "false"),
 		ClientAPIKeyEntries: keysToEntries(splitKeys(env("CLIENT_API_KEYS", ""))),
 		OpenWindow:          env("OPEN_WINDOW", "true") != "false",
 		OpenBrowser:         env("OPEN_BROWSER", "false") == "true",
@@ -42,9 +48,17 @@ func defaultConfig() config {
 func defaultConfigPath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil || dir == "" {
-		return "codex-proxy.json"
+		return appSlug + ".json"
 	}
-	return filepath.Join(dir, "codex-proxy", "config.json")
+	return filepath.Join(dir, appSlug, "config.json")
+}
+
+func legacyConfigPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil || dir == "" {
+		return legacyAppSlug + ".json"
+	}
+	return filepath.Join(dir, legacyAppSlug, "config.json")
 }
 
 func loadConfig(path string) (config, error) {
@@ -114,6 +128,16 @@ func mergeConfig(base, loaded config) config {
 	if loaded.TextModelOverride != "" {
 		base.TextModelOverride = loaded.TextModelOverride
 	}
+	if len(loaded.TextModelOverrides) > 0 {
+		base.TextModelOverrides = loaded.TextModelOverrides
+	}
+	if len(loaded.TextModelMappings) > 0 {
+		base.TextModelMappings = loaded.TextModelMappings
+	}
+	if loaded.TextWireAPI != "" {
+		base.TextWireAPI = loaded.TextWireAPI
+	}
+	base.TextSupportsImages = loaded.TextSupportsImages
 	if loaded.ProxyURL != "" {
 		base.ProxyURL = loaded.ProxyURL
 	}
@@ -132,6 +156,9 @@ func mergeConfig(base, loaded config) config {
 	if loaded.VisionPrompt != "" {
 		base.VisionPrompt = loaded.VisionPrompt
 	}
+	if loaded.VisionEnabled != nil {
+		base.VisionEnabled = loaded.VisionEnabled
+	}
 	if len(loaded.ClientAPIKeyEntries) > 0 {
 		base.ClientAPIKeyEntries = loaded.ClientAPIKeyEntries
 	} else if len(loaded.ClientAPIKeys) > 0 {
@@ -146,6 +173,15 @@ func mergeConfig(base, loaded config) config {
 func env(key, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		return value
+	}
+	return fallback
+}
+
+func envAny(fallback string, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
 	}
 	return fallback
 }
@@ -179,6 +215,7 @@ func (a *app) setConfig(cfg config) error {
 	if cfg.TextBaseURL == "" {
 		cfg.TextBaseURL = defaultBaseURL(cfg.TextProvider)
 	}
+	cfg.TextWireAPI = normalizeWireAPI(cfg.TextWireAPI)
 	if cfg.VisionProvider == "" {
 		cfg.VisionProvider = "openai"
 	}
@@ -190,6 +227,9 @@ func (a *app) setConfig(cfg config) error {
 	}
 	if cfg.VisionPrompt == "" {
 		cfg.VisionPrompt = defaultVisionPrompt
+	}
+	if cfg.VisionEnabled == nil {
+		cfg.VisionEnabled = boolPtr(true)
 	}
 	cfg.VisionPrompt = defaultVisionPrompt
 	cfg.ProxyURL = strings.TrimSpace(cfg.ProxyURL)
@@ -206,6 +246,26 @@ func (a *app) setConfig(cfg config) error {
 		return saveConfigToDB(a.db, cfg)
 	}
 	return saveConfig(a.configPath, cfg)
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func visionEnabled(cfg config) bool {
+	return cfg.VisionEnabled == nil || *cfg.VisionEnabled
+}
+
+func textSupportsImages(cfg config) bool {
+	return cfg.TextSupportsImages
+}
+
+func relayImageInputEnabled(cfg config) bool {
+	return textSupportsImages(cfg) || visionEnabled(cfg)
+}
+
+func shouldAugmentImages(cfg config) bool {
+	return !textSupportsImages(cfg) && visionEnabled(cfg)
 }
 
 func normalizeSeparateModelProfiles(cfg config) config {
@@ -250,13 +310,17 @@ func migrateCombinedProfiles(cfg config) config {
 	for _, profile := range cfg.ModelProfiles {
 		profile = normalizeModelProfile(profile)
 		textProfiles = append(textProfiles, textModelProfile{
-			ID:            "text-" + profile.ID,
-			Name:          profile.Name,
-			Provider:      profile.TextProvider,
-			BaseURL:       profile.TextBaseURL,
-			APIKey:        profile.TextAPIKey,
-			ModelOverride: profile.TextModelOverride,
-			ProxyURL:      profile.ProxyURL,
+			ID:             "text-" + profile.ID,
+			Name:           profile.Name,
+			Provider:       profile.TextProvider,
+			BaseURL:        profile.TextBaseURL,
+			APIKey:         profile.TextAPIKey,
+			ModelOverride:  profile.TextModelOverride,
+			ModelOverrides: profile.TextModelOverrides,
+			ModelMappings:  profile.TextModelMappings,
+			WireAPI:        profile.TextWireAPI,
+			SupportsImages: profile.TextSupportsImages,
+			ProxyURL:       profile.ProxyURL,
 		})
 		visionProfiles = append(visionProfiles, visionModelProfile{
 			ID:       "vision-" + profile.ID,
@@ -306,6 +370,10 @@ func normalizeTextProfiles(profiles []textModelProfile) []textModelProfile {
 		}
 		profile.APIKey = strings.TrimSpace(profile.APIKey)
 		profile.ModelOverride = strings.TrimSpace(profile.ModelOverride)
+		profile.ModelMappings = normalizeTextModelMappings(profile.ModelMappings, profile.ModelOverrides, profile.ModelOverride)
+		profile.ModelOverrides = modelOverridesFromMappings(profile.ModelMappings)
+		profile.ModelOverride = firstModelOverride(profile.ModelOverrides)
+		profile.WireAPI = normalizeWireAPI(profile.WireAPI)
 		profile.ProxyURL = strings.TrimSpace(profile.ProxyURL)
 		out = append(out, profile)
 	}
@@ -366,13 +434,17 @@ func hasVisionProfile(profiles []visionModelProfile, id string) bool {
 
 func textProfileFromConfig(cfg config, id, name string) textModelProfile {
 	return normalizeTextProfiles([]textModelProfile{{
-		ID:            id,
-		Name:          name,
-		Provider:      cfg.TextProvider,
-		BaseURL:       cfg.TextBaseURL,
-		APIKey:        cfg.TextAPIKey,
-		ModelOverride: cfg.TextModelOverride,
-		ProxyURL:      cfg.ProxyURL,
+		ID:             id,
+		Name:           name,
+		Provider:       cfg.TextProvider,
+		BaseURL:        cfg.TextBaseURL,
+		APIKey:         cfg.TextAPIKey,
+		ModelOverride:  cfg.TextModelOverride,
+		ModelOverrides: cfg.TextModelOverrides,
+		ModelMappings:  cfg.TextModelMappings,
+		WireAPI:        cfg.TextWireAPI,
+		SupportsImages: cfg.TextSupportsImages,
+		ProxyURL:       cfg.ProxyURL,
 	}})[0]
 }
 
@@ -393,6 +465,10 @@ func applyTextProfileToConfig(cfg config, profile textModelProfile) config {
 	cfg.TextBaseURL = profile.BaseURL
 	cfg.TextAPIKey = profile.APIKey
 	cfg.TextModelOverride = profile.ModelOverride
+	cfg.TextModelOverrides = profile.ModelOverrides
+	cfg.TextModelMappings = profile.ModelMappings
+	cfg.TextWireAPI = profile.WireAPI
+	cfg.TextSupportsImages = profile.SupportsImages
 	cfg.ProxyURL = profile.ProxyURL
 	return cfg
 }
@@ -451,6 +527,10 @@ func normalizeModelProfile(profile modelProfile) modelProfile {
 	}
 	profile.TextAPIKey = strings.TrimSpace(profile.TextAPIKey)
 	profile.TextModelOverride = strings.TrimSpace(profile.TextModelOverride)
+	profile.TextModelMappings = normalizeTextModelMappings(profile.TextModelMappings, profile.TextModelOverrides, profile.TextModelOverride)
+	profile.TextModelOverrides = modelOverridesFromMappings(profile.TextModelMappings)
+	profile.TextModelOverride = firstModelOverride(profile.TextModelOverrides)
+	profile.TextWireAPI = normalizeWireAPI(profile.TextWireAPI)
 	profile.ProxyURL = strings.TrimSpace(profile.ProxyURL)
 	profile.VisionProvider = normalizeProvider(profile.VisionProvider)
 	if profile.VisionProvider == "" {
@@ -470,17 +550,21 @@ func normalizeModelProfile(profile modelProfile) modelProfile {
 
 func profileFromConfig(cfg config, id, name string) modelProfile {
 	return normalizeModelProfile(modelProfile{
-		ID:                id,
-		Name:              name,
-		TextProvider:      cfg.TextProvider,
-		TextBaseURL:       cfg.TextBaseURL,
-		TextAPIKey:        cfg.TextAPIKey,
-		TextModelOverride: cfg.TextModelOverride,
-		ProxyURL:          cfg.ProxyURL,
-		VisionProvider:    cfg.VisionProvider,
-		VisionBaseURL:     cfg.VisionBaseURL,
-		VisionAPIKey:      cfg.VisionAPIKey,
-		VisionModel:       cfg.VisionModel,
+		ID:                 id,
+		Name:               name,
+		TextProvider:       cfg.TextProvider,
+		TextBaseURL:        cfg.TextBaseURL,
+		TextAPIKey:         cfg.TextAPIKey,
+		TextModelOverride:  cfg.TextModelOverride,
+		TextModelOverrides: cfg.TextModelOverrides,
+		TextModelMappings:  cfg.TextModelMappings,
+		TextWireAPI:        cfg.TextWireAPI,
+		TextSupportsImages: cfg.TextSupportsImages,
+		ProxyURL:           cfg.ProxyURL,
+		VisionProvider:     cfg.VisionProvider,
+		VisionBaseURL:      cfg.VisionBaseURL,
+		VisionAPIKey:       cfg.VisionAPIKey,
+		VisionModel:        cfg.VisionModel,
 	})
 }
 
@@ -490,6 +574,10 @@ func applyProfileToConfig(cfg config, profile modelProfile) config {
 	cfg.TextBaseURL = profile.TextBaseURL
 	cfg.TextAPIKey = profile.TextAPIKey
 	cfg.TextModelOverride = profile.TextModelOverride
+	cfg.TextModelOverrides = profile.TextModelOverrides
+	cfg.TextModelMappings = profile.TextModelMappings
+	cfg.TextWireAPI = profile.TextWireAPI
+	cfg.TextSupportsImages = profile.TextSupportsImages
 	cfg.ProxyURL = profile.ProxyURL
 	cfg.VisionProvider = profile.VisionProvider
 	cfg.VisionBaseURL = profile.VisionBaseURL
@@ -550,7 +638,103 @@ func (a *app) textEndpoint(cfg config) endpoint {
 		BaseURL:       cfg.TextBaseURL,
 		APIKey:        cfg.TextAPIKey,
 		ModelOverride: cfg.TextModelOverride,
+		WireAPI:       cfg.TextWireAPI,
 		ProxyURL:      cfg.ProxyURL,
+	}
+}
+
+func normalizeModelOverrides(models []string, legacy string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(models)+1)
+	for _, model := range append([]string{legacy}, models...) {
+		model = strings.TrimSpace(model)
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		out = append(out, model)
+	}
+	return out
+}
+
+func normalizeTextModelMappings(mappings []textModelMapping, models []string, legacy string) []textModelMapping {
+	if len(mappings) == 0 {
+		for _, model := range normalizeModelOverrides(models, legacy) {
+			mappings = append(mappings, textModelMapping{Name: model, Model: model})
+		}
+	}
+	seen := map[string]bool{}
+	out := make([]textModelMapping, 0, len(mappings))
+	for _, mapping := range mappings {
+		mapping.Name = strings.TrimSpace(mapping.Name)
+		mapping.Model = strings.TrimSpace(mapping.Model)
+		if mapping.Model == "" {
+			mapping.Model = mapping.Name
+		}
+		if mapping.Name == "" {
+			mapping.Name = mapping.Model
+		}
+		if mapping.Model == "" || seen[mapping.Name] {
+			continue
+		}
+		seen[mapping.Name] = true
+		if mapping.ContextWindow < 0 {
+			mapping.ContextWindow = 0
+		}
+		out = append(out, mapping)
+	}
+	return out
+}
+
+func modelOverridesFromMappings(mappings []textModelMapping) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(mappings))
+	for _, mapping := range mappings {
+		model := strings.TrimSpace(mapping.Model)
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		out = append(out, model)
+	}
+	return out
+}
+
+func firstModelOverride(models []string) string {
+	if len(models) == 0 {
+		return ""
+	}
+	return models[0]
+}
+
+func textModelMappings(cfg config) []textModelMapping {
+	return normalizeTextModelMappings(cfg.TextModelMappings, cfg.TextModelOverrides, cfg.TextModelOverride)
+}
+
+func textModelOverrides(cfg config) []string {
+	return modelOverridesFromMappings(textModelMappings(cfg))
+}
+
+func effectiveTextModel(cfg config, requested string) string {
+	mappings := textModelMappings(cfg)
+	if len(mappings) == 0 {
+		return ""
+	}
+	requested = strings.TrimSpace(requested)
+	for _, mapping := range mappings {
+		if requested == mapping.Name || requested == mapping.Model {
+			return mapping.Model
+		}
+	}
+	return mappings[0].Model
+}
+
+func normalizeWireAPI(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "responses", "response", "openai_responses":
+		return "responses"
+	default:
+		return defaultTextWireAPI
 	}
 }
 

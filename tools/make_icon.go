@@ -15,23 +15,23 @@ import (
 )
 
 var letters = map[rune][]string{
-	'C': {
-		"01110",
+	'V': {
 		"10001",
-		"10000",
-		"10000",
-		"10000",
 		"10001",
-		"01110",
+		"10001",
+		"10001",
+		"01010",
+		"01010",
+		"00100",
 	},
-	'P': {
+	'R': {
 		"11110",
 		"10001",
 		"10001",
 		"11110",
-		"10000",
-		"10000",
-		"10000",
+		"10100",
+		"10010",
+		"10001",
 	},
 }
 
@@ -133,7 +133,7 @@ func makeIcon(size int) *image.RGBA {
 	border := max(1, size/32)
 	inset := max(2, size/10)
 	drawRoundOutline(img, inset, inset, size-inset-1, size-inset-1, max(2, size/7), border, color.RGBA{255, 255, 255, 48})
-	drawText(img, "CP", size)
+	drawText(img, "VR", size)
 	node := max(3, size/9)
 	drawCircle(img, size-inset-node/2, inset+node/2, node/2, color.RGBA{15, 159, 110, 255})
 	return img

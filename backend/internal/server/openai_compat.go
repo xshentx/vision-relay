@@ -10,7 +10,7 @@ func sanitizeOpenAIChatPayload(payload map[string]any) {
 	pendingToolCallIDs := make([]string, 0)
 	seq := 1
 	nextID := func() string {
-		id := "call_codex_proxy_" + intToBase36(seq)
+		id := "call_vision_relay_" + intToBase36(seq)
 		seq++
 		return id
 	}

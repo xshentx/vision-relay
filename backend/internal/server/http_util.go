@@ -147,7 +147,7 @@ func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{
 			"message": err.Error(),
-			"type":    "codex_proxy_error",
+			"type":    "vision_relay_error",
 		},
 	})
 }

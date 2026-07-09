@@ -21,9 +21,13 @@ func responsesPayloadToChatCompletions(payload map[string]any) map[string]any {
 	copyIfPresent(chat, payload, "stop")
 	copyIfPresent(chat, payload, "stream")
 	copyIfPresent(chat, payload, "stream_options")
-	copyIfPresent(chat, payload, "tools")
-	copyIfPresent(chat, payload, "tool_choice")
-	copyIfPresent(chat, payload, "parallel_tool_calls")
+	if tools, ok := responsesToolsToChatTools(payload["tools"]); ok {
+		chat["tools"] = tools
+		if toolChoice, ok := responsesToolChoiceToChatToolChoice(payload["tool_choice"]); ok {
+			chat["tool_choice"] = toolChoice
+		}
+		copyIfPresent(chat, payload, "parallel_tool_calls")
+	}
 	if maxTokens, ok := payload["max_output_tokens"]; ok {
 		chat["max_tokens"] = maxTokens
 	}
@@ -41,6 +45,60 @@ func responsesPayloadToChatCompletions(payload map[string]any) map[string]any {
 	}
 	chat["messages"] = messages
 	return chat
+}
+
+func responsesToolsToChatTools(value any) ([]any, bool) {
+	raw, ok := value.([]any)
+	if !ok || len(raw) == 0 {
+		return nil, false
+	}
+	tools := make([]any, 0, len(raw))
+	for _, item := range raw {
+		tool, _ := item.(map[string]any)
+		if tool == nil || firstString(tool["type"]) != "function" {
+			continue
+		}
+		if fn, ok := tool["function"].(map[string]any); ok {
+			tools = append(tools, map[string]any{"type": "function", "function": fn})
+			continue
+		}
+		name := firstString(tool["name"])
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		fn := map[string]any{"name": name}
+		copyIfPresent(fn, tool, "description")
+		copyIfPresent(fn, tool, "parameters")
+		copyIfPresent(fn, tool, "strict")
+		tools = append(tools, map[string]any{"type": "function", "function": fn})
+	}
+	return tools, len(tools) > 0
+}
+
+func responsesToolChoiceToChatToolChoice(value any) (any, bool) {
+	switch v := value.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return nil, false
+		}
+		return v, true
+	case map[string]any:
+		if firstString(v["type"]) != "function" {
+			return nil, false
+		}
+		name := firstString(v["name"])
+		if strings.TrimSpace(name) == "" {
+			return nil, false
+		}
+		return map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": name,
+			},
+		}, true
+	default:
+		return nil, false
+	}
 }
 
 func responsesInputToMessages(input any) []any {
@@ -68,7 +126,7 @@ func responsesInputToMessages(input any) []any {
 						"content": "",
 						"tool_calls": []any{
 							map[string]any{
-								"id":   firstString(callID, "call_codex_proxy_1"),
+								"id":   firstString(callID, "call_vision_relay_1"),
 								"type": "function",
 								"function": map[string]any{
 									"name":      name,
@@ -81,7 +139,7 @@ func responsesInputToMessages(input any) []any {
 				case "function_call_output":
 					messages = append(messages, map[string]any{
 						"role":         "tool",
-						"tool_call_id": firstString(v["call_id"], v["id"], "call_codex_proxy_1"),
+						"tool_call_id": firstString(v["call_id"], v["id"], "call_vision_relay_1"),
 						"content":      firstString(v["output"], v["content"]),
 					})
 					continue
@@ -92,7 +150,7 @@ func responsesInputToMessages(input any) []any {
 				if content, ok := v["content"]; ok {
 					messages = append(messages, map[string]any{
 						"role":    role,
-						"content": responsesContentToText(content),
+						"content": responsesContentToChatContent(content),
 					})
 					continue
 				}
@@ -114,6 +172,65 @@ func responsesInputToMessages(input any) []any {
 func responsesContentToText(content any) string {
 	pm := parseOpenAIContent(content)
 	return strings.TrimSpace(pm.Text)
+}
+
+func responsesContentToChatContent(content any) any {
+	parts, ok := content.([]any)
+	if !ok {
+		return responsesContentToText(content)
+	}
+	out := make([]any, 0, len(parts))
+	hasImage := false
+	textParts := make([]string, 0)
+	for _, item := range parts {
+		part, _ := item.(map[string]any)
+		if part == nil {
+			continue
+		}
+		switch firstString(part["type"]) {
+		case "text", "input_text", "output_text":
+			if text := firstString(part["text"], part["content"]); strings.TrimSpace(text) != "" {
+				out = append(out, map[string]any{"type": "text", "text": text})
+				textParts = append(textParts, text)
+			}
+		case "image_url", "input_image":
+			if imagePart, ok := openAIChatImagePart(part); ok {
+				out = append(out, imagePart)
+				hasImage = true
+			}
+		case "image", "input_file", "file":
+			if imagePart, ok := openAIChatFileImagePart(part); ok {
+				out = append(out, imagePart)
+				hasImage = true
+			}
+		}
+	}
+	if hasImage {
+		return out
+	}
+	return strings.TrimSpace(strings.Join(textParts, "\n"))
+}
+
+func openAIChatImagePart(part map[string]any) (map[string]any, bool) {
+	if imageURL, ok := part["image_url"].(map[string]any); ok {
+		url := firstString(imageURL["url"], imageURL["uri"], imageURL["file_uri"], imageURL["fileUri"])
+		if url != "" {
+			return map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}}, true
+		}
+	}
+	if url := firstString(part["image_url"], part["imageUrl"], part["url"]); url != "" {
+		return map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}}, true
+	}
+	return openAIChatFileImagePart(part)
+}
+
+func openAIChatFileImagePart(part map[string]any) (map[string]any, bool) {
+	pm := parsedMessage{}
+	appendImageFilePart(part, &pm)
+	if len(pm.Images) == 0 {
+		return nil, false
+	}
+	return map[string]any{"type": "image_url", "image_url": map[string]any{"url": pm.Images[0].URL}}, true
 }
 
 func writeResponsesFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
@@ -369,7 +486,7 @@ func chatCompletionOutput(chat map[string]any, id, text string) []any {
 			continue
 		}
 		fn, _ := call["function"].(map[string]any)
-		callID := firstString(call["id"], "call_codex_proxy_"+strconv.Itoa(i+1))
+		callID := firstString(call["id"], "call_vision_relay_"+strconv.Itoa(i+1))
 		out = append(out, map[string]any{
 			"id":        "fc_" + strings.TrimPrefix(callID, "call_"),
 			"type":      "function_call",
@@ -409,11 +526,21 @@ func chatUsageToResponses(usageValue any) map[string]any {
 	if totalTokens == 0 {
 		totalTokens = inputTokens + outputTokens
 	}
-	return map[string]any{
+	out := map[string]any{
 		"input_tokens":  inputTokens,
 		"output_tokens": outputTokens,
 		"total_tokens":  totalTokens,
 	}
+	if details, _ := usage["prompt_tokens_details"].(map[string]any); details != nil {
+		out["input_tokens_details"] = map[string]any{
+			"cached_tokens":         firstInt64(details["cached_tokens"], details["cache_read_tokens"]),
+			"cache_read_tokens":     firstInt64(details["cache_read_tokens"], details["cached_tokens"]),
+			"cache_creation_tokens": firstInt64(details["cache_creation_tokens"], details["cache_write_tokens"]),
+		}
+	}
+	out["cache_read_input_tokens"] = firstInt64(usage["cache_read_input_tokens"], usage["cache_read_tokens"])
+	out["cache_creation_input_tokens"] = firstInt64(usage["cache_creation_input_tokens"], usage["cache_creation_tokens"], usage["cache_write_input_tokens"], usage["cache_write_tokens"])
+	return out
 }
 
 func chatChunkTextDelta(chunk map[string]any) string {

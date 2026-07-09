@@ -54,6 +54,8 @@ func anthropicMessagesToChat(raw []any) []any {
 			continue
 		}
 		textParts := make([]string, 0)
+		contentParts := make([]any, 0)
+		hasImage := false
 		toolCalls := make([]any, 0)
 		for _, blockValue := range blocks {
 			block, _ := blockValue.(map[string]any)
@@ -64,6 +66,12 @@ func anthropicMessagesToChat(raw []any) []any {
 			case "text":
 				if text := firstString(block["text"]); text != "" {
 					textParts = append(textParts, text)
+					contentParts = append(contentParts, map[string]any{"type": "text", "text": text})
+				}
+			case "image":
+				if imagePart, ok := anthropicImageBlockToChatPart(block); ok {
+					contentParts = append(contentParts, imagePart)
+					hasImage = true
 				}
 			case "tool_use":
 				input := block["input"]
@@ -72,7 +80,7 @@ func anthropicMessagesToChat(raw []any) []any {
 				}
 				args, _ := json.Marshal(input)
 				toolCalls = append(toolCalls, map[string]any{
-					"id":   firstString(block["id"], "call_codex_proxy_"+strconv.Itoa(len(toolCalls)+1)),
+					"id":   firstString(block["id"], "call_vision_relay_"+strconv.Itoa(len(toolCalls)+1)),
 					"type": "function",
 					"function": map[string]any{
 						"name":      firstString(block["name"]),
@@ -82,7 +90,7 @@ func anthropicMessagesToChat(raw []any) []any {
 			case "tool_result":
 				out = append(out, map[string]any{
 					"role":         "tool",
-					"tool_call_id": firstString(block["tool_use_id"], block["id"], "call_codex_proxy_1"),
+					"tool_call_id": firstString(block["tool_use_id"], block["id"], "call_vision_relay_1"),
 					"content":      contentToText(block["content"]),
 				})
 			}
@@ -91,11 +99,42 @@ func anthropicMessagesToChat(raw []any) []any {
 			out = append(out, map[string]any{"role": "assistant", "content": strings.Join(textParts, "\n"), "tool_calls": toolCalls})
 			continue
 		}
+		if hasImage {
+			out = append(out, map[string]any{"role": role, "content": contentParts})
+			continue
+		}
 		if len(textParts) > 0 || role != "assistant" {
 			out = append(out, map[string]any{"role": role, "content": strings.Join(textParts, "\n")})
 		}
 	}
 	return out
+}
+
+func anthropicImageBlockToChatPart(block map[string]any) (map[string]any, bool) {
+	source, _ := block["source"].(map[string]any)
+	if source == nil {
+		return nil, false
+	}
+	switch firstString(source["type"]) {
+	case "base64":
+		data := firstString(source["data"])
+		if data == "" {
+			return nil, false
+		}
+		mediaType := firstString(source["media_type"], "image/png")
+		return map[string]any{
+			"type":      "image_url",
+			"image_url": map[string]any{"url": "data:" + mediaType + ";base64," + data},
+		}, true
+	case "url":
+		url := firstString(source["url"])
+		if url == "" {
+			return nil, false
+		}
+		return map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}}, true
+	default:
+		return nil, false
+	}
 }
 
 func anthropicToolsToChatTools(tools []any) []any {
@@ -263,7 +302,7 @@ func chatCompletionToAnthropicContent(chat map[string]any) []any {
 		_ = json.Unmarshal([]byte(firstString(fn["arguments"], "{}")), &input)
 		out = append(out, map[string]any{
 			"type":  "tool_use",
-			"id":    firstString(call["id"], "call_codex_proxy_"+strconv.Itoa(i+1)),
+			"id":    firstString(call["id"], "call_vision_relay_"+strconv.Itoa(i+1)),
 			"name":  firstString(fn["name"]),
 			"input": input,
 		})
