@@ -85,6 +85,9 @@ func (a *app) authorized(r *http.Request) bool {
 	if len(keys) == 0 {
 		return true
 	}
+	if isCodexAccountBearer(r.Header) {
+		return true
+	}
 	candidates := audienceKeys(r.Header)
 	if key := strings.TrimSpace(r.URL.Query().Get("key")); key != "" {
 		candidates = append(candidates, key)
@@ -97,6 +100,11 @@ func (a *app) authorized(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+func isCodexAccountBearer(header http.Header) bool {
+	token := strings.TrimSpace(bearer(header))
+	return token != "" && !strings.HasPrefix(token, "sk-")
 }
 
 func bearer(h http.Header) string {

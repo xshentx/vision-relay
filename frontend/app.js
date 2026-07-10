@@ -22,6 +22,8 @@ const clientKeyName = document.querySelector("#clientKeyName");
 const clientKeyList = document.querySelector("#clientKeyList");
 const opencodeConfig = document.querySelector("#opencodeConfig");
 const codexConfig = document.querySelector("#codexConfig");
+const configureCodex = document.querySelector("#configureCodex");
+const restoreCodex = document.querySelector("#restoreCodex");
 const claudeCodeConfig = document.querySelector("#claudeCodeConfig");
 const textProfileList = document.querySelector("#textProfileList");
 const addTextProfile = document.querySelector("#addTextProfile");
@@ -401,6 +403,41 @@ generateKey.addEventListener("click", async () => {
     generateKey.disabled = false;
   }
 });
+
+configureCodex?.addEventListener("click", () => {
+  configureCodexClient("configure").catch((err) => {
+    console.error(err);
+    showToast(`配置 Codex 失败：${err.message || err}`, "error");
+  });
+});
+
+restoreCodex?.addEventListener("click", () => {
+  configureCodexClient("restore").catch((err) => {
+    console.error(err);
+    showToast(`恢复 Codex 失败：${err.message || err}`, "error");
+  });
+});
+
+async function configureCodexClient(action) {
+  const button = action === "restore" ? restoreCodex : configureCodex;
+  if (button) button.disabled = true;
+  try {
+    const endpoint = action === "restore" ? "/api/client/restore" : "/api/client/configure";
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({client: "codex"})
+    });
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const payload = await res.json();
+    const path = payload?.path ? `：${payload.path}` : "";
+    const launchText = payload?.started ? "并已启动 Codex" : "";
+    showToast(action === "restore" ? `已恢复 Codex 账号模型${path}` : `已一键配置 Codex${launchText}${path}`, "success");
+    setStatus(action === "restore" ? "Codex 已恢复" : `Codex 已配置${launchText}`);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
 
 function renderClientKeys() {
   clientKeyList.innerHTML = "";
@@ -1106,23 +1143,86 @@ function renderOpenCodeSnippet() {
     }, null, 2);
   }
   if (codexConfig) {
+    const codexMappings = textProfileMappings(profile);
+    const catalogMappings = codexMappings.length ? codexMappings : [{name: "z-ai/glm-5.2", model: "z-ai/glm-5.2", context_window: 0}];
+    const codexDefaultModel = catalogMappings[0].name || catalogMappings[0].model;
+    const codexCatalog = {
+      models: catalogMappings.map((mapping, index) => {
+        const slug = mapping.name || mapping.model;
+        return {
+        slug,
+        display_name: slug,
+        description: mapping.model && mapping.model !== slug
+          ? `Vision Relay route to ${mapping.model}`
+          : "Vision Relay model",
+        base_instructions: "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals.",
+        context_window: mapping.context_window || 128000,
+        max_context_window: mapping.context_window || 128000,
+        effective_context_window_percent: 95,
+        default_reasoning_level: "high",
+        default_reasoning_summary: "none",
+        supported_reasoning_levels: [
+          {effort: "none", description: "Disable reasoning"},
+          {effort: "high", description: "Enable reasoning"}
+        ],
+        visibility: "list",
+        supported_in_api: true,
+        priority: 1000 + index,
+        shell_type: "shell_command",
+        input_modalities: inputModalities,
+        supports_parallel_tool_calls: false,
+        supports_image_detail_original: relayImageInputEnabled(),
+        supports_reasoning_summaries: true,
+        supports_search_tool: false,
+        support_verbosity: false,
+        truncation_policy: {mode: "bytes", limit: 10000},
+        additional_speed_tiers: [],
+        service_tiers: [],
+        availability_nux: null,
+        upgrade: null,
+        experimental_supported_tools: []
+      };
+      })
+    };
     codexConfig.textContent = [
       `# %USERPROFILE%\\.codex\\config.toml`,
-      `model = "${model}"`,
-      `model_catalog_json = "%USERPROFILE%\\\\.codex\\\\vision-relay-model-catalog.json"`,
-      `model_provider = "openai"`,
-      `openai_base_url = "${location.origin}/v1"`,
-      `forced_login_method = "api"`,
-      `cli_auth_credentials_store = "file"`,
+      `model_provider = "custom"`,
+      `model = "${codexDefaultModel}"`,
+      `disable_response_storage = true`,
+      `model_reasoning_effort = "high"`,
+      `model_catalog_json = "vision-relay-model.json"`,
+      `web_search = "disabled"`,
+      ``,
+      `[model_providers.custom]`,
+      `name = "Vision Relay"`,
+      `wire_api = "responses"`,
+      `requires_openai_auth = true`,
+      `base_url = "${location.origin}/v1"`,
+      `experimental_bearer_token = "PROXY_MANAGED"`,
+      ``,
+      `[windows]`,
+      `sandbox = "unelevated"`,
+      ``,
+      `# %USERPROFILE%\\.codex\\vision-relay-model.json`,
+      JSON.stringify(codexCatalog, null, 2),
       ``,
       `# 当前项目 .codex\\config.toml`,
-      `model = "${model}"`,
-      `model_catalog_json = ".codex\\\\vision-relay-model-catalog.json"`,
-      `model_provider = "openai"`,
-      `openai_base_url = "${location.origin}/v1"`,
+      `model_provider = "custom"`,
+      `model = "${codexDefaultModel}"`,
+      `disable_response_storage = true`,
+      `model_reasoning_effort = "high"`,
+      `model_catalog_json = "vision-relay-model.json"`,
+      `web_search = "disabled"`,
       ``,
-      `# PowerShell`,
-      `$env:OPENAI_API_KEY = "${key}"`
+      `[model_providers.custom]`,
+      `name = "Vision Relay"`,
+      `wire_api = "responses"`,
+      `requires_openai_auth = true`,
+      `base_url = "${location.origin}/v1"`,
+      `experimental_bearer_token = "PROXY_MANAGED"`,
+      ``,
+      `[windows]`,
+      `sandbox = "unelevated"`
     ].join("\n");
   }
   if (claudeCodeConfig) {

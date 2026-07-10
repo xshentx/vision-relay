@@ -15,11 +15,13 @@ import (
 )
 
 const (
-	clientCodex      = "codex"
-	clientOpenCode   = "opencode"
-	clientClaudeCode = "claude-code"
-	relayProviderID  = "vision-relay"
-	relayEnvKey      = "VISION_RELAY_API_KEY"
+	clientCodex           = "codex"
+	clientOpenCode        = "opencode"
+	clientClaudeCode      = "claude-code"
+	relayProviderID       = "vision-relay"
+	codexProviderID       = "custom"
+	relayEnvKey           = "VISION_RELAY_API_KEY"
+	codexBaseInstructions = "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals."
 )
 
 type clientConfigContext struct {
@@ -28,8 +30,17 @@ type clientConfigContext struct {
 	Origin        string
 	Key           string
 	Model         string
+	ModelMappings []textModelMapping
 	VisionEnabled bool
 	LaunchPath    string
+	LaunchAppID   string
+}
+
+type clientConfigRequest struct {
+	Client  string `json:"client"`
+	WorkDir string `json:"work_dir"`
+	Start   *bool  `json:"start"`
+	Stop    *bool  `json:"stop"`
 }
 
 func (a *app) ensureClientKey() (string, bool, error) {
@@ -50,6 +61,124 @@ func (a *app) ensureClientKey() (string, bool, error) {
 		return "", false, err
 	}
 	return key, true, nil
+}
+
+func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req clientConfigRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	client := normalizeClientID(req.Client)
+	if client == "" {
+		client = clientCodex
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	key, created, err := a.ensureClientKey()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	cfg := a.currentConfig()
+	projectDir := clientWorkDir(req.WorkDir, home)
+	ctx := clientConfigContext{
+		HomeDir:       home,
+		ProjectDir:    projectDir,
+		Origin:        requestOrigin(r, cfg),
+		Key:           key,
+		Model:         relayModelName(cfg),
+		ModelMappings: textModelMappings(cfg),
+		VisionEnabled: relayImageInputEnabled(cfg),
+		LaunchPath:    currentCodexDesktopPath(),
+		LaunchAppID:   currentCodexAppID(),
+	}
+	path, err := writeClientConfig(client, ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	warnings := []string{}
+	if client != clientCodex {
+		warnings = append(warnings, persistClientEnv(key)...)
+	}
+	restartCodex := client == clientCodex
+	stopRequested := optionalBool(req.Stop, restartCodex)
+	startRequested := optionalBool(req.Start, restartCodex)
+	stopped := false
+	if stopRequested {
+		stopped = stopClient(client)
+		if stopped {
+			waitForClientStopped(client, 5*time.Second)
+		}
+	}
+	started := false
+	command := clientCommand(client)
+	if startRequested {
+		var startWarnings []string
+		started, command, startWarnings = startClient(client, projectDir, ctx)
+		warnings = append(warnings, startWarnings...)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":          true,
+		"client":      client,
+		"path":        path,
+		"project_dir": projectDir,
+		"key_created": created,
+		"stopped":     stopped,
+		"started":     started,
+		"command":     command,
+		"warnings":    warnings,
+	})
+}
+
+func optionalBool(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func (a *app) handleClientRestore(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req clientConfigRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	client := normalizeClientID(req.Client)
+	if client == "" {
+		client = clientCodex
+	}
+	if client != clientCodex {
+		writeError(w, http.StatusBadRequest, errors.New("only Codex account restore is supported"))
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	projectDir := clientWorkDir(req.WorkDir, home)
+	path, err := restoreCodexAccountConfig(home, projectDir)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":          true,
+		"client":      client,
+		"path":        path,
+		"project_dir": projectDir,
+	})
 }
 
 func normalizeClientID(client string) string {
@@ -120,14 +249,14 @@ func writeCodexConfig(ctx clientConfigContext) (string, error) {
 	if err := saveCodexAccountConfigBackup(ctx.HomeDir, userPath); err != nil {
 		return "", err
 	}
-	globalCatalogPath, err := writeCodexModelCatalog(ctx, filepath.Join(ctx.HomeDir, ".codex"))
+	model := codexConfigModel(ctx)
+	_, err := writeCodexModelCatalog(ctx, filepath.Join(ctx.HomeDir, ".codex"))
 	if err != nil {
 		return "", err
 	}
-	if err := upsertCodexModelCache(ctx); err != nil {
-		return "", err
-	}
-	if err := writeCodexAPIAuth(ctx); err != nil {
+	// Older Vision Relay builds injected models into Codex's account cache. The
+	// dedicated catalog is the single source of truth now, matching cc-switch.
+	if err := removeCodexModelCache(ctx.HomeDir); err != nil {
 		return "", err
 	}
 	lines := []string{}
@@ -137,14 +266,22 @@ func writeCodexConfig(ctx clientConfigContext) (string, error) {
 		return "", err
 	}
 	lines = removeCodexRelayConfig(lines)
+	lines = upsertWindowsSandbox(lines, "unelevated")
 	block := []string{
 		"# Added by Vision Relay. Edit from the Client Access page.",
-		fmt.Sprintf("model = %q", ctx.Model),
-		"model_catalog_json = " + tomlLiteralString(globalCatalogPath),
-		`model_provider = "openai"`,
-		fmt.Sprintf("openai_base_url = %q", strings.TrimRight(ctx.Origin, "/")+"/v1"),
-		`forced_login_method = "api"`,
-		`cli_auth_credentials_store = "file"`,
+		fmt.Sprintf("model = %q", model),
+		fmt.Sprintf("model_catalog_json = %q", codexModelCatalogFilename()),
+		fmt.Sprintf("model_provider = %q", codexProviderID),
+		`disable_response_storage = true`,
+		`model_reasoning_effort = "high"`,
+		`web_search = "disabled"`,
+		"",
+		"[model_providers." + codexProviderID + "]",
+		`name = "Vision Relay"`,
+		`wire_api = "responses"`,
+		`requires_openai_auth = true`,
+		fmt.Sprintf("base_url = %q", strings.TrimRight(ctx.Origin, "/")+"/v1"),
+		`experimental_bearer_token = "PROXY_MANAGED"`,
 	}
 	block = append(block, "")
 	content := strings.TrimRight(strings.Join(append(block, lines...), "\n"), "\n") + "\n"
@@ -163,7 +300,8 @@ func writeCodexProjectConfig(ctx clientConfigContext) (string, error) {
 	if projectDir == "" {
 		projectDir = ctx.HomeDir
 	}
-	catalogPath, err := writeCodexModelCatalog(ctx, filepath.Join(projectDir, ".codex"))
+	model := codexConfigModel(ctx)
+	_, err := writeCodexModelCatalog(ctx, filepath.Join(projectDir, ".codex"))
 	if err != nil {
 		return "", err
 	}
@@ -175,16 +313,39 @@ func writeCodexProjectConfig(ctx clientConfigContext) (string, error) {
 		return "", err
 	}
 	lines = removeCodexRelayProjectConfig(lines)
+	lines = upsertWindowsSandbox(lines, "unelevated")
 	block := []string{
 		"# Added by Vision Relay. Edit from the Client Access page.",
-		fmt.Sprintf("model = %q", ctx.Model),
-		"model_catalog_json = " + tomlLiteralString(catalogPath),
-		`model_provider = "openai"`,
-		fmt.Sprintf("openai_base_url = %q", strings.TrimRight(ctx.Origin, "/")+"/v1"),
+		fmt.Sprintf("model = %q", model),
+		fmt.Sprintf("model_catalog_json = %q", codexModelCatalogFilename()),
+		fmt.Sprintf("model_provider = %q", codexProviderID),
+		`disable_response_storage = true`,
+		`model_reasoning_effort = "high"`,
+		`web_search = "disabled"`,
+		"",
+		"[model_providers." + codexProviderID + "]",
+		`name = "Vision Relay"`,
+		`wire_api = "responses"`,
+		`requires_openai_auth = true`,
+		fmt.Sprintf("base_url = %q", strings.TrimRight(ctx.Origin, "/")+"/v1"),
+		`experimental_bearer_token = "PROXY_MANAGED"`,
 		"",
 	}
 	content := strings.TrimRight(strings.Join(append(block, lines...), "\n"), "\n") + "\n"
 	return path, writeConfigFile(path, []byte(content))
+}
+
+func codexConfigModel(ctx clientConfigContext) string {
+	mappings := normalizeTextModelMappings(ctx.ModelMappings, nil, ctx.Model)
+	if len(mappings) > 0 {
+		if name := strings.TrimSpace(mappings[0].Name); name != "" {
+			return name
+		}
+		if model := strings.TrimSpace(mappings[0].Model); model != "" {
+			return model
+		}
+	}
+	return strings.TrimSpace(ctx.Model)
 }
 
 func removeCodexRelayConfig(lines []string) []string {
@@ -200,10 +361,16 @@ func removeCodexRelayConfig(lines []string) []string {
 			}
 			continue
 		}
+		// Older builds could append this root block after a TOML table. Recognize
+		// it anywhere so a subsequent one-click configuration repairs that file.
+		if strings.HasPrefix(trimmed, "# Added by Vision Relay.") || strings.HasPrefix(trimmed, "# Restored by Vision Relay.") {
+			skipGeneratedBlock = true
+			continue
+		}
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			inRoot = false
 			section := strings.Trim(trimmed, "[]")
-			skipSection = section == "model_providers."+relayProviderID || strings.HasPrefix(section, "model_providers."+relayProviderID+".")
+			skipSection = isCodexRelayProviderSection(section)
 		}
 		if skipSection {
 			continue
@@ -216,23 +383,69 @@ func removeCodexRelayConfig(lines []string) []string {
 				continue
 			case strings.HasPrefix(trimmed, "model_provider ="):
 				continue
+			case strings.HasPrefix(trimmed, "disable_response_storage ="):
+				continue
+			case strings.HasPrefix(trimmed, "model_reasoning_effort ="):
+				continue
+			case strings.HasPrefix(trimmed, "web_search ="):
+				continue
 			case strings.HasPrefix(trimmed, "openai_base_url ="):
 				continue
 			case strings.HasPrefix(trimmed, "forced_login_method ="):
 				continue
 			case strings.HasPrefix(trimmed, "cli_auth_credentials_store ="):
 				continue
-			case strings.HasPrefix(trimmed, "# Added by Vision Relay."):
-				skipGeneratedBlock = true
-				continue
-			case strings.HasPrefix(trimmed, "# Restored by Vision Relay."):
-				skipGeneratedBlock = true
-				continue
 			case strings.HasPrefix(trimmed, "# Vision Relay forwards requests to the configured upstream text model:"):
 				continue
 			}
 		}
 		out = append(out, line)
+	}
+	return out
+}
+
+func isCodexRelayProviderSection(section string) bool {
+	for _, providerID := range []string{codexProviderID, relayProviderID} {
+		name := "model_providers." + providerID
+		if section == name || strings.HasPrefix(section, name+".") {
+			return true
+		}
+	}
+	return false
+}
+
+func upsertWindowsSandbox(lines []string, value string) []string {
+	out := make([]string, 0, len(lines)+3)
+	windowsBody := make([]string, 0, 4)
+	inWindows := false
+	windowsSeen := false
+	sandboxLine := fmt.Sprintf("sandbox = %q", value)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section := strings.Trim(trimmed, "[]")
+			inWindows = section == "windows"
+			if inWindows {
+				windowsSeen = true
+				continue
+			}
+			out = append(out, line)
+			continue
+		}
+		if inWindows {
+			if trimmed != "" && !strings.HasPrefix(trimmed, "sandbox =") {
+				windowsBody = append(windowsBody, line)
+			}
+			continue
+		}
+		out = append(out, line)
+	}
+	if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) != "" {
+		out = append(out, "")
+	}
+	if windowsSeen || value != "" {
+		out = append(out, "[windows]", sandboxLine)
+		out = append(out, windowsBody...)
 	}
 	return out
 }
@@ -262,6 +475,7 @@ func restoreCodexAccountConfig(homeDir, projectDir string) (string, error) {
 		return "", err
 	}
 	lines = removeCodexRelayConfig(lines)
+	lines = upsertWindowsSandbox(lines, "unelevated")
 	if err := removeCodexModelCache(homeDir); err != nil {
 		return "", err
 	}
@@ -395,34 +609,6 @@ func codexAccountBackupPath(homeDir string) string {
 
 func codexAuthBackupPath(homeDir string) string {
 	return filepath.Join(homeDir, ".codex", "vision-relay-auth.json")
-}
-
-func writeCodexAPIAuth(ctx clientConfigContext) error {
-	authPath := filepath.Join(ctx.HomeDir, ".codex", "auth.json")
-	if raw, err := os.ReadFile(authPath); err == nil {
-		if !codexAuthIsRelayAPI(raw, ctx.Key) {
-			if err := writeConfigFile(codexAuthBackupPath(ctx.HomeDir), raw); err != nil {
-				return err
-			}
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	auth := map[string]any{
-		"OPENAI_API_KEY": ctx.Key,
-		"tokens":         nil,
-		"last_refresh":   time.Now().UTC().Format(time.RFC3339Nano),
-	}
-	return writeJSONFile(authPath, auth)
-}
-
-func codexAuthIsRelayAPI(raw []byte, key string) bool {
-	var auth map[string]any
-	if err := json.Unmarshal(raw, &auth); err != nil {
-		return false
-	}
-	got, _ := auth["OPENAI_API_KEY"].(string)
-	return got != "" && got == key
 }
 
 func restoreCodexAuth(homeDir string) error {
@@ -567,20 +753,31 @@ func removeCodexRelayProjectConfig(lines []string) []string {
 			}
 			continue
 		}
+		if strings.HasPrefix(trimmed, "# Added by Vision Relay.") || strings.HasPrefix(trimmed, "# Restored by Vision Relay.") {
+			skipGeneratedBlock = true
+			continue
+		}
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			inRoot = false
 			section := strings.Trim(trimmed, "[]")
-			skipSection = section == "model_providers."+relayProviderID || strings.HasPrefix(section, "model_providers."+relayProviderID+".")
+			skipSection = isCodexRelayProviderSection(section)
 		}
 		if skipSection {
 			continue
 		}
 		if inRoot {
 			switch {
-			case strings.HasPrefix(trimmed, "# Added by Vision Relay."):
-				skipGeneratedBlock = true
+			case strings.HasPrefix(trimmed, "model ="):
 				continue
-			case strings.HasPrefix(trimmed, "model_catalog_json =") && isVisionRelayCatalogLine(trimmed):
+			case strings.HasPrefix(trimmed, "model_catalog_json ="):
+				continue
+			case strings.HasPrefix(trimmed, "model_provider ="):
+				continue
+			case strings.HasPrefix(trimmed, "disable_response_storage ="):
+				continue
+			case strings.HasPrefix(trimmed, "model_reasoning_effort ="):
+				continue
+			case strings.HasPrefix(trimmed, "web_search ="):
 				continue
 			case strings.HasPrefix(trimmed, "openai_base_url =") && isVisionRelayBaseURLLine(trimmed):
 				continue
@@ -621,7 +818,8 @@ func isVisionRelayCatalogLine(line string) bool {
 	} else {
 		value = strings.Trim(value, `"'`)
 	}
-	return filepath.Base(value) == "vision-relay-model-catalog.json"
+	base := filepath.Base(value)
+	return base == codexModelCatalogFilename() || base == "vision-relay-model-catalog.json"
 }
 
 func isVisionRelayBaseURLLine(line string) bool {
@@ -639,42 +837,9 @@ func isVisionRelayBaseURLLine(line string) bool {
 }
 
 func writeCodexModelCatalog(ctx clientConfigContext, dir string) (string, error) {
-	path := filepath.Join(dir, "vision-relay-model-catalog.json")
+	path := filepath.Join(dir, codexModelCatalogFilename())
 	catalog := map[string]any{
-		"models": []any{
-			map[string]any{
-				"slug":                             ctx.Model,
-				"display_name":                     ctx.Model,
-				"description":                      "Current Vision Relay upstream text model.",
-				"default_reasoning_level":          "high",
-				"supported_reasoning_levels":       codexReasoningLevels(),
-				"shell_type":                       "shell_command",
-				"visibility":                       "list",
-				"supported_in_api":                 true,
-				"priority":                         100,
-				"additional_speed_tiers":           []any{},
-				"service_tiers":                    []any{},
-				"availability_nux":                 nil,
-				"upgrade":                          nil,
-				"base_instructions":                "",
-				"supports_reasoning_summaries":     false,
-				"default_reasoning_summary":        "none",
-				"support_verbosity":                true,
-				"default_verbosity":                "low",
-				"apply_patch_tool_type":            "freeform",
-				"web_search_tool_type":             "text_and_image",
-				"truncation_policy":                map[string]any{"mode": "tokens", "limit": 10000},
-				"supports_parallel_tool_calls":     true,
-				"supports_image_detail_original":   true,
-				"context_window":                   128000,
-				"max_context_window":               128000,
-				"effective_context_window_percent": 95,
-				"experimental_supported_tools":     []any{},
-				"input_modalities":                 relayInputModalities(ctx.VisionEnabled),
-				"supports_search_tool":             true,
-				"use_responses_lite":               false,
-			},
-		},
+		"models": codexModelCatalogEntries(ctx, nil),
 	}
 	b, err := json.MarshalIndent(catalog, "", "  ")
 	if err != nil {
@@ -686,43 +851,8 @@ func writeCodexModelCatalog(ctx clientConfigContext, dir string) (string, error)
 	return path, nil
 }
 
-func upsertCodexModelCache(ctx clientConfigContext) error {
-	path := filepath.Join(ctx.HomeDir, ".codex", "models_cache.json")
-	cache := map[string]any{}
-	if raw, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(raw, &cache); err != nil {
-			return nil
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	models, _ := cache["models"].([]any)
-	entry := codexModelCacheEntry(ctx, firstCodexModelTemplate(models))
-	out := make([]any, 0, len(models)+1)
-	out = append(out, entry)
-	for _, item := range models {
-		model, ok := item.(map[string]any)
-		if !ok {
-			out = append(out, item)
-			continue
-		}
-		if modelString(model, "slug") == ctx.Model || isVisionRelayCacheModel(model) {
-			continue
-		}
-		out = append(out, item)
-	}
-	cache["models"] = out
-	if _, ok := cache["fetched_at"]; !ok {
-		cache["fetched_at"] = time.Now().UTC().Format(time.RFC3339Nano)
-	}
-	if _, ok := cache["client_version"]; !ok {
-		cache["client_version"] = "vision-relay"
-	}
-	b, err := json.MarshalIndent(cache, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeConfigFile(path, append(b, '\n'))
+func codexModelCatalogFilename() string {
+	return appSlug + "-model.json"
 }
 
 func removeCodexModelCache(homeDir string) error {
@@ -760,51 +890,70 @@ func removeCodexModelCache(homeDir string) error {
 	return writeConfigFile(path, append(b, '\n'))
 }
 
-func firstCodexModelTemplate(models []any) map[string]any {
-	for _, item := range models {
-		model, ok := item.(map[string]any)
-		if !ok || modelString(model, "slug") == "codex-auto-review" {
-			continue
-		}
-		return cloneStringAnyMap(model)
+func codexModelCatalogEntries(ctx clientConfigContext, template map[string]any) []map[string]any {
+	mappings := normalizeTextModelMappings(ctx.ModelMappings, nil, ctx.Model)
+	entries := make([]map[string]any, 0, len(mappings))
+	for i, mapping := range mappings {
+		entries = append(entries, codexModelCatalogEntry(ctx, template, mapping, 1000+i))
 	}
-	return map[string]any{}
+	return entries
 }
 
-func codexModelCacheEntry(ctx clientConfigContext, template map[string]any) map[string]any {
+func codexModelCatalogEntry(ctx clientConfigContext, template map[string]any, mapping textModelMapping, priority int) map[string]any {
 	model := cloneStringAnyMap(template)
-	model["slug"] = ctx.Model
-	model["display_name"] = ctx.Model
-	model["description"] = "Current Vision Relay upstream text model."
+	for _, key := range []string{
+		"apply_patch_tool_type",
+		"web_search_tool_type",
+		"tools",
+		"model_messages",
+		"default_verbosity",
+		"use_responses_lite",
+	} {
+		delete(model, key)
+	}
+	slug := strings.TrimSpace(mapping.Name)
+	if slug == "" {
+		slug = strings.TrimSpace(mapping.Model)
+	}
+	description := "Current Vision Relay upstream text model."
+	if mapping.Model != "" && mapping.Model != slug {
+		description += " Routes to " + mapping.Model + "."
+	}
+	contextWindow := int(mapping.ContextWindow)
+	if contextWindow <= 0 {
+		contextWindow = 128000
+	}
+	model["slug"] = slug
+	model["display_name"] = codexAccountModelDisplayName(slug)
+	model["description"] = description
+	model["base_instructions"] = codexBaseInstructions
 	model["default_reasoning_level"] = "high"
 	model["supported_reasoning_levels"] = codexReasoningLevels()
 	model["visibility"] = "list"
 	model["supported_in_api"] = true
-	model["priority"] = 100
+	model["priority"] = priority
 	model["input_modalities"] = relayInputModalities(ctx.VisionEnabled)
-	model["context_window"] = 128000
-	model["max_context_window"] = 128000
+	model["context_window"] = contextWindow
+	model["max_context_window"] = contextWindow
 	model["effective_context_window_percent"] = 95
 	model["additional_speed_tiers"] = []any{}
 	model["service_tiers"] = []any{}
 	model["availability_nux"] = nil
 	model["upgrade"] = nil
-	model["supports_reasoning_summaries"] = false
+	model["supports_reasoning_summaries"] = true
 	model["default_reasoning_summary"] = "none"
-	model["support_verbosity"] = true
-	model["default_verbosity"] = "low"
-	model["apply_patch_tool_type"] = "freeform"
-	model["web_search_tool_type"] = "text_and_image"
-	model["truncation_policy"] = map[string]any{"mode": "tokens", "limit": 10000}
-	model["supports_parallel_tool_calls"] = true
-	model["supports_image_detail_original"] = true
-	model["supports_search_tool"] = true
-	model["use_responses_lite"] = false
+	model["support_verbosity"] = false
+	model["shell_type"] = "shell_command"
+	model["truncation_policy"] = map[string]any{"mode": "bytes", "limit": 10000}
+	model["supports_parallel_tool_calls"] = false
+	model["supports_image_detail_original"] = ctx.VisionEnabled
+	model["supports_search_tool"] = false
+	model["experimental_supported_tools"] = []any{}
 	return model
 }
 
 func isVisionRelayCacheModel(model map[string]any) bool {
-	return modelString(model, "description") == "Current Vision Relay upstream text model."
+	return strings.HasPrefix(modelString(model, "description"), "Current Vision Relay upstream text model.")
 }
 
 func modelString(model map[string]any, key string) string {
@@ -829,10 +978,8 @@ func cloneStringAnyMap(in map[string]any) map[string]any {
 
 func codexReasoningLevels() []any {
 	return []any{
-		map[string]any{"effort": "low", "description": "Low reasoning"},
-		map[string]any{"effort": "medium", "description": "Medium reasoning"},
-		map[string]any{"effort": "high", "description": "High reasoning"},
-		map[string]any{"effort": "xhigh", "description": "Extra high reasoning"},
+		map[string]any{"effort": "none", "description": "Disable reasoning"},
+		map[string]any{"effort": "high", "description": "Enable reasoning"},
 	}
 }
 
@@ -1015,7 +1162,10 @@ func clientProcessName(client string) string {
 func clientProcessNames(client string) []string {
 	switch client {
 	case clientCodex:
-		return []string{"Codex.exe", "codex.exe"}
+		// The desktop shell is ChatGPT.exe in current Windows packages. Do not
+		// target codex.exe: it is the in-app server, and killing it leaves the
+		// desktop shell alive on its "code-mode host closed" error page.
+		return []string{"ChatGPT.exe"}
 	case clientOpenCode:
 		return []string{"opencode.exe"}
 	case clientClaudeCode:
@@ -1040,10 +1190,18 @@ func startClient(client, workDir string, ctx clientConfigContext) (bool, string,
 	}
 	if runtime.GOOS == "windows" {
 		if client == clientCodex {
+			if appID := strings.TrimSpace(ctx.LaunchAppID); appID != "" {
+				cmd := exec.Command("explorer.exe", codexAppsFolderTarget(appID))
+				cmd.Dir = workDir
+				if err := cmd.Start(); err != nil {
+					return false, "ChatGPT", []string{err.Error()}
+				}
+				return true, "ChatGPT", nil
+			}
 			if desktopPath, ok := codexDesktopPath(command, ctx.LaunchPath); ok {
 				cmd := exec.Command(desktopPath)
 				cmd.Dir = workDir
-				cmd.Env = clientEnv(ctx)
+				cmd.Env = clientEnv(client, ctx)
 				if err := cmd.Start(); err != nil {
 					return false, filepath.Base(desktopPath), []string{err.Error()}
 				}
@@ -1052,7 +1210,7 @@ func startClient(client, workDir string, ctx clientConfigContext) (bool, string,
 		}
 		cmd := exec.Command("cmd", "/c", "start", "Vision Relay "+command, "cmd", "/k", command)
 		cmd.Dir = workDir
-		cmd.Env = clientEnv(ctx)
+		cmd.Env = clientEnv(client, ctx)
 		if err := cmd.Start(); err != nil {
 			return false, command, []string{err.Error()}
 		}
@@ -1060,11 +1218,15 @@ func startClient(client, workDir string, ctx clientConfigContext) (bool, string,
 	}
 	cmd := exec.Command(command)
 	cmd.Dir = workDir
-	cmd.Env = clientEnv(ctx)
+	cmd.Env = clientEnv(client, ctx)
 	if err := cmd.Start(); err != nil {
 		return false, command, []string{err.Error()}
 	}
 	return true, command, nil
+}
+
+func codexAppsFolderTarget(appID string) string {
+	return `shell:AppsFolder\` + strings.TrimSpace(appID)
 }
 
 func codexDesktopPath(command, preferred string) (string, bool) {
@@ -1074,9 +1236,12 @@ func codexDesktopPath(command, preferred string) (string, bool) {
 		}
 	}
 	if path, err := exec.LookPath(command); err == nil {
-		candidate := filepath.Join(filepath.Dir(filepath.Dir(path)), "Codex.exe")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, true
+		appDir := filepath.Dir(filepath.Dir(path))
+		for _, name := range []string{"ChatGPT.exe", "Codex.exe"} {
+			candidate := filepath.Join(appDir, name)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, true
+			}
 		}
 	}
 	if path := currentCodexDesktopPath(); path != "" {
@@ -1089,7 +1254,20 @@ func currentCodexDesktopPath() string {
 	if runtime.GOOS != "windows" {
 		return ""
 	}
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", "(Get-Process -Name Codex -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\\Codex.exe' } | Select-Object -First 1 -ExpandProperty Path)").Output()
+	command := "(Get-Process -Name ChatGPT,Codex -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\\ChatGPT.exe' -or $_.Path -like '*\\Codex.exe' } | Select-Object -First 1 -ExpandProperty Path)"
+	out, err := exec.Command("powershell", "-NoProfile", "-Command", command).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func currentCodexAppID() string {
+	if runtime.GOOS != "windows" {
+		return ""
+	}
+	command := "(Get-StartApps | Where-Object { $_.AppID -like 'OpenAI.Codex_*!App' } | Select-Object -First 1 -ExpandProperty AppID)"
+	out, err := exec.Command("powershell", "-NoProfile", "-Command", command).Output()
 	if err != nil {
 		return ""
 	}
@@ -1109,9 +1287,12 @@ func clientCommand(client string) string {
 	}
 }
 
-func clientEnv(ctx clientConfigContext) []string {
+func clientEnv(client string, ctx clientConfigContext) []string {
 	env := os.Environ()
 	env = append(env, relayEnvKey+"="+ctx.Key)
+	if client == clientCodex {
+		return env
+	}
 	env = append(env, "OPENAI_API_KEY="+ctx.Key)
 	env = append(env, "ANTHROPIC_BASE_URL="+strings.TrimRight(ctx.Origin, "/"))
 	env = append(env, "ANTHROPIC_AUTH_TOKEN="+ctx.Key)

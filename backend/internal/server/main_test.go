@@ -12,6 +12,27 @@ import (
 	"time"
 )
 
+func TestEffectiveTextModelMapsCodexAccountAliases(t *testing.T) {
+	cfg := config{
+		TextModelMappings: []textModelMapping{
+			{Name: "GLM 5.2", Model: "z-ai/glm-5.2"},
+			{Name: "DeepSeek V4", Model: "deepseek-ai/deepseek-v4-pro"},
+			{Name: "Mini", Model: "moonshotai/kimi-k2"},
+		},
+	}
+	tests := map[string]string{
+		"gpt-5.5":      "z-ai/glm-5.2",
+		"5.5":          "z-ai/glm-5.2",
+		"gpt-5.4":      "deepseek-ai/deepseek-v4-pro",
+		"GPT-5.4-Mini": "moonshotai/kimi-k2",
+	}
+	for requested, want := range tests {
+		if got := effectiveTextModel(cfg, requested); got != want {
+			t.Fatalf("effectiveTextModel(%q) = %q, want %q", requested, got, want)
+		}
+	}
+}
+
 func TestAugmentOpenAIResponsesConvertsImagesToText(t *testing.T) {
 	visionServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
@@ -1272,6 +1293,31 @@ func TestRouteAppendsConversationLog(t *testing.T) {
 	rawLog, _ := json.Marshal(log)
 	if strings.Contains(string(rawLog), "cache_write_tokens") {
 		t.Fatalf("cache write tokens should not be exposed: %s", rawLog)
+	}
+}
+
+func TestAuthorizedAcceptsCodexAccountBearer(t *testing.T) {
+	a := &app{
+		cfg: config{
+			ClientAPIKeyEntries: []clientAPIKeyEntry{
+				{Name: "Local Client", Key: "sk-local-client"},
+			},
+		},
+	}
+	accountReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	accountReq.Header.Set("Authorization", "Bearer account-token")
+	if !a.authorized(accountReq) {
+		t.Fatal("codex account bearer should be accepted")
+	}
+	wrongAPIReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	wrongAPIReq.Header.Set("Authorization", "Bearer sk-wrong")
+	if a.authorized(wrongAPIReq) {
+		t.Fatal("wrong sk client key should not be accepted")
+	}
+	localReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	localReq.Header.Set("Authorization", "Bearer sk-local-client")
+	if !a.authorized(localReq) {
+		t.Fatal("configured local client key should be accepted")
 	}
 }
 

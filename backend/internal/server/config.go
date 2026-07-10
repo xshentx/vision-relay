@@ -19,6 +19,8 @@ const (
 	defaultVisionPrompt = "你只是图片识别器，不是最终回答模型。只提取图片事实，禁止回答用户需求、禁止写代码、禁止给方案、禁止推理下一步。按图片复杂度输出必要细节，用简洁中文列出：1. 可见文字；2. 主要对象/页面结构；3. 颜色和布局；4. 与用户需求直接相关的细节。"
 )
 
+var codexAccountModelAliases = []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
+
 func defaultConfig() config {
 	cfg := config{
 		Addr:                envAny(defaultAddr, "VISION_RELAY_ADDR", "CODEX_PROXY_ADDR"),
@@ -726,7 +728,50 @@ func effectiveTextModel(cfg config, requested string) string {
 			return mapping.Model
 		}
 	}
+	if model, ok := codexAccountAliasTextModel(mappings, requested); ok {
+		return model
+	}
 	return mappings[0].Model
+}
+
+func codexAccountAliasTextModel(mappings []textModelMapping, requested string) (string, bool) {
+	index, ok := codexAccountModelAliasIndex(requested)
+	if !ok || index >= len(mappings) {
+		return "", false
+	}
+	model := strings.TrimSpace(mappings[index].Model)
+	return model, model != ""
+}
+
+func codexAccountModelAlias(index int) string {
+	if index < 0 || index >= len(codexAccountModelAliases) {
+		return ""
+	}
+	return codexAccountModelAliases[index]
+}
+
+func codexAccountModelAliasIndex(requested string) (int, bool) {
+	value := strings.ToLower(strings.TrimSpace(requested))
+	value = strings.TrimPrefix(value, "openai/")
+	for index, alias := range codexAccountModelAliases {
+		if value == alias || value == strings.TrimPrefix(alias, "gpt-") {
+			return index, true
+		}
+	}
+	return 0, false
+}
+
+func codexAccountModelDisplayName(alias string) string {
+	switch strings.ToLower(strings.TrimSpace(alias)) {
+	case "gpt-5.5":
+		return "GPT-5.5"
+	case "gpt-5.4":
+		return "GPT-5.4"
+	case "gpt-5.4-mini":
+		return "GPT-5.4-Mini"
+	default:
+		return alias
+	}
 }
 
 func normalizeWireAPI(value string) string {
