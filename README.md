@@ -18,6 +18,12 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 ## 版本更新
 
+### v1.1.1
+
+- 新增 `tools/build-windows.ps1` 构建脚本，统一生成 Windows GUI 子系统的 `vision-relay.exe`。
+- 修复双击启动时出现终端窗口的问题。
+- README 编译和发布步骤改为使用一键构建脚本。
+
 ### v1.1.0
 
 - 新增 Codex 一键配置入口，会自动写入用户级和项目级 `.codex/config.toml`。
@@ -94,8 +100,7 @@ http://127.0.0.1:8787
 在项目根目录执行：
 
 ```powershell
-go test ./...
-go build -ldflags="-s -w -H windowsgui" -o vision-relay.exe ./backend/cmd/vision-relay
+.\tools\build-windows.ps1
 ```
 
 说明：
@@ -115,8 +120,7 @@ go build -ldflags="-s -w" -o vision-relay.exe ./backend/cmd/vision-relay
 本项目发布为单文件 Windows 可执行程序：
 
 ```powershell
-go test ./...
-go build -ldflags="-s -w -H windowsgui" -o vision-relay.exe ./backend/cmd/vision-relay
+.\tools\build-windows.ps1
 ```
 
 生成的文件：
@@ -128,14 +132,14 @@ vision-relay.exe
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.1.1
+git push origin v1.1.1
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v1.1.0
+Vision Relay v1.1.1
 ```
 
 附件上传：
