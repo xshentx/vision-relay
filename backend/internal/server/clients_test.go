@@ -695,6 +695,65 @@ func TestWriteCodexConfigWritesMultipleHotSwitchModels(t *testing.T) {
 	}
 }
 
+func TestCodexConfigDirHonorsCODEXHome(t *testing.T) {
+	home := t.TempDir()
+	customDir := filepath.Join(t.TempDir(), "custom-codex")
+	t.Setenv("CODEX_HOME", customDir)
+
+	if got := codexConfigDir(home); got != customDir {
+		t.Fatalf("wrong Codex config directory: got %q want %q", got, customDir)
+	}
+}
+
+func TestWriteCodexConfigUsesCODEXHomeWithoutProjectConfig(t *testing.T) {
+	home := t.TempDir()
+	customDir := filepath.Join(t.TempDir(), "custom-codex")
+	workingDir := t.TempDir()
+	t.Setenv("CODEX_HOME", customDir)
+	t.Chdir(workingDir)
+
+	ctx := clientConfigContext{
+		HomeDir: home,
+		Origin:  "http://127.0.0.1:8787",
+		Key:     "sk-local",
+		Model:   "gpt-5.5",
+	}
+	path, err := writeCodexConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPath := filepath.Join(customDir, "config.toml")
+	if path != wantPath {
+		t.Fatalf("wrong config path: got %q want %q", path, wantPath)
+	}
+	if _, err := os.Stat(filepath.Join(customDir, "vision-relay-model.json")); err != nil {
+		t.Fatalf("custom Codex model catalog was not written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(workingDir, ".codex")); !os.IsNotExist(err) {
+		t.Fatalf("working directory should not receive implicit Codex config, stat err: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex")); !os.IsNotExist(err) {
+		t.Fatalf("default Codex directory should not be used when CODEX_HOME is set, stat err: %v", err)
+	}
+}
+
+func TestCodexProjectDirRequiresExplicitWorkDir(t *testing.T) {
+	home := t.TempDir()
+	if got := clientProjectDir(clientCodex, "", home); got != "" {
+		t.Fatalf("Codex should not infer a project directory: %q", got)
+	}
+	projectDir := filepath.Join(home, "project")
+	if got := clientProjectDir(clientCodex, projectDir, home); got != projectDir {
+		t.Fatalf("wrong explicit Codex project directory: got %q want %q", got, projectDir)
+	}
+}
+
+func TestCodexLauncherAcceptsAppsFolderIDWithoutDesktopPath(t *testing.T) {
+	ctx := clientConfigContext{LaunchAppID: "OpenAI.Codex_2p2nqsd0c76g0!App"}
+	if !codexLauncherAvailable(ctx) {
+		t.Fatal("Windows AppsFolder ID should be sufficient to launch Codex")
+	}
+}
 func TestCodexDesktopPathUsesWindowsAppLayout(t *testing.T) {
 	home := t.TempDir()
 	appDir := filepath.Join(home, "OpenAI.Codex", "app")

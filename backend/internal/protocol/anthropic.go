@@ -1,4 +1,4 @@
-package server
+package protocol
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func anthropicPayloadToChatCompletions(payload map[string]any) map[string]any {
+func AnthropicPayloadToChatCompletions(payload map[string]any) map[string]any {
 	chat := map[string]any{}
 	copyIfPresent(chat, payload, "model")
 	copyIfPresent(chat, payload, "temperature")
@@ -28,7 +28,7 @@ func anthropicPayloadToChatCompletions(payload map[string]any) map[string]any {
 		chat["tool_choice"] = anthropicToolChoiceToChat(choice)
 	}
 	messages := make([]any, 0)
-	if system := anthropicSystemText(payload["system"]); system != "" {
+	if system := AnthropicSystemText(payload["system"]); system != "" {
 		messages = append(messages, map[string]any{"role": "system", "content": system})
 	}
 	rawMessages, _ := payload["messages"].([]any)
@@ -173,7 +173,7 @@ func anthropicToolChoiceToChat(value any) any {
 	}
 }
 
-func anthropicSystemText(value any) string {
+func AnthropicSystemText(value any) string {
 	switch v := value.(type) {
 	case string:
 		return v
@@ -184,7 +184,7 @@ func anthropicSystemText(value any) string {
 	}
 }
 
-func writeAnthropicFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
+func WriteAnthropicFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -208,7 +208,7 @@ func writeAnthropicFromChatCompletion(w http.ResponseWriter, resp *http.Response
 	writeJSON(w, http.StatusOK, chatCompletionToAnthropic(chat))
 }
 
-func writeAnthropicStreamFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
+func WriteAnthropicStreamFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

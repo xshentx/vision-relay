@@ -12,11 +12,18 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 - 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Gemini、Ollama 等常见接口形态
 - 支持本地客户端 API Key，用于限制外部客户端访问
 - 支持为 Codex、OpenCode、Claude Code 等客户端生成接入配置
-- 支持一键配置 Codex，并可恢复 Codex 账号模型配置
+- 支持一键配置 Codex、OpenCode、Claude Code
 - 内置请求日志、Token 统计、首 token 耗时、缓存命中等记录
 - 支持网络代理 URL，适配本地代理或 fake-ip 网络环境
 
 ## 版本更新
+
+### v1.1.2
+
+- 重构前端静态资源目录，改为 `frontend/public` 分层管理并继续由 Go embed 打包。
+- 将 OpenAI Responses 与 Anthropic 协议转换逻辑拆分到 `backend/internal/protocol`，便于维护和测试。
+- 优化 Codex 配置写入：支持 `CODEX_HOME`，默认不再把当前启动目录当作项目目录写入。
+- 新增 `.gitignore` 忽略本地 `.codex/`、exe 备份文件，避免临时文件误提交。
 
 ### v1.1.1
 
@@ -26,10 +33,9 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 ### v1.1.0
 
-- 新增 Codex 一键配置入口，会自动写入用户级和项目级 `.codex/config.toml`。
+- 新增 Codex 一键配置入口，默认写入用户级配置；API 明确传入 `work_dir` 时才写入项目级配置。
 - Codex 改用 `model_providers.custom` 和 `vision-relay-model.json` 专用模型目录，避免继续改写账号模型缓存。
 - 支持把文本模型映射同步成 Codex 可见模型列表，并保留上下文窗口配置。
-- 新增 Codex 账号模型恢复入口，可移除 Vision Relay 注入配置并恢复备份。
 - 一键配置时支持停止并重新启动 Codex，优先使用已安装的 Codex/ChatGPT 桌面入口。
 - 增强旧版 Vision Relay、cc-switch 和重复 `[windows]` 配置的清理与接管逻辑。
 
@@ -132,14 +138,14 @@ vision-relay.exe
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v1.1.1
-git push origin v1.1.1
+git tag v1.1.2
+git push origin v1.1.2
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v1.1.1
+Vision Relay v1.1.2
 ```
 
 附件上传：
@@ -203,16 +209,18 @@ API Key:  local-key-1
 Endpoint: /v1/responses
 ```
 
-Codex 桌面客户端推荐在“客户端接入”页面点击“一键配置 Codex”。Vision Relay 会写入：
+Codex 桌面客户端推荐在“客户端接入”页面点击“一键配置 Codex”。Vision Relay 默认只写入用户级配置：
 
 ```text
-%USERPROFILE%\.codex\config.toml
-%USERPROFILE%\.codex\vision-relay-model.json
-当前项目\.codex\config.toml
-当前项目\.codex\vision-relay-model.json
+%CODEX_HOME%\config.toml
+%CODEX_HOME%\vision-relay-model.json
 ```
 
-配置会使用 `model_providers.custom`、Responses wire API 和本机 `/v1` 地址。需要撤回时，点击“恢复账号模型”会移除 Vision Relay 注入的 Codex 配置，并尝试恢复备份。
+如果没有设置 `CODEX_HOME`，则使用 `%USERPROFILE%\.codex`。只有调用客户端配置 API 时明确传入 `work_dir`，才会额外写入该项目的 `.codex\config.toml` 和 `.codex\vision-relay-model.json`，避免把 Vision Relay 自身的启动目录误当成项目目录。
+
+配置会使用 `model_providers.custom`、Responses wire API 和本机 `/v1` 地址。Windows 启动 Codex 时会动态使用运行中的桌面程序路径、Windows AppsFolder 应用 ID 或 `PATH` 中的 Codex CLI 推导结果，不依赖固定用户名、版本号或安装目录。
+
+同一页面也提供“一键配置 OpenCode”和“一键配置 Claude Code”：OpenCode 配置写入 `%USERPROFILE%\.config\opencode\opencode.json`，Claude Code 配置写入 `%USERPROFILE%\.claude\settings.json`。现有配置中的其他字段会保留。
 
 Anthropic / Claude Code 客户端：
 
@@ -242,12 +250,17 @@ Endpoint: /api/chat 或 /api/generate
 ## 项目结构
 
 ```text
-backend/cmd/vision-relay/      程序入口和 Windows exe 资源
-backend/internal/server/       HTTP 服务、中转逻辑、配置、日志、托盘和 WebView
-backend/internal/server/assets 图标资源
-frontend/                      桌面客户端前端页面
-tools/                         辅助工具
-go.mod                         Go 模块依赖
+backend/cmd/vision-relay/              程序入口和 Windows exe 资源
+backend/internal/protocol/             OpenAI Responses 与 Anthropic 协议转换
+backend/internal/server/               HTTP 服务、中转、配置、日志、托盘和 WebView
+backend/internal/server/assets/        桌面程序图标资源
+frontend/assets.go                     前端静态资源嵌入入口
+frontend/public/index.html             桌面客户端页面结构
+frontend/public/assets/css/            页面样式
+frontend/public/assets/js/             页面交互逻辑
+frontend/public/assets/images/         页面图标资源
+tools/                                 构建和辅助工具
+go.mod                                 Go 模块依赖
 ```
 
 ## 常见问题

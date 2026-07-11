@@ -3,10 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"mime"
 	"net/http"
 	"path/filepath"
 	"strings"
+
+	"vision-relay/backend/internal/protocol"
 
 	"vision-relay/frontend"
 )
@@ -16,7 +19,7 @@ func (a *app) handleWeb(w http.ResponseWriter, r *http.Request) {
 	if path == "/" {
 		path = "/index.html"
 	}
-	data, err := frontend.FS.ReadFile(strings.TrimPrefix(path, "/"))
+	data, err := fs.ReadFile(frontend.FS, strings.TrimPrefix(path, "/"))
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -167,7 +170,7 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 		payload["model"] = model
 	}
 	if normalizeProvider(cfg.TextProvider) == "openai" && normalizeWireAPI(cfg.TextWireAPI) != "responses" {
-		chatPayload := responsesPayloadToChatCompletions(payload)
+		chatPayload := protocol.ResponsesPayloadToChatCompletions(payload)
 		ensureStreamUsage(chatPayload)
 		sanitizeOpenAIChatPayload(chatPayload)
 		out, _ := json.Marshal(chatPayload)
@@ -177,10 +180,10 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if stream, _ := payload["stream"].(bool); stream {
-			writeStreamingResponsesFromChatCompletion(w, resp)
+			protocol.WriteStreamingResponsesFromChatCompletion(w, resp)
 			return
 		}
-		writeResponsesFromChatCompletion(w, resp)
+		protocol.WriteResponsesFromChatCompletion(w, resp)
 		return
 	}
 	out := body
@@ -345,7 +348,7 @@ func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		payload["model"] = model
 	}
 	if normalizeProvider(cfg.TextProvider) == "openai" {
-		chatPayload := anthropicPayloadToChatCompletions(payload)
+		chatPayload := protocol.AnthropicPayloadToChatCompletions(payload)
 		if model != "" {
 			chatPayload["model"] = model
 		}
@@ -361,10 +364,10 @@ func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if stream {
-			writeAnthropicStreamFromChatCompletion(w, resp)
+			protocol.WriteAnthropicStreamFromChatCompletion(w, resp)
 			return
 		}
-		writeAnthropicFromChatCompletion(w, resp)
+		protocol.WriteAnthropicFromChatCompletion(w, resp)
 		return
 	}
 	out := body
@@ -404,7 +407,7 @@ func (a *app) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	text := anthropicSystemText(payload["system"]) + "\n" + contentToText(payload["messages"])
+	text := protocol.AnthropicSystemText(payload["system"]) + "\n" + contentToText(payload["messages"])
 	writeJSON(w, http.StatusOK, map[string]any{
 		"input_tokens": estimateTokens(text),
 	})

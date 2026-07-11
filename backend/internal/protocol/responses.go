@@ -1,4 +1,4 @@
-package server
+package protocol
 
 import (
 	"bufio"
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func responsesPayloadToChatCompletions(payload map[string]any) map[string]any {
+func ResponsesPayloadToChatCompletions(payload map[string]any) map[string]any {
 	chat := map[string]any{}
 	copyIfPresent(chat, payload, "model")
 	copyIfPresent(chat, payload, "temperature")
@@ -170,8 +170,7 @@ func responsesInputToMessages(input any) []any {
 }
 
 func responsesContentToText(content any) string {
-	pm := parseOpenAIContent(content)
-	return strings.TrimSpace(pm.Text)
+	return strings.TrimSpace(contentToText(content))
 }
 
 func responsesContentToChatContent(content any) any {
@@ -225,15 +224,14 @@ func openAIChatImagePart(part map[string]any) (map[string]any, bool) {
 }
 
 func openAIChatFileImagePart(part map[string]any) (map[string]any, bool) {
-	pm := parsedMessage{}
-	appendImageFilePart(part, &pm)
-	if len(pm.Images) == 0 {
+	url := imageFileURL(part)
+	if url == "" {
 		return nil, false
 	}
-	return map[string]any{"type": "image_url", "image_url": map[string]any{"url": pm.Images[0].URL}}, true
+	return map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}}, true
 }
 
-func writeResponsesFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
+func WriteResponsesFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -254,10 +252,10 @@ func writeResponsesFromChatCompletion(w http.ResponseWriter, resp *http.Response
 		writeError(w, http.StatusBadGateway, fmt.Errorf("invalid upstream chat completions response: %w", err))
 		return
 	}
-	writeJSON(w, http.StatusOK, chatCompletionToResponses(chat))
+	writeJSON(w, http.StatusOK, ChatCompletionToResponses(chat))
 }
 
-func writeStreamingResponsesFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
+func WriteStreamingResponsesFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
 	defer resp.Body.Close()
 	copyHeader(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -276,7 +274,7 @@ func writeStreamingResponsesFromChatCompletion(w http.ResponseWriter, resp *http
 	var usage any
 	started := false
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLogBodySize)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxStreamEventSize)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "data:") {
@@ -421,7 +419,7 @@ func writeStreamingResponsesFromChatCompletion(w http.ResponseWriter, resp *http
 	}
 }
 
-func chatCompletionToResponses(chat map[string]any) map[string]any {
+func ChatCompletionToResponses(chat map[string]any) map[string]any {
 	id := firstString(chat["id"], "resp_"+strconv.FormatInt(time.Now().UnixNano(), 36))
 	model := firstString(chat["model"])
 	created := numberAsInt64(chat["created"])

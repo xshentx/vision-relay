@@ -1,6 +1,19 @@
 package frontend
 
-import "embed"
+import (
+	"embed"
+	"io/fs"
+)
 
-//go:embed index.html style.css app.js favicon.ico
-var FS embed.FS
+//go:embed public
+var embeddedFS embed.FS
+
+var FS = mustSub(embeddedFS, "public")
+
+func mustSub(source fs.FS, directory string) fs.FS {
+	sub, err := fs.Sub(source, directory)
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}

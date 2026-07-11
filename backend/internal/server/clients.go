@@ -87,7 +87,7 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.currentConfig()
-	projectDir := clientWorkDir(req.WorkDir, home)
+	projectDir := clientProjectDir(client, req.WorkDir, home)
 	ctx := clientConfigContext{
 		HomeDir:       home,
 		ProjectDir:    projectDir,
@@ -167,7 +167,7 @@ func (a *app) handleClientRestore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	projectDir := clientWorkDir(req.WorkDir, home)
+	projectDir := clientProjectDir(client, req.WorkDir, home)
 	path, err := restoreCodexAccountConfig(home, projectDir)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -231,6 +231,31 @@ func clientWorkDir(workDir, fallback string) string {
 	return workDir
 }
 
+func clientProjectDir(client, workDir, fallback string) string {
+	if client == clientCodex && strings.TrimSpace(workDir) == "" {
+		return ""
+	}
+	return clientWorkDir(workDir, fallback)
+}
+
+func codexConfigDir(homeDir string) string {
+	dir := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+	if dir == "" {
+		return filepath.Join(homeDir, ".codex")
+	}
+	dir = os.ExpandEnv(dir)
+	if dir == "~" {
+		return homeDir
+	}
+	if strings.HasPrefix(dir, "~/") || strings.HasPrefix(dir, `~\`) {
+		dir = filepath.Join(homeDir, dir[2:])
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return filepath.Clean(dir)
+}
+
 func writeClientConfig(client string, ctx clientConfigContext) (string, error) {
 	switch client {
 	case clientCodex:
@@ -245,12 +270,13 @@ func writeClientConfig(client string, ctx clientConfigContext) (string, error) {
 }
 
 func writeCodexConfig(ctx clientConfigContext) (string, error) {
-	userPath := filepath.Join(ctx.HomeDir, ".codex", "config.toml")
+	configDir := codexConfigDir(ctx.HomeDir)
+	userPath := filepath.Join(configDir, "config.toml")
 	if err := saveCodexAccountConfigBackup(ctx.HomeDir, userPath); err != nil {
 		return "", err
 	}
 	model := codexConfigModel(ctx)
-	_, err := writeCodexModelCatalog(ctx, filepath.Join(ctx.HomeDir, ".codex"))
+	_, err := writeCodexModelCatalog(ctx, configDir)
 	if err != nil {
 		return "", err
 	}
@@ -292,13 +318,16 @@ func writeCodexConfig(ctx clientConfigContext) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return projectPath, nil
+	if projectPath != "" {
+		return projectPath, nil
+	}
+	return userPath, nil
 }
 
 func writeCodexProjectConfig(ctx clientConfigContext) (string, error) {
 	projectDir := strings.TrimSpace(ctx.ProjectDir)
 	if projectDir == "" {
-		projectDir = ctx.HomeDir
+		return "", nil
 	}
 	model := codexConfigModel(ctx)
 	_, err := writeCodexModelCatalog(ctx, filepath.Join(projectDir, ".codex"))
@@ -467,7 +496,7 @@ func saveCodexAccountConfigBackup(homeDir, userPath string) error {
 }
 
 func restoreCodexAccountConfig(homeDir, projectDir string) (string, error) {
-	userPath := filepath.Join(homeDir, ".codex", "config.toml")
+	userPath := filepath.Join(codexConfigDir(homeDir), "config.toml")
 	lines := []string{}
 	if raw, err := os.ReadFile(userPath); err == nil {
 		lines = strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
@@ -528,8 +557,8 @@ func codexAccountRestoreBlock(homeDir string) ([]string, error) {
 		return block, nil
 	}
 	candidates := []string{
-		filepath.Join(homeDir, ".codex", "账号", "config.toml"),
-		filepath.Join(homeDir, ".codex", "config", "config.toml"),
+		filepath.Join(codexConfigDir(homeDir), "账号", "config.toml"),
+		filepath.Join(codexConfigDir(homeDir), "config", "config.toml"),
 		codexAccountBackupPath(homeDir),
 	}
 	for _, path := range candidates {
@@ -549,7 +578,7 @@ func codexAccountRestoreBlock(homeDir string) ([]string, error) {
 }
 
 func codexOpenAIAccountBlockFromCache(homeDir string) ([]string, error) {
-	path := filepath.Join(homeDir, ".codex", "models_cache.json")
+	path := filepath.Join(codexConfigDir(homeDir), "models_cache.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -604,11 +633,11 @@ func jsonTreeContainsString(value any, needle string) bool {
 }
 
 func codexAccountBackupPath(homeDir string) string {
-	return filepath.Join(homeDir, ".codex", "vision-relay-account-config.toml")
+	return filepath.Join(codexConfigDir(homeDir), "vision-relay-account-config.toml")
 }
 
 func codexAuthBackupPath(homeDir string) string {
-	return filepath.Join(homeDir, ".codex", "vision-relay-auth.json")
+	return filepath.Join(codexConfigDir(homeDir), "vision-relay-auth.json")
 }
 
 func restoreCodexAuth(homeDir string) error {
@@ -620,7 +649,7 @@ func restoreCodexAuth(homeDir string) error {
 		}
 		return err
 	}
-	return writeConfigFile(filepath.Join(homeDir, ".codex", "auth.json"), raw)
+	return writeConfigFile(filepath.Join(codexConfigDir(homeDir), "auth.json"), raw)
 }
 
 func codexAccountBlockFromLines(lines []string) []string {
@@ -856,7 +885,7 @@ func codexModelCatalogFilename() string {
 }
 
 func removeCodexModelCache(homeDir string) error {
-	path := filepath.Join(homeDir, ".codex", "models_cache.json")
+	path := filepath.Join(codexConfigDir(homeDir), "models_cache.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1181,12 +1210,12 @@ func startClient(client, workDir string, ctx clientConfigContext) (bool, string,
 		return false, "", []string{"Unsupported client."}
 	}
 	if _, err := exec.LookPath(command); err != nil {
-		if client != clientCodex || strings.TrimSpace(ctx.LaunchPath) == "" {
+		if client != clientCodex || !codexLauncherAvailable(ctx) {
 			return false, command, []string{command + " was not found in PATH. Config was written, but the client was not started."}
 		}
 	}
 	if strings.TrimSpace(workDir) == "" {
-		workDir = clientWorkDir(ctx.ProjectDir, ctx.HomeDir)
+		workDir = ctx.HomeDir
 	}
 	if runtime.GOOS == "windows" {
 		if client == clientCodex {
@@ -1223,6 +1252,10 @@ func startClient(client, workDir string, ctx clientConfigContext) (bool, string,
 		return false, command, []string{err.Error()}
 	}
 	return true, command, nil
+}
+
+func codexLauncherAvailable(ctx clientConfigContext) bool {
+	return strings.TrimSpace(ctx.LaunchPath) != "" || strings.TrimSpace(ctx.LaunchAppID) != ""
 }
 
 func codexAppsFolderTarget(appID string) string {

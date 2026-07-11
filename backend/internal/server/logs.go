@@ -334,7 +334,7 @@ func requestTextFromPayload(protocol string, payload map[string]any) string {
 	case "Chat Completions":
 		return trimText(contentToText(payload["messages"]))
 	case "Responses":
-		return trimText(responsesContentToText(payload["input"]))
+		return trimText(contentToText(payload["input"]))
 	case "Anthropic Messages":
 		return trimText(contentToText(payload["messages"]))
 	case "Gemini":

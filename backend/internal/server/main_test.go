@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
 	"time"
+	"vision-relay/backend/internal/protocol"
 )
 
 func TestEffectiveTextModelMapsCodexAccountAliases(t *testing.T) {
@@ -494,7 +496,7 @@ func TestResponsesPayloadToChatCompletions(t *testing.T) {
 		},
 		"max_output_tokens": float64(128),
 	}
-	chat := responsesPayloadToChatCompletions(payload)
+	chat := protocol.ResponsesPayloadToChatCompletions(payload)
 	messages := chat["messages"].([]any)
 	if len(messages) != 2 {
 		t.Fatalf("expected system and user messages, got %d", len(messages))
@@ -529,7 +531,7 @@ func TestResponsesPayloadToChatCompletionsMapsCodexToolHistory(t *testing.T) {
 			map[string]any{"type": "function", "function": map[string]any{"name": "shell"}},
 		},
 	}
-	chat := responsesPayloadToChatCompletions(payload)
+	chat := protocol.ResponsesPayloadToChatCompletions(payload)
 	if chat["stream"] != true {
 		t.Fatalf("stream flag was not copied: %#v", chat)
 	}
@@ -572,7 +574,7 @@ func TestResponsesPayloadToChatCompletionsConvertsResponsesTools(t *testing.T) {
 		},
 		"parallel_tool_calls": true,
 	}
-	chat := responsesPayloadToChatCompletions(payload)
+	chat := protocol.ResponsesPayloadToChatCompletions(payload)
 	tools := chat["tools"].([]any)
 	if len(tools) != 1 {
 		t.Fatalf("unexpected tools: %#v", tools)
@@ -604,7 +606,7 @@ func TestResponsesPayloadToChatCompletionsPreservesImages(t *testing.T) {
 			},
 		},
 	}
-	chat := responsesPayloadToChatCompletions(payload)
+	chat := protocol.ResponsesPayloadToChatCompletions(payload)
 	messages := chat["messages"].([]any)
 	content := messages[0].(map[string]any)["content"].([]any)
 	if len(content) != 2 {
@@ -838,7 +840,7 @@ func TestChatCompletionToResponses(t *testing.T) {
 			},
 		},
 	}
-	resp := chatCompletionToResponses(chat)
+	resp := protocol.ChatCompletionToResponses(chat)
 	if resp["object"] != "response" || resp["output_text"] != "ok" {
 		t.Fatalf("bad response wrapper: %#v", resp)
 	}

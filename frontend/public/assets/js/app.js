@@ -21,10 +21,12 @@ const generateKey = document.querySelector("#generateKey");
 const clientKeyName = document.querySelector("#clientKeyName");
 const clientKeyList = document.querySelector("#clientKeyList");
 const opencodeConfig = document.querySelector("#opencodeConfig");
+const configureOpenCode = document.querySelector("#configureOpenCode");
 const codexConfig = document.querySelector("#codexConfig");
 const configureCodex = document.querySelector("#configureCodex");
-const restoreCodex = document.querySelector("#restoreCodex");
+
 const claudeCodeConfig = document.querySelector("#claudeCodeConfig");
+const configureClaudeCode = document.querySelector("#configureClaudeCode");
 const textProfileList = document.querySelector("#textProfileList");
 const addTextProfile = document.querySelector("#addTextProfile");
 const visionProfileList = document.querySelector("#visionProfileList");
@@ -404,36 +406,35 @@ generateKey.addEventListener("click", async () => {
   }
 });
 
-configureCodex?.addEventListener("click", () => {
-  configureCodexClient("configure").catch((err) => {
-    console.error(err);
-    showToast(`配置 Codex 失败：${err.message || err}`, "error");
+const clientConfigureActions = [
+  {button: configureOpenCode, client: "opencode", name: "OpenCode"},
+  {button: configureCodex, client: "codex", name: "Codex"},
+  {button: configureClaudeCode, client: "claude-code", name: "Claude Code"}
+];
+
+clientConfigureActions.forEach(({button, client, name}) => {
+  button?.addEventListener("click", () => {
+    configureClient({button, client, name}).catch((err) => {
+      console.error(err);
+      showToast(`配置 ${name} 失败：${err.message || err}`, "error");
+    });
   });
 });
 
-restoreCodex?.addEventListener("click", () => {
-  configureCodexClient("restore").catch((err) => {
-    console.error(err);
-    showToast(`恢复 Codex 失败：${err.message || err}`, "error");
-  });
-});
-
-async function configureCodexClient(action) {
-  const button = action === "restore" ? restoreCodex : configureCodex;
+async function configureClient({button, client, name}) {
   if (button) button.disabled = true;
   try {
-    const endpoint = action === "restore" ? "/api/client/restore" : "/api/client/configure";
-    const res = await fetch(endpoint, {
+    const res = await fetch("/api/client/configure", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({client: "codex"})
+      body: JSON.stringify({client})
     });
     if (!res.ok) throw new Error(await readErrorMessage(res));
     const payload = await res.json();
     const path = payload?.path ? `：${payload.path}` : "";
-    const launchText = payload?.started ? "并已启动 Codex" : "";
-    showToast(action === "restore" ? `已恢复 Codex 账号模型${path}` : `已一键配置 Codex${launchText}${path}`, "success");
-    setStatus(action === "restore" ? "Codex 已恢复" : `Codex 已配置${launchText}`);
+    const launchText = payload?.started ? `并已启动 ${name}` : "";
+    showToast(`已一键配置 ${name}${launchText}${path}`, "success");
+    setStatus(`${name} 已配置${launchText}`);
   } finally {
     if (button) button.disabled = false;
   }

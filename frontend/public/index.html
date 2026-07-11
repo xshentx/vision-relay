@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Vision Relay</title>
-  <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="/assets/images/favicon.ico">
+  <link rel="stylesheet" href="/assets/css/app.css">
 </head>
 <body>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -19,13 +19,16 @@
         </div>
       </div>
 
-      <nav class="nav">
-        <button class="nav-item active" type="button" data-page="home">概览</button>
-        <button class="nav-item" type="button" data-page="text">文本模型</button>
-        <button class="nav-item" type="button" data-page="vision">视觉模型</button>
-        <button class="nav-item" type="button" data-page="access">客户端接入</button>
-        <button class="nav-item" type="button" data-page="logs">使用日志</button>
-        <button class="nav-item" type="button" data-page="playground">测试台</button>
+      <nav class="nav" aria-label="主导航">
+        <span class="nav-group-label">工作台</span>
+        <button class="nav-item active" type="button" data-page="home"><span class="nav-icon">⌂</span><span>概览</span></button>
+        <span class="nav-group-label">模型与接入</span>
+        <button class="nav-item" type="button" data-page="text"><span class="nav-icon">T</span><span>文本模型</span></button>
+        <button class="nav-item" type="button" data-page="vision"><span class="nav-icon">V</span><span>视觉模型</span></button>
+        <button class="nav-item" type="button" data-page="access"><span class="nav-icon">↗</span><span>客户端接入</span></button>
+        <span class="nav-group-label">观测与调试</span>
+        <button class="nav-item" type="button" data-page="logs"><span class="nav-icon">≡</span><span>使用日志</span></button>
+        <button class="nav-item" type="button" data-page="playground"><span class="nav-icon">›_</span><span>测试台</span></button>
       </nav>
 
       <div class="side-note">
@@ -260,9 +263,12 @@
           <div class="client-snippet">
             <div class="client-snippet-head">
               <div>
-              <h4>OpenCode 图片接入</h4>
+              <h4>OpenCode 客户端接入</h4>
               <p>自定义 OpenAI-compatible 模型需要声明图片附件能力，否则 OpenCode 会在本地拦截图片，不会把图片发到中转服务。</p>
               </div>
+            </div>
+            <div class="panel-actions">
+              <button class="secondary small-action" id="configureOpenCode" type="button">一键配置 OpenCode</button>
             </div>
             <pre><code id="opencodeConfig"></code></pre>
           </div>
@@ -276,7 +282,6 @@
             </div>
             <div class="panel-actions">
               <button class="secondary small-action" id="configureCodex" type="button">一键配置 Codex</button>
-              <button class="ghost-light small-action" id="restoreCodex" type="button">恢复账号模型</button>
             </div>
             <pre><code id="codexConfig"></code></pre>
           </div>
@@ -287,6 +292,9 @@
               <h4>Claude Code 客户端接入</h4>
               <p>Claude Code 走 Anthropic Messages 接口。中转会把 Anthropic 请求转换到当前文本模型，并保留工具调用和图片识别结果。</p>
               </div>
+            </div>
+            <div class="panel-actions">
+              <button class="secondary small-action" id="configureClaudeCode" type="button">一键配置 Claude Code</button>
             </div>
             <pre><code id="claudeCodeConfig"></code></pre>
           </div>
@@ -455,6 +463,6 @@
       </div>
     </form>
   </dialog>
-  <script src="/app.js"></script>
+  <script src="/assets/js/app.js"></script>
 </body>
 </html>

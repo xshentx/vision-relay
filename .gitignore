@@ -4,6 +4,7 @@
 !.env.example
 
 # Runtime data
+.codex/
 *.db
 *.sqlite
 *.sqlite3
@@ -12,6 +13,7 @@
 # Build outputs
 *.exe
 *.exe~
+*.exe.bak.*
 *.dll
 *.so
 *.dylib

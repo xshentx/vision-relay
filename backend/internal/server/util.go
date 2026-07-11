@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"strings"
 	"unicode/utf8"
 )
@@ -44,4 +45,20 @@ func trimBody(body []byte) string {
 		return text[:1200] + "..."
 	}
 	return text
+}
+
+func numberAsInt64(value any) int64 {
+	switch number := value.(type) {
+	case int:
+		return int64(number)
+	case int64:
+		return number
+	case float64:
+		return int64(number)
+	case json.Number:
+		value, _ := number.Int64()
+		return value
+	default:
+		return 0
+	}
 }
