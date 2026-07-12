@@ -18,6 +18,14 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 ## 版本更新
 
+### v1.2.0
+
+- 新增 Windows 桌面端自动更新，支持启动后自动检查和手动检查 GitHub Releases。
+- 支持下载新版 `vision-relay.exe`、验证 SHA-256、安全替换并自动重启。
+- 更新失败时自动恢复旧版本，降低桌面端自更新风险。
+- 构建脚本支持嵌入版本号，并自动生成 `vision-relay.exe.sha256` 校验文件。
+- 禁用桌面端静态资源缓存，避免更新后继续显示旧界面。
+
 ### v1.1.2
 
 - 重构前端静态资源目录，改为 `frontend/public` 分层管理并继续由 Go embed 打包。
@@ -138,14 +146,14 @@ vision-relay.exe
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v1.1.2
-git push origin v1.1.2
+git tag v1.2.0
+git push origin v1.2.0
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v1.1.2
+Vision Relay v1.2.0
 ```
 
 附件上传：
@@ -284,3 +292,20 @@ http://127.0.0.1:7890
 ## License
 
 请在发布前根据项目实际授权方式补充 License。
+
+## 自动更新
+
+Windows 桌面版会在启动后访问 GitHub Releases 自动检查新版本，也可以在左侧“程序更新”页面手动检查。发现新版本后，点击“下载更新并重启”，程序会：
+
+1. 从 `xshentx/vision-relay` 的最新 GitHub Release 下载 `vision-relay.exe`；
+2. 如果 Release 同时包含 `vision-relay.exe.sha256`，自动验证 SHA-256；
+3. 备份当前程序为 `vision-relay.exe.old`，替换程序并自动重启；
+4. 替换或重启失败时自动恢复旧版本。
+
+发布构建时请传入与 Git tag 相同的版本号：
+
+```powershell
+.\tools\build-windows.ps1 -Version v1.2.0
+```
+
+构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时应同时上传这两个文件。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。

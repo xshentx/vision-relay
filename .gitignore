@@ -14,6 +14,7 @@
 *.exe
 *.exe~
 *.exe.bak.*
+*.exe.sha256
 *.dll
 *.so
 *.dylib

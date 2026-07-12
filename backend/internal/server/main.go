@@ -12,6 +12,7 @@ import (
 )
 
 func Run() {
+	cleanupUpdateHelper()
 	cfg := defaultConfig()
 	addrFlag := flag.String("addr", "", "listen address, for example 127.0.0.1:8787")
 	noOpen := flag.Bool("no-open", false, "do not open a client window or browser on start")
@@ -87,6 +88,7 @@ func Run() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/config", a.handleConfig)
+	mux.HandleFunc("/api/update", a.handleUpdate)
 	mux.HandleFunc("/api/debug/vision", a.handleVisionDebug)
 	mux.HandleFunc("/api/key", a.handleGenerateKey)
 	mux.HandleFunc("/api/client/configure", a.handleClientConfigure)

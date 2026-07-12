@@ -74,6 +74,14 @@ const homeKeyCount = document.querySelector("#homeKeyCount");
 const homeTextProfile = document.querySelector("#homeTextProfile");
 const homeVisionProfile = document.querySelector("#homeVisionProfile");
 const homeProxyState = document.querySelector("#homeProxyState");
+const checkUpdateButton = document.querySelector("#checkUpdate");
+const installUpdateButton = document.querySelector("#installUpdate");
+const currentVersionEl = document.querySelector("#currentVersion");
+const latestVersionEl = document.querySelector("#latestVersion");
+const updatePublishedAt = document.querySelector("#updatePublishedAt");
+const updateState = document.querySelector("#updateState");
+const updateNotes = document.querySelector("#updateNotes");
+const releaseLink = document.querySelector("#releaseLink");
 
 let imageDataUrl = "";
 let testMode = "chat";
@@ -1601,7 +1609,64 @@ function formatBytes(value) {
   return `${(value / Math.pow(1024, index)).toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 
-loadConfig().catch((err) => {
+
+function updateText(html) {
+  const node = document.createElement("textarea");
+  node.innerHTML = html;
+  return node.value;
+}
+
+async function checkForUpdate(showErrors = false) {
+  checkUpdateButton.disabled = true;
+  updateState.textContent = updateText("&#27491;&#22312;&#36830;&#25509; GitHub &#26816;&#26597;&#26356;&#26032;&hellip;");
+  try {
+    const res = await fetch("/api/update", {cache: "no-store"});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const info = await res.json();
+    currentVersionEl.textContent = info.current_version || "dev";
+    latestVersionEl.textContent = info.latest_version || "-";
+    updatePublishedAt.textContent = info.published_at ? new Date(info.published_at).toLocaleString() : "-";
+    updateNotes.textContent = info.release_notes?.trim() || updateText("&#26412;&#27425; Release &#26242;&#26080;&#21457;&#34892;&#35828;&#26126;&#12290;");
+    if (info.release_url) releaseLink.href = info.release_url;
+    installUpdateButton.disabled = !info.update_available || !info.can_update;
+    if (info.update_available && info.can_update) {
+      const size = info.asset_size ? `${updateText("&#65292;&#23433;&#35013;&#21253;")} ${formatBytes(info.asset_size)}` : "";
+      updateState.textContent = `${updateText("&#21457;&#29616;&#26032;&#29256;&#26412;")} ${info.latest_version}${size}${updateText("&#65292;&#21487;&#20197;&#19968;&#38190;&#26356;&#26032;&#12290;")}`;
+      showToast(`${updateText("&#21457;&#29616;&#26032;&#29256;&#26412;")} ${info.latest_version}`, "success");
+    } else if (info.update_available) {
+      updateState.textContent = `${updateText("&#21457;&#29616;&#26032;&#29256;&#26412;")} ${info.latest_version}${updateText("&#65292;&#24403;&#21069;&#36816;&#34892;&#26041;&#24335;&#19981;&#25903;&#25345;&#33258;&#21160;&#26367;&#25442;&#65292;&#35831;&#20174; GitHub &#25163;&#21160;&#19979;&#36733;&#12290;")}`;
+    } else {
+      updateState.textContent = updateText("&#24403;&#21069;&#24050;&#26159;&#26368;&#26032;&#29256;&#26412;&#12290;");
+    }
+  } catch (err) {
+    updateState.textContent = `${updateText("&#26816;&#26597;&#26356;&#26032;&#22833;&#36133;&#65306;")}${err.message || err}`;
+    if (showErrors) showToast(updateState.textContent, "error");
+  } finally {
+    checkUpdateButton.disabled = false;
+  }
+}
+
+checkUpdateButton.addEventListener("click", () => checkForUpdate(true));
+installUpdateButton.addEventListener("click", async () => {
+  if (!confirm(updateText("&#23558;&#19979;&#36733;&#26368;&#26032;&#29256;&#12289;&#20851;&#38381; Vision Relay &#24182;&#33258;&#21160;&#37325;&#21551;&#12290;&#26159;&#21542;&#32487;&#32493;&#65311;"))) return;
+  installUpdateButton.disabled = true;
+  checkUpdateButton.disabled = true;
+  updateState.textContent = updateText("&#27491;&#22312;&#19979;&#36733;&#24182;&#26657;&#39564;&#26356;&#26032;&#65292;&#35831;&#21247;&#20851;&#38381;&#31243;&#24207;&hellip;");
+  try {
+    const res = await fetch("/api/update", {method: "POST"});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const result = await res.json();
+    updateState.textContent = result.message || updateText("&#26356;&#26032;&#24050;&#19979;&#36733;&#65292;&#31243;&#24207;&#21363;&#23558;&#37325;&#21551;&hellip;");
+    showToast(updateText("&#26356;&#26032;&#24050;&#19979;&#36733;&#65292;&#21363;&#23558;&#37325;&#21551;"), "success");
+  } catch (err) {
+    updateState.textContent = `${updateText("&#26356;&#26032;&#22833;&#36133;&#65306;")}${err.message || err}`;
+    showToast(updateState.textContent, "error");
+    installUpdateButton.disabled = false;
+    checkUpdateButton.disabled = false;
+  }
+});
+
+loadConfig().then(() => checkForUpdate(false)).catch((err) => {
   console.error(err);
   setStatus("加载失败");
   serviceState.textContent = "离线";

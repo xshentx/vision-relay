@@ -1,6 +1,7 @@
 ﻿param(
     [string]$Output = "vision-relay.exe",
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +12,10 @@ $outputPath = if ([IO.Path]::IsPathRooted($Output)) {
     Join-Path $projectRoot $Output
 }
 $tempPath = "$outputPath.tmp"
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = (& git -C $projectRoot describe --tags --always --dirty 2>$null)
+    if ([string]::IsNullOrWhiteSpace($Version)) { $Version = "dev" }
+}
 
 Push-Location $projectRoot
 try {
@@ -22,7 +27,7 @@ try {
     }
 
     Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
-    & go build -trimpath '-ldflags=-s -w -H=windowsgui' -o $tempPath ./backend/cmd/vision-relay
+    & go build -trimpath "-ldflags=-s -w -H=windowsgui -X=vision-relay/backend/internal/server.Version=$Version" -o $tempPath ./backend/cmd/vision-relay
     if ($LASTEXITCODE -ne 0) {
         throw "Go build failed."
     }
@@ -33,7 +38,10 @@ try {
         throw "Unable to replace '$outputPath'. Exit the running Vision Relay instance and try again. $($_.Exception.Message)"
     }
 
-    Write-Host "Built Windows GUI executable: $outputPath"
+    $hash = (Get-FileHash -LiteralPath $outputPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath "$outputPath.sha256" -Value "$hash  $([IO.Path]::GetFileName($outputPath))" -Encoding ascii
+    Write-Host "Built Windows GUI executable: $outputPath (version $Version)"
+    Write-Host "SHA-256: $outputPath.sha256"
 } finally {
     Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
     Pop-Location

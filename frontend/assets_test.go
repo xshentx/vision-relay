@@ -32,3 +32,28 @@ func TestClientConfigureActionsAreEmbedded(t *testing.T) {
 		t.Fatal("client configure actions are not wired to the shared API request")
 	}
 }
+
+func TestUpdateUIIsEmbedded(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	for _, id := range []string{"update", "checkUpdate", "installUpdate", "currentVersion", "latestVersion"} {
+		if !strings.Contains(index, `id="`+id+`"`) {
+			t.Fatalf("update UI element %q is missing", id)
+		}
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	if !strings.Contains(script, `fetch("/api/update"`) || !strings.Contains(script, `method: "POST"`) {
+		t.Fatal("update UI is not wired to the update API")
+	}
+	if strings.Contains(index, "???") || strings.Contains(script, "???") {
+		t.Fatal("update UI contains question-mark mojibake")
+	}
+}

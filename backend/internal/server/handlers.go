@@ -15,6 +15,9 @@ import (
 )
 
 func (a *app) handleWeb(w http.ResponseWriter, r *http.Request) {
+	// The desktop client always uses the same localhost URL. Disable caching so
+	// a newly installed executable cannot keep showing an older embedded UI.
+	w.Header().Set("Cache-Control", "no-store, max-age=0")
 	path := r.URL.Path
 	if path == "/" {
 		path = "/index.html"

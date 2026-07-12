@@ -22,6 +22,7 @@
       <nav class="nav" aria-label="主导航">
         <span class="nav-group-label">工作台</span>
         <button class="nav-item active" type="button" data-page="home"><span class="nav-icon">⌂</span><span>概览</span></button>
+        <button class="nav-item" type="button" data-page="update"><span class="nav-icon">&uarr;</span><span>&#31243;&#24207;&#26356;&#26032;</span></button>
         <span class="nav-group-label">模型与接入</span>
         <button class="nav-item" type="button" data-page="text"><span class="nav-icon">T</span><span>文本模型</span></button>
         <button class="nav-item" type="button" data-page="vision"><span class="nav-icon">V</span><span>视觉模型</span></button>
@@ -326,6 +327,29 @@
             <div class="log-pager-actions">
               <button class="secondary" id="prevLogPage" type="button">上一页</button>
               <button class="secondary" id="nextLogPage" type="button">下一页</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="page panel span-12" id="update" data-page-panel="update">
+          <div class="panel-head">
+            <div>
+              <h3>&#31243;&#24207;&#26356;&#26032;</h3>
+              <p>&#33258;&#21160;&#26816;&#26597; GitHub Releases&#65292;&#19979;&#36733;&#26368;&#26032;&#29256;&#24182;&#23433;&#20840;&#26367;&#25442;&#24403;&#21069;&#31243;&#24207;&#12290;</p>
+            </div>
+            <button class="secondary" id="checkUpdate" type="button">&#26816;&#26597;&#26356;&#26032;</button>
+          </div>
+          <div class="update-card">
+            <div class="update-version-row">
+              <div><span>&#24403;&#21069;&#29256;&#26412;</span><strong id="currentVersion">&#26816;&#27979;&#20013;</strong></div>
+              <div><span>&#26368;&#26032;&#29256;&#26412;</span><strong id="latestVersion">&#26816;&#27979;&#20013;</strong></div>
+              <div><span>&#21457;&#24067;&#26102;&#38388;</span><strong id="updatePublishedAt">-</strong></div>
+            </div>
+            <div class="update-state" id="updateState">&#27491;&#22312;&#36830;&#25509; GitHub &#26816;&#26597;&#26356;&#26032;&hellip;</div>
+            <div class="update-notes" id="updateNotes">&#26242;&#26080;&#21457;&#34892;&#35828;&#26126;</div>
+            <div class="panel-actions update-actions">
+              <button id="installUpdate" type="button" disabled>&#19979;&#36733;&#26356;&#26032;&#24182;&#37325;&#21551;</button>
+              <a class="button-link secondary" id="releaseLink" href="https://github.com/xshentx/vision-relay/releases" target="_blank" rel="noreferrer">&#26597;&#30475; GitHub Release</a>
             </div>
           </div>
         </section>
