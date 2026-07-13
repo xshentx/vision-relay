@@ -15,25 +15,28 @@ import (
 )
 
 const (
-	clientCodex           = "codex"
-	clientOpenCode        = "opencode"
-	clientClaudeCode      = "claude-code"
-	relayProviderID       = "vision-relay"
-	codexProviderID       = "custom"
-	relayEnvKey           = "VISION_RELAY_API_KEY"
-	codexBaseInstructions = "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals."
+	clientCodex               = "codex"
+	clientOpenCode            = "opencode"
+	clientClaudeCode          = "claude-code"
+	relayProviderID           = "vision-relay"
+	codexProviderID           = "custom"
+	relayEnvKey               = "VISION_RELAY_API_KEY"
+	codexManagedBearerToken   = "PROXY_MANAGED"
+	codexBaseInstructions     = "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals."
+	codexUnifiedHistoryMarker = "# Added by Vision Relay for unified Codex history."
 )
 
 type clientConfigContext struct {
-	HomeDir       string
-	ProjectDir    string
-	Origin        string
-	Key           string
-	Model         string
-	ModelMappings []textModelMapping
-	VisionEnabled bool
-	LaunchPath    string
-	LaunchAppID   string
+	HomeDir              string
+	ProjectDir           string
+	Origin               string
+	Key                  string
+	Model                string
+	ModelMappings        []textModelMapping
+	VisionEnabled        bool
+	PreserveOfficialAuth *bool
+	LaunchPath           string
+	LaunchAppID          string
 }
 
 type clientConfigRequest struct {
@@ -89,15 +92,16 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 	cfg := a.currentConfig()
 	projectDir := clientProjectDir(client, req.WorkDir, home)
 	ctx := clientConfigContext{
-		HomeDir:       home,
-		ProjectDir:    projectDir,
-		Origin:        requestOrigin(r, cfg),
-		Key:           key,
-		Model:         relayModelName(cfg),
-		ModelMappings: textModelMappings(cfg),
-		VisionEnabled: relayImageInputEnabled(cfg),
-		LaunchPath:    currentCodexDesktopPath(),
-		LaunchAppID:   currentCodexAppID(),
+		HomeDir:              home,
+		ProjectDir:           projectDir,
+		Origin:               requestOrigin(r, cfg),
+		Key:                  key,
+		Model:                relayModelName(cfg),
+		ModelMappings:        textModelMappings(cfg),
+		VisionEnabled:        visionEnabled(cfg),
+		PreserveOfficialAuth: boolPtr(preserveCodexOfficialAuth(cfg)),
+		LaunchPath:           currentCodexDesktopPath(),
+		LaunchAppID:          currentCodexAppID(),
 	}
 	path, err := writeClientConfig(client, ctx)
 	if err != nil {
@@ -168,7 +172,7 @@ func (a *app) handleClientRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	projectDir := clientProjectDir(client, req.WorkDir, home)
-	path, err := restoreCodexAccountConfig(home, projectDir)
+	path, err := restoreCodexAccountConfigWithOptions(home, projectDir, a.currentConfig().UnifyCodexSessionHistory)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -285,6 +289,9 @@ func writeCodexConfig(ctx clientConfigContext) (string, error) {
 	if err := removeCodexModelCache(ctx.HomeDir); err != nil {
 		return "", err
 	}
+	if err := configureCodexAuth(ctx); err != nil {
+		return "", err
+	}
 	lines := []string{}
 	if b, err := os.ReadFile(userPath); err == nil {
 		lines = strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
@@ -293,6 +300,23 @@ func writeCodexConfig(ctx clientConfigContext) (string, error) {
 	}
 	lines = removeCodexRelayConfig(lines)
 	lines = upsertWindowsSandbox(lines, "unelevated")
+	block := codexRelayConfigBlock(ctx, model)
+	block = append(block, "")
+	content := strings.TrimRight(strings.Join(append(block, lines...), "\n"), "\n") + "\n"
+	if err := writeConfigFile(userPath, []byte(content)); err != nil {
+		return "", err
+	}
+	projectPath, err := writeCodexProjectConfig(ctx)
+	if err != nil {
+		return "", err
+	}
+	if projectPath != "" {
+		return projectPath, nil
+	}
+	return userPath, nil
+}
+
+func codexRelayConfigBlock(ctx clientConfigContext, model string) []string {
 	block := []string{
 		"# Added by Vision Relay. Edit from the Client Access page.",
 		fmt.Sprintf("model = %q", model),
@@ -307,21 +331,11 @@ func writeCodexConfig(ctx clientConfigContext) (string, error) {
 		`wire_api = "responses"`,
 		`requires_openai_auth = true`,
 		fmt.Sprintf("base_url = %q", strings.TrimRight(ctx.Origin, "/")+"/v1"),
-		`experimental_bearer_token = "PROXY_MANAGED"`,
 	}
-	block = append(block, "")
-	content := strings.TrimRight(strings.Join(append(block, lines...), "\n"), "\n") + "\n"
-	if err := writeConfigFile(userPath, []byte(content)); err != nil {
-		return "", err
+	if preserveCodexOfficialAuthForContext(ctx) {
+		block = append(block, fmt.Sprintf("experimental_bearer_token = %q", codexManagedBearerToken))
 	}
-	projectPath, err := writeCodexProjectConfig(ctx)
-	if err != nil {
-		return "", err
-	}
-	if projectPath != "" {
-		return projectPath, nil
-	}
-	return userPath, nil
+	return block
 }
 
 func writeCodexProjectConfig(ctx clientConfigContext) (string, error) {
@@ -343,23 +357,7 @@ func writeCodexProjectConfig(ctx clientConfigContext) (string, error) {
 	}
 	lines = removeCodexRelayProjectConfig(lines)
 	lines = upsertWindowsSandbox(lines, "unelevated")
-	block := []string{
-		"# Added by Vision Relay. Edit from the Client Access page.",
-		fmt.Sprintf("model = %q", model),
-		fmt.Sprintf("model_catalog_json = %q", codexModelCatalogFilename()),
-		fmt.Sprintf("model_provider = %q", codexProviderID),
-		`disable_response_storage = true`,
-		`model_reasoning_effort = "high"`,
-		`web_search = "disabled"`,
-		"",
-		"[model_providers." + codexProviderID + "]",
-		`name = "Vision Relay"`,
-		`wire_api = "responses"`,
-		`requires_openai_auth = true`,
-		fmt.Sprintf("base_url = %q", strings.TrimRight(ctx.Origin, "/")+"/v1"),
-		`experimental_bearer_token = "PROXY_MANAGED"`,
-		"",
-	}
+	block := append(codexRelayConfigBlock(ctx, model), "")
 	content := strings.TrimRight(strings.Join(append(block, lines...), "\n"), "\n") + "\n"
 	return path, writeConfigFile(path, []byte(content))
 }
@@ -406,6 +404,8 @@ func removeCodexRelayConfig(lines []string) []string {
 		}
 		if inRoot {
 			switch {
+			case trimmed == codexUnifiedHistoryMarker:
+				continue
 			case strings.HasPrefix(trimmed, "model ="):
 				continue
 			case strings.HasPrefix(trimmed, "model_catalog_json ="):
@@ -496,6 +496,10 @@ func saveCodexAccountConfigBackup(homeDir, userPath string) error {
 }
 
 func restoreCodexAccountConfig(homeDir, projectDir string) (string, error) {
+	return restoreCodexAccountConfigWithOptions(homeDir, projectDir, false)
+}
+
+func restoreCodexAccountConfigWithOptions(homeDir, projectDir string, unifySessionHistory bool) (string, error) {
 	userPath := filepath.Join(codexConfigDir(homeDir), "config.toml")
 	lines := []string{}
 	if raw, err := os.ReadFile(userPath); err == nil {
@@ -518,6 +522,9 @@ func restoreCodexAccountConfig(homeDir, projectDir string) (string, error) {
 	if providerID := rootValueFromLines(accountBlock, "model_provider"); providerID != "" && providerID != "openai" {
 		lines = removeTomlSection(lines, "model_providers."+providerID)
 	}
+	if unifySessionHistory {
+		accountBlock = codexUnifiedOpenAIAccountBlock(accountBlock)
+	}
 	content := strings.TrimRight(strings.Join(append(append(accountBlock, ""), lines...), "\n"), "\n") + "\n"
 	if err := writeConfigFile(userPath, []byte(content)); err != nil {
 		return "", err
@@ -526,6 +533,44 @@ func restoreCodexAccountConfig(homeDir, projectDir string) (string, error) {
 		return "", err
 	}
 	return userPath, nil
+}
+
+func codexUnifiedOpenAIAccountBlock(accountBlock []string) []string {
+	root := make([]string, 0, len(accountBlock)+6)
+	inRoot := true
+	providerWritten := false
+	for _, line := range accountBlock {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inRoot = false
+		}
+		if !inRoot {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "model_provider =") {
+			root = append(root, `model_provider = "custom"`)
+			providerWritten = true
+			continue
+		}
+		root = append(root, line)
+	}
+	if !providerWritten {
+		root = append(root, `model_provider = "custom"`)
+	}
+	root = append(root, "")
+	root = append(root, codexUnifiedOpenAIProviderBlock()...)
+	return root
+}
+
+func codexUnifiedOpenAIProviderBlock() []string {
+	return []string{
+		codexUnifiedHistoryMarker,
+		"[model_providers.custom]",
+		`name = "OpenAI"`,
+		`wire_api = "responses"`,
+		`requires_openai_auth = true`,
+		`supports_websockets = true`,
+	}
 }
 
 func restoreCodexProjectConfig(projectDir string) error {
@@ -640,6 +685,57 @@ func codexAuthBackupPath(homeDir string) string {
 	return filepath.Join(codexConfigDir(homeDir), "vision-relay-auth.json")
 }
 
+func preserveCodexOfficialAuthForContext(ctx clientConfigContext) bool {
+	return ctx.PreserveOfficialAuth == nil || *ctx.PreserveOfficialAuth
+}
+
+func configureCodexAuth(ctx clientConfigContext) error {
+	authPath := filepath.Join(codexConfigDir(ctx.HomeDir), "auth.json")
+	raw, err := os.ReadFile(authPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	managed := err == nil && codexAuthIsRelayManaged(raw)
+	if preserveCodexOfficialAuthForContext(ctx) {
+		if !managed {
+			return nil
+		}
+		if err := restoreCodexAuth(ctx.HomeDir); err != nil {
+			return err
+		}
+		if _, err := os.Stat(codexAuthBackupPath(ctx.HomeDir)); errors.Is(err, os.ErrNotExist) {
+			return os.Remove(authPath)
+		}
+		return nil
+	}
+	if err == nil && !managed {
+		if err := writeConfigFile(codexAuthBackupPath(ctx.HomeDir), raw); err != nil {
+			return err
+		}
+	}
+	key := strings.TrimSpace(ctx.Key)
+	if key == "" {
+		key = "sk-local"
+	}
+	managedAuth, err := json.MarshalIndent(map[string]any{
+		"OPENAI_API_KEY":       key,
+		"vision_relay_managed": true,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeConfigFile(authPath, append(managedAuth, '\n'))
+}
+
+func codexAuthIsRelayManaged(raw []byte) bool {
+	var auth map[string]any
+	if json.Unmarshal(raw, &auth) != nil {
+		return false
+	}
+	managed, _ := auth["vision_relay_managed"].(bool)
+	return managed
+}
+
 func restoreCodexAuth(homeDir string) error {
 	backupPath := codexAuthBackupPath(homeDir)
 	raw, err := os.ReadFile(backupPath)
@@ -685,10 +781,38 @@ func codexAccountBlockFromLines(lines []string) []string {
 	if providerID == "" || len(root) == 1 {
 		return nil
 	}
+	if providerID == codexProviderID && codexHistoryLinesContainMarker(lines) {
+		return codexStandardOpenAIAccountBlock(root)
+	}
 	providerSection := extractTomlSection(lines, "model_providers."+providerID)
 	if len(providerSection) > 0 {
 		root = append(root, "")
 		root = append(root, providerSection...)
+	}
+	return root
+}
+
+func codexStandardOpenAIAccountBlock(accountBlock []string) []string {
+	root := make([]string, 0, len(accountBlock))
+	inRoot := true
+	providerWritten := false
+	for _, line := range accountBlock {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inRoot = false
+		}
+		if !inRoot {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "model_provider =") {
+			root = append(root, `model_provider = "openai"`)
+			providerWritten = true
+			continue
+		}
+		root = append(root, line)
+	}
+	if !providerWritten {
+		root = append(root, `model_provider = "openai"`)
 	}
 	return root
 }
@@ -961,7 +1085,8 @@ func codexModelCatalogEntry(ctx clientConfigContext, template map[string]any, ma
 	model["visibility"] = "list"
 	model["supported_in_api"] = true
 	model["priority"] = priority
-	model["input_modalities"] = relayInputModalities(ctx.VisionEnabled)
+	imageEnabled := ctx.VisionEnabled
+	model["input_modalities"] = relayInputModalities(imageEnabled)
 	model["context_window"] = contextWindow
 	model["max_context_window"] = contextWindow
 	model["effective_context_window_percent"] = 95
@@ -975,7 +1100,7 @@ func codexModelCatalogEntry(ctx clientConfigContext, template map[string]any, ma
 	model["shell_type"] = "shell_command"
 	model["truncation_policy"] = map[string]any{"mode": "bytes", "limit": 10000}
 	model["supports_parallel_tool_calls"] = false
-	model["supports_image_detail_original"] = ctx.VisionEnabled
+	model["supports_image_detail_original"] = imageEnabled
 	model["supports_search_tool"] = false
 	model["experimental_supported_tools"] = []any{}
 	return model
@@ -1028,14 +1153,15 @@ func writeOpenCodeConfig(ctx clientConfigContext) (string, error) {
 	options["apiKey"] = ctx.Key
 	models := ensureJSONMap(provider, "models")
 	model := ensureJSONMap(models, ctx.Model)
+	imageEnabled := ctx.VisionEnabled
 	model["name"] = ctx.Model
-	model["attachment"] = ctx.VisionEnabled
-	model["attachments"] = ctx.VisionEnabled
-	model["vision"] = ctx.VisionEnabled
-	model["input_modalities"] = relayInputModalities(ctx.VisionEnabled)
+	model["attachment"] = imageEnabled
+	model["attachments"] = imageEnabled
+	model["vision"] = imageEnabled
+	model["input_modalities"] = relayInputModalities(imageEnabled)
 	model["output_modalities"] = []string{"text"}
 	model["modalities"] = map[string]any{
-		"input":  relayInputModalities(ctx.VisionEnabled),
+		"input":  relayInputModalities(imageEnabled),
 		"output": []string{"text"},
 	}
 	cfg["model"] = relayProviderID + "/" + ctx.Model

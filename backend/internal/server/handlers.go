@@ -104,6 +104,7 @@ func (a *app) processOpenAIChat(ctx context.Context, body []byte, header http.He
 		return nil, http.StatusBadRequest, err
 	}
 	parsed := make([]parsedMessage, 0, len(messages))
+	requestedModel := firstString(payload["model"])
 	hasImage := false
 	for _, msg := range messages {
 		pm := parseOpenAIMessage(msg)
@@ -113,7 +114,7 @@ func (a *app) processOpenAIChat(ctx context.Context, body []byte, header http.He
 		parsed = append(parsed, pm)
 	}
 	imageAugmented := false
-	if hasImage && shouldAugmentImages(cfg) {
+	if hasImage && shouldAugmentImages(cfg, requestedModel) {
 		rawMessages, _ := payload["messages"].([]any)
 		for i := range parsed {
 			if len(parsed[i].Images) == 0 {
@@ -134,7 +135,7 @@ func (a *app) processOpenAIChat(ctx context.Context, body []byte, header http.He
 	if imageAugmented {
 		removeImageViewTools(payload)
 	}
-	model := effectiveTextModel(cfg, firstString(payload["model"]))
+	model := effectiveTextModel(cfg, requestedModel)
 	if model != "" {
 		payload["model"] = model
 	}
@@ -202,7 +203,7 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) augmentOpenAIResponses(ctx context.Context, cfg config, payload map[string]any) (bool, error) {
-	if !shouldAugmentImages(cfg) {
+	if !shouldAugmentImages(cfg, firstString(payload["model"])) {
 		return false, nil
 	}
 	input, ok := payload["input"]
@@ -327,7 +328,8 @@ func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	messages, _ := payload["messages"].([]any)
 	changed := false
-	if shouldAugmentImages(cfg) {
+	requestedModel := firstString(payload["model"])
+	if shouldAugmentImages(cfg, requestedModel) {
 		for _, item := range messages {
 			msg, ok := item.(map[string]any)
 			if !ok {
@@ -346,7 +348,7 @@ func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 			changed = true
 		}
 	}
-	model := effectiveTextModel(cfg, firstString(payload["model"]))
+	model := effectiveTextModel(cfg, requestedModel)
 	if model != "" {
 		payload["model"] = model
 	}
@@ -430,7 +432,7 @@ func (a *app) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	contents, _ := payload["contents"].([]any)
 	changed := false
-	if shouldAugmentImages(cfg) {
+	if shouldAugmentImages(cfg, geminiRequestedModel(r.URL.RequestURI())) {
 		for _, item := range contents {
 			content, ok := item.(map[string]any)
 			if !ok {
@@ -475,7 +477,8 @@ func (a *app) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	}
 	messages, _ := payload["messages"].([]any)
 	changed := false
-	if shouldAugmentImages(cfg) {
+	requestedModel := firstString(payload["model"])
+	if shouldAugmentImages(cfg, requestedModel) {
 		for _, item := range messages {
 			msg, ok := item.(map[string]any)
 			if !ok {
@@ -495,7 +498,7 @@ func (a *app) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 			changed = true
 		}
 	}
-	model := effectiveTextModel(cfg, firstString(payload["model"]))
+	model := effectiveTextModel(cfg, requestedModel)
 	if model != "" {
 		payload["model"] = model
 	}
@@ -524,7 +527,8 @@ func (a *app) handleOllamaGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	changed := false
-	if shouldAugmentImages(cfg) {
+	requestedModel := firstString(payload["model"])
+	if shouldAugmentImages(cfg, requestedModel) {
 		pm := parseOllamaGenerate(payload)
 		if len(pm.Images) > 0 {
 			analysis, err := a.describeImages(r.Context(), cfg, pm)
@@ -537,7 +541,7 @@ func (a *app) handleOllamaGenerate(w http.ResponseWriter, r *http.Request) {
 			changed = true
 		}
 	}
-	model := effectiveTextModel(cfg, firstString(payload["model"]))
+	model := effectiveTextModel(cfg, requestedModel)
 	if model != "" {
 		payload["model"] = model
 	}
@@ -593,4 +597,20 @@ func geminiRequestURIWithEffectiveModel(cfg config, requestURI string) string {
 		return requestURI[:modelStart] + model + requestURI[modelEnd:]
 	}
 	return requestURI
+}
+
+func geminiRequestedModel(requestURI string) string {
+	prefixes := []string{"/v1beta/models/", "/v1/models/"}
+	for _, prefix := range prefixes {
+		if !strings.HasPrefix(requestURI, prefix) {
+			continue
+		}
+		modelStart := len(prefix)
+		suffixIndex := strings.Index(requestURI[modelStart:], ":")
+		if suffixIndex < 0 {
+			return ""
+		}
+		return requestURI[modelStart : modelStart+suffixIndex]
+	}
+	return ""
 }

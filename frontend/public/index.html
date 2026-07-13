@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Vision Relay</title>
   <link rel="icon" href="/assets/images/favicon.ico">
+  <link rel="stylesheet" href="/assets/vendor/element-plus/index.css">
   <link rel="stylesheet" href="/assets/css/app.css">
 </head>
 <body>
+  <div id="componentLayer"></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="app">
     <aside class="sidebar">
@@ -26,148 +28,98 @@
         <span class="nav-group-label">模型与接入</span>
         <button class="nav-item" type="button" data-page="text"><span class="nav-icon">T</span><span>文本模型</span></button>
         <button class="nav-item" type="button" data-page="vision"><span class="nav-icon">V</span><span>视觉模型</span></button>
+        <button class="nav-item" type="button" data-page="tokens"><span class="nav-icon">K</span><span>访问令牌</span></button>
         <button class="nav-item" type="button" data-page="access"><span class="nav-icon">↗</span><span>客户端接入</span></button>
         <span class="nav-group-label">观测与调试</span>
         <button class="nav-item" type="button" data-page="logs"><span class="nav-icon">≡</span><span>使用日志</span></button>
         <button class="nav-item" type="button" data-page="playground"><span class="nav-icon">›_</span><span>测试台</span></button>
       </nav>
 
-      <div class="side-note">
-        <span class="dot"></span>
-        <span>本地服务</span>
-        <strong id="serviceState">检测中</strong>
+      <div class="side-note" id="serviceCard">
+        <span class="dot" aria-hidden="true"></span>
+        <strong id="serviceState">服务检测中</strong>
       </div>
     </aside>
 
     <main class="content">
-      <section class="page active" data-page-panel="home">
-        <section class="hero" id="overview">
+      <div class="page-stage">
+      <section class="page active overview-page" data-page-panel="home">
+        <section class="hero overview-hero" id="overview">
           <div class="hero-copy-block">
-            <p class="eyebrow">Desktop multimodal relay</p>
+            <p class="eyebrow">DESKTOP MULTIMODAL RELAY</p>
             <h2>让文本模型接住图片请求</h2>
-            <p class="hero-copy">客户端请求进入本机中转后，图片先由视觉模型解析为文本，再交给 Responses、Chat Completions、Codex 或其他文本上游继续处理。</p>
+            <p class="hero-copy">在本机统一接收多协议请求，按需完成视觉解析，再把文本上下文交给目标模型。</p>
             <div class="hero-tags" aria-label="支持入口">
-              <span>Responses</span>
-              <span>Chat Completions</span>
-              <span>Anthropic</span>
-              <span>Gemini</span>
-              <span>Ollama</span>
+              <span>Responses</span><span>Chat Completions</span><span>Anthropic</span><span>Gemini</span><span>Ollama</span>
             </div>
           </div>
           <div class="relay-hero-panel" aria-label="中转链路">
-            <div class="hero-actions">
-              <span class="status" id="status">未加载</span>
-              <button class="ghost" id="reloadConfig" type="button">刷新</button>
+            <div class="relay-panel-head">
+              <div><small>实时状态</small><strong>本机中转链路</strong></div>
+              <div class="hero-actions"><span class="status" id="status">未加载</span><button class="ghost" id="reloadConfig" type="button">刷新</button></div>
             </div>
             <div class="relay-stack">
-              <div class="relay-node">
-                <span>01</span>
-                <strong>客户端请求</strong>
-                <small>多协议入口</small>
-              </div>
-              <div class="relay-node accent">
-                <span>02</span>
-                <strong>视觉解析</strong>
-                <small>图片转文本上下文</small>
-              </div>
-              <div class="relay-node">
-                <span>03</span>
-                <strong>文本上游</strong>
-                <small>流式返回给客户端</small>
-              </div>
+              <div class="relay-node"><span>01</span><strong>客户端请求</strong><small>多协议统一接入</small></div>
+              <div class="relay-node accent"><span>02</span><strong>视觉解析</strong><small>按模型能力处理图片</small></div>
+              <div class="relay-node"><span>03</span><strong>文本上游</strong><small>流式返回客户端</small></div>
             </div>
           </div>
         </section>
 
-        <section class="metric-grid overview-metrics">
-          <div class="metric">
-            <span>本机地址</span>
+        <section class="metric-grid overview-metrics" aria-label="运行摘要">
+          <div class="metric metric-address">
+            <div class="metric-heading"><span>本机地址</span><b>LOCAL</b></div>
             <strong id="homeBaseURL">-</strong>
             <small>所有客户端统一接入</small>
           </div>
-          <div class="metric">
-            <span>文本模型</span>
+          <div class="metric metric-text">
+            <div class="metric-heading"><span>文本路由</span><b>T</b></div>
             <strong id="homeTextModel">-</strong>
             <small id="homeTextProvider">-</small>
+            <button class="metric-link home-jump" type="button" data-target-page="text">管理文本模型 <span>→</span></button>
           </div>
-          <div class="metric">
-            <span>视觉模型</span>
+          <div class="metric metric-vision">
+            <div class="metric-heading"><span>视觉路由</span><b>V</b></div>
             <strong id="homeVisionModel">-</strong>
             <small id="homeVisionProvider">-</small>
+            <button class="metric-link home-jump" type="button" data-target-page="vision">管理视觉模型 <span>→</span></button>
           </div>
-          <div class="metric">
-            <span>客户端 Key</span>
-            <strong id="homeKeyCount">0</strong>
-            <small>本机鉴权令牌</small>
+          <div class="metric metric-token">
+            <div class="metric-heading"><span>访问令牌</span><b>K</b></div>
+            <strong id="homeKeyCount">0 个</strong>
+            <small>本机鉴权与客户端隔离</small>
+            <button class="metric-link home-jump" type="button" data-target-page="tokens">管理访问令牌 <span>→</span></button>
           </div>
         </section>
 
-        <section class="overview-grid">
-          <article class="home-panel">
+        <section class="overview-grid overview-workspace">
+          <article class="home-panel route-overview-card">
             <div class="panel-head compact">
-              <div>
-                <h3>入口矩阵</h3>
-                <p>不同客户端可以保持自己的协议形态，图片字段在本机统一转换。</p>
-              </div>
+              <div><span class="section-kicker">ROUTE ENDPOINTS</span><h3>常用路由入口</h3><p>保留客户端原有协议，图片字段由本机统一转换。</p></div>
+              <button class="text-link home-jump" type="button" data-target-page="access">全部接口 <span>→</span></button>
             </div>
-            <div class="route-matrix">
-              <div class="route-item">
-                <span>OpenAI</span>
-                <strong>/v1/responses</strong>
-                <small>Codex / Responses</small>
-              </div>
-              <div class="route-item">
-                <span>Chat</span>
-                <strong>/v1/chat/completions</strong>
-                <small>OpenAI compatible</small>
-              </div>
-              <div class="route-item">
-                <span>Anthropic</span>
-                <strong>/v1/messages</strong>
-                <small>Claude Code compatible</small>
-              </div>
-              <div class="route-item">
-                <span>Gemini</span>
-                <strong>/v1beta/models/{model}:generateContent</strong>
-                <small>inline_data / file_data</small>
-              </div>
-              <div class="route-item">
-                <span>Ollama</span>
-                <strong>/api/chat</strong>
-                <small>images 字段</small>
-              </div>
-              <div class="route-item">
-                <span>透传</span>
-                <strong>/v1/models</strong>
-                <small>模型列表自动标记图片能力</small>
-              </div>
+            <div class="route-overview-list">
+              <div class="route-overview-row"><span class="route-badge blue">R</span><div><strong>Responses</strong><small>Codex / OpenAI Responses</small></div><code>/v1/responses</code></div>
+              <div class="route-overview-row"><span class="route-badge cyan">C</span><div><strong>Chat Completions</strong><small>OpenAI compatible</small></div><code>/v1/chat/completions</code></div>
+              <div class="route-overview-row"><span class="route-badge purple">A</span><div><strong>Anthropic Messages</strong><small>Claude Code compatible</small></div><code>/v1/messages</code></div>
+              <div class="route-overview-row"><span class="route-badge green">O</span><div><strong>Ollama Chat</strong><small>images 字段自动解析</small></div><code>/api/chat</code></div>
             </div>
           </article>
 
-          <article class="home-panel config-panel">
+          <article class="home-panel config-panel current-route-card">
             <div class="panel-head compact">
-              <div>
-                <h3>当前配置</h3>
-                <p>当前生效的文本上游、视觉上游和网络状态。</p>
-              </div>
+              <div><span class="section-kicker">ACTIVE ROUTING</span><h3>当前路由</h3><p>查看当前生效的上游与服务状态。</p></div>
+              <span class="configuration-status"><i></i>已同步</span>
             </div>
-            <div class="config-list">
-              <div>
-                <span>文本上游</span>
-                <strong id="homeTextProfile">-</strong>
-              </div>
-              <div>
-                <span>视觉上游</span>
-                <strong id="homeVisionProfile">-</strong>
-              </div>
-              <div>
-                <span>本地服务</span>
-                <strong id="homeProxyState">在线</strong>
-              </div>
+            <div class="config-list compact-config-list">
+              <div><span>文本上游</span><strong id="homeTextProfile">-</strong></div>
+              <div><span>视觉上游</span><strong id="homeVisionProfile">-</strong></div>
+              <div><span>本地服务</span><strong id="homeProxyState">在线</strong></div>
             </div>
-            <div class="quick-actions">
+            <div class="quick-actions overview-quick-actions">
               <button class="secondary home-jump" type="button" data-target-page="text">文本模型</button>
               <button class="secondary home-jump" type="button" data-target-page="vision">视觉模型</button>
+              <button class="secondary home-jump" type="button" data-target-page="tokens">访问令牌</button>
               <button class="secondary home-jump" type="button" data-target-page="playground">测试台</button>
             </div>
           </article>
@@ -205,100 +157,79 @@
           <div class="hint" id="visionModelHint">视觉模型需要能描述图片内容。不要使用 llama-guard、safety、moderation 这类安全分类模型，否则只会返回 safe/unsafe。</div>
         </section>
 
-        <section class="page panel span-5" id="access" data-page-panel="access">
-          <div class="panel-head compact">
-            <div>
-              <h3>客户端接入</h3>
-              <p>同一个客户端 Key 可用于多种接口形态：Responses、Chat Completions、Anthropic、Gemini、Ollama 等。</p>
-            </div>
+        <section class="page token-page span-12" id="tokens" data-page-panel="tokens">
+          <div class="page-heading token-page-heading">
+            <div><span class="page-kicker">ACCESS TOKENS</span><h3>访问令牌</h3><p>为不同客户端创建独立令牌，便于识别调用来源并随时撤销访问。</p></div>
+            <span class="configuration-status"><i></i>仅保存在本机</span>
           </div>
 
-          <div class="key-head">
-            <label>
-              客户端名称
-              <input id="clientKeyName" placeholder="例如 Cherry Studio、Open WebUI、手机端">
-            </label>
-            <button class="secondary" id="generateKey" type="button">生成 Key</button>
-          </div>
-          <div class="key-list" id="clientKeyList"></div>
-
-          <div class="endpoint-list">
-            <div class="endpoint-row">
-              <span>OpenAI Base</span>
-              <code id="openaiBaseEndpoint"></code>
-            </div>
-            <div class="endpoint-row">
-              <span>Responses</span>
-              <code id="responsesEndpoint"></code>
-            </div>
-            <div class="endpoint-row">
-              <span>Chat</span>
-              <code id="chatEndpoint"></code>
-            </div>
-            <div class="endpoint-row">
-              <span>Anthropic Base</span>
-              <code id="anthropicBaseEndpoint"></code>
-            </div>
-            <div class="endpoint-row">
-              <span>Anthropic 消息</span>
-              <code id="anthropicMessagesEndpoint"></code>
-            </div>
-            <div class="endpoint-row">
-              <span>Gemini Base</span>
-              <code id="geminiBaseEndpoint"></code>
-            </div>
-            <div class="endpoint-row">
-              <span>Gemini 例子</span>
-              <code id="geminiGenerateEndpoint"></code>
-            </div>
-            <div class="endpoint-row">
-              <span>Ollama Chat</span>
-              <code id="ollamaChatEndpoint"></code>
-            </div>
-            <div class="endpoint-row">
-              <span>Ollama Generate</span>
-              <code id="ollamaGenerateEndpoint"></code>
-            </div>
+          <div class="token-summary-grid">
+            <article class="token-summary-card primary"><span>有效令牌</span><strong id="tokenPageKeyCount">0 个</strong><small>删除后对应客户端立即失效</small></article>
+            <article class="token-summary-card"><span>鉴权方式</span><strong>Bearer / X-API-Key</strong><small>兼容常见桌面与移动客户端</small></article>
+            <article class="token-summary-card"><span>适用范围</span><strong>全部兼容入口</strong><small>Responses、Chat、Anthropic 等</small></article>
           </div>
 
-          <div class="client-snippet">
-            <div class="client-snippet-head">
-              <div>
-              <h4>OpenCode 客户端接入</h4>
-              <p>自定义 OpenAI-compatible 模型需要声明图片附件能力，否则 OpenCode 会在本地拦截图片，不会把图片发到中转服务。</p>
+          <div class="token-content-grid">
+            <article class="component-card token-create-card">
+              <div class="component-card-head"><div><h4>创建访问令牌</h4><p>使用清晰的客户端名称，后续可在日志中快速定位调用来源。</p></div><span class="component-tag">本地鉴权</span></div>
+              <div class="key-head token-create-form"><label>客户端名称<input id="clientKeyName" placeholder="例如 Cherry Studio、Open WebUI、手机端"></label><button class="primary-action" id="generateKey" type="button">生成令牌</button></div>
+              <div class="component-alert warning"><strong>安全提示</strong><span>令牌生成后请妥善保存，不要发送到公开聊天、截图或代码仓库。</span></div>
+            </article>
+
+            <article class="component-card token-help-card">
+              <div class="component-card-head"><div><h4>接入方式</h4><p>客户端任选一种支持的鉴权头即可。</p></div><span class="component-tag success">通用</span></div>
+              <div class="token-auth-list">
+                <div><span>推荐</span><p><strong>Authorization</strong><code>Bearer &lt;TOKEN&gt;</code></p></div>
+                <div><span>兼容</span><p><strong>X-API-Key</strong><code>&lt;TOKEN&gt;</code></p></div>
+                <div><span>临时</span><p><strong>Query 参数</strong><code>?key=&lt;TOKEN&gt;</code></p></div>
               </div>
-            </div>
-            <div class="panel-actions">
-              <button class="secondary small-action" id="configureOpenCode" type="button">一键配置 OpenCode</button>
-            </div>
-            <pre><code id="opencodeConfig"></code></pre>
+            </article>
           </div>
 
-          <div class="client-snippet">
-            <div class="client-snippet-head">
-              <div>
-              <h4>Codex 客户端接入</h4>
-              <p>Codex 走 Responses 接口。把 Base URL 指向本机中转后，图片会先交给视觉模型解析，再转给当前文本模型继续完成代码任务。</p>
-              </div>
-            </div>
-            <div class="panel-actions">
-              <button class="secondary small-action" id="configureCodex" type="button">一键配置 Codex</button>
-            </div>
-            <pre><code id="codexConfig"></code></pre>
+          <article class="component-card token-list-card">
+            <div class="component-card-head"><div><h4>已创建令牌</h4><p>可复制、重命名或删除令牌；名称修改后会自动保存。</p></div><span class="component-tag">客户端隔离</span></div>
+            <div class="key-list token-key-list" id="clientKeyList"></div>
+          </article>
+        </section>
+
+        <section class="page access-page span-12" id="access" data-page-panel="access">
+          <div class="page-heading">
+            <div><span class="page-kicker">CLIENT CONNECTIONS</span><h3>客户端接入</h3><p>统一管理 Codex、OpenCode、Claude Code 与兼容 API 的连接配置。</p></div>
+            <span class="configuration-status"><i></i>配置已同步</span>
           </div>
 
-          <div class="client-snippet">
-            <div class="client-snippet-head">
-              <div>
-              <h4>Claude Code 客户端接入</h4>
-              <p>Claude Code 走 Anthropic Messages 接口。中转会把 Anthropic 请求转换到当前文本模型，并保留工具调用和图片识别结果。</p>
-              </div>
-            </div>
-            <div class="panel-actions">
-              <button class="secondary small-action" id="configureClaudeCode" type="button">一键配置 Claude Code</button>
-            </div>
-            <pre><code id="claudeCodeConfig"></code></pre>
+          <div class="access-summary-grid">
+            <article class="component-card access-endpoint-card">
+              <div class="component-card-head"><div><h4>接口地址</h4><p>复制客户端需要的 Base URL 或完整接口地址。</p></div><span class="component-tag">9 个入口</span></div>
+              <details class="endpoint-collapse" open>
+                <summary>本机兼容接口 <span>点击收起</span></summary>
+                <div class="endpoint-list">
+                  <div class="endpoint-row"><span>OpenAI Base</span><code id="openaiBaseEndpoint"></code></div><div class="endpoint-row"><span>Responses</span><code id="responsesEndpoint"></code></div><div class="endpoint-row"><span>Chat</span><code id="chatEndpoint"></code></div><div class="endpoint-row"><span>Anthropic Base</span><code id="anthropicBaseEndpoint"></code></div><div class="endpoint-row"><span>Anthropic 消息</span><code id="anthropicMessagesEndpoint"></code></div><div class="endpoint-row"><span>Gemini Base</span><code id="geminiBaseEndpoint"></code></div><div class="endpoint-row"><span>Gemini 例子</span><code id="geminiGenerateEndpoint"></code></div><div class="endpoint-row"><span>Ollama Chat</span><code id="ollamaChatEndpoint"></code></div><div class="endpoint-row"><span>Ollama Generate</span><code id="ollamaGenerateEndpoint"></code></div>
+                </div>
+              </details>
+            </article>
+            <article class="component-card access-guide-card">
+              <div class="component-card-head"><div><h4>快速配置</h4><p>推荐按以下流程完成客户端接入。</p></div><span class="component-tag success">3 步</span></div>
+              <div class="access-guide-list"><div><span>1</span><p><strong>创建独立访问令牌</strong><small>在“访问令牌”菜单中为客户端生成专属令牌。</small></p></div><div><span>2</span><p><strong>选择并配置客户端</strong><small>在下方标签中选择 Codex、OpenCode 或 Claude Code。</small></p></div><div><span>3</span><p><strong>重启并发送测试消息</strong><small>模型列表与多模态能力会自动同步。</small></p></div></div>
+              <div class="component-alert info"><strong>配置提示</strong><span>切换文本模型后，无需重新生成客户端配置。</span></div>
+            </article>
           </div>
+
+          <article class="component-card codex-enhancements">
+            <div class="component-card-head"><div><h4>Codex 增强设置</h4><p>登录凭据和会话数据保留在本地，切换供应商时保持连续。</p></div><span class="component-tag success">安全隔离</span></div>
+            <div class="enhancement-list">
+              <label class="enhancement-row"><span class="enhancement-icon" aria-hidden="true">ID</span><span class="enhancement-copy"><strong>切换第三方时保留官方登录</strong><small>第三方 API 配置不会覆盖 Codex 官方身份，可继续使用官方插件和手机远程操作。</small></span><span class="switch-control"><input id="preserveCodexOfficialAuth" type="checkbox"><span aria-hidden="true"></span></span></label>
+              <label class="enhancement-row"><span class="enhancement-icon history" aria-hidden="true">HS</span><span class="enhancement-copy"><strong>统一 Codex 会话历史</strong><small>官方与第三方会话显示在同一历史列表；开启前自动创建迁移备份。</small></span><span class="switch-control"><input id="unifyCodexSessionHistory" type="checkbox"><span aria-hidden="true"></span></span></label>
+            </div>
+          </article>
+
+          <article class="component-card client-config-card">
+            <div class="component-card-head client-config-heading"><div><h4>客户端配置</h4><p>选择客户端后复制配置，或使用一键配置写入本地文件。</p></div><span class="component-tag">自动生成</span></div>
+            <div class="client-tabs" role="tablist" aria-label="客户端类型"><button class="client-tab active" type="button" role="tab" aria-selected="true" data-client-tab="codex">Codex</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="opencode">OpenCode</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="claude-code">Claude Code</button></div>
+            <div class="client-tab-panel active" data-client-panel="codex"><div class="client-panel-intro"><div><h4>Codex</h4><p>通过 Responses 接口连接本机中转，并保留工具调用和图片解析结果。</p></div><div class="panel-actions"><button class="secondary small-action" id="restoreCodex" type="button">恢复官方模式</button><button class="primary-action small-action" id="configureCodex" type="button">一键配置 Codex</button></div></div><pre><code id="codexConfig"></code></pre></div>
+            <div class="client-tab-panel" data-client-panel="opencode" hidden><div class="client-panel-intro"><div><h4>OpenCode</h4><p>配置 OpenAI-compatible 模型的图片附件能力，避免客户端在本地拦截图片。</p></div><div class="panel-actions"><button class="primary-action small-action" id="configureOpenCode" type="button">一键配置 OpenCode</button></div></div><pre><code id="opencodeConfig"></code></pre></div>
+            <div class="client-tab-panel" data-client-panel="claude-code" hidden><div class="client-panel-intro"><div><h4>Claude Code</h4><p>通过 Anthropic Messages 接口连接，并保留工具调用和视觉识别结果。</p></div><div class="panel-actions"><button class="primary-action small-action" id="configureClaudeCode" type="button">一键配置 Claude Code</button></div></div><pre><code id="claudeCodeConfig"></code></pre></div>
+          </article>
         </section>
 
         <section class="page panel span-12" id="logs" data-page-panel="logs">
@@ -392,6 +323,7 @@
           <pre id="output"></pre>
         </section>
       </form>
+      </div>
     </main>
   </div>
 
@@ -445,7 +377,7 @@
           <div class="model-mapping-head">
             <div>
               <strong>模型映射</strong>
-              <small>生成 Codex model_catalog_json，让 /model 命令显示这些第三方模型名；表中条目按填写内容保存。</small>
+              <small>每个模型可独立勾选是否原生支持多模态；未勾选时，如视觉能力开启则先调用视觉模型识别。</small>
             </div>
             <div class="model-mapping-actions">
               <button class="secondary small-action" id="fetchModelsForMapping" type="button">获取模型列表</button>
@@ -456,6 +388,7 @@
             <span>菜单显示名</span>
             <span>实际请求模型</span>
             <span>上下文窗口</span>
+            <span>支持多模态</span>
             <span></span>
           </div>
           <div class="model-mapping-rows" id="modelMappingRows"></div>
@@ -472,13 +405,6 @@
           网络代理 URL
           <input id="modalProfileProxyURL" placeholder="例如 http://127.0.0.1:7890">
         </label>
-        <label class="toggle-line modal-toggle-line" id="modalProfileSupportsImagesWrap">
-          <input id="modalProfileSupportsImages" type="checkbox">
-          <span>
-            <strong>文本模型支持多模态</strong>
-            <small>勾选后图片直接发到该文本模型；不勾选时，如视觉能力开启则先调用视觉模型识别。</small>
-          </span>
-        </label>
       </div>
 
       <div class="modal-actions">
@@ -487,6 +413,9 @@
       </div>
     </form>
   </dialog>
+  <script src="/assets/vendor/vue/vue.global.prod.js"></script>
+  <script src="/assets/vendor/element-plus/index.full.min.js"></script>
+  <script src="/assets/js/ui-components.js"></script>
   <script src="/assets/js/app.js"></script>
 </body>
 </html>

@@ -57,3 +57,26 @@ func TestUpdateUIIsEmbedded(t *testing.T) {
 		t.Fatal("update UI contains question-mark mojibake")
 	}
 }
+
+func TestTopbarRemovedAndServiceStatusMovedToSidebar(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	if strings.Contains(index, `class="app-topbar"`) || strings.Contains(index, `id="topServiceState"`) {
+		t.Fatal("top bar should be removed")
+	}
+	if !strings.Contains(index, `id="serviceCard"`) || !strings.Contains(index, `id="serviceState">服务检测中`) {
+		t.Fatal("sidebar service status is missing")
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	if !strings.Contains(script, `serviceState.textContent = online ? "服务运行正常" : "服务连接失败"`) {
+		t.Fatal("service status text was not moved to the sidebar card")
+	}
+}

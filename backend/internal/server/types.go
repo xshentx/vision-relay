@@ -10,32 +10,34 @@ import (
 )
 
 type config struct {
-	Addr                  string               `json:"addr"`
-	ActiveModelProfileID  string               `json:"active_model_profile_id,omitempty"`
-	ModelProfiles         []modelProfile       `json:"model_profiles,omitempty"`
-	ActiveTextProfileID   string               `json:"active_text_profile_id"`
-	TextModelProfiles     []textModelProfile   `json:"text_model_profiles"`
-	ActiveVisionProfileID string               `json:"active_vision_profile_id"`
-	VisionModelProfiles   []visionModelProfile `json:"vision_model_profiles"`
-	TextProvider          string               `json:"text_provider"`
-	TextBaseURL           string               `json:"text_base_url"`
-	TextAPIKey            string               `json:"text_api_key"`
-	TextModelOverride     string               `json:"text_model_override"`
-	TextModelOverrides    []string             `json:"text_model_overrides,omitempty"`
-	TextModelMappings     []textModelMapping   `json:"text_model_mappings,omitempty"`
-	TextWireAPI           string               `json:"text_wire_api"`
-	TextSupportsImages    bool                 `json:"text_supports_images"`
-	ProxyURL              string               `json:"proxy_url"`
-	VisionProvider        string               `json:"vision_provider"`
-	VisionBaseURL         string               `json:"vision_base_url"`
-	VisionAPIKey          string               `json:"vision_api_key"`
-	VisionModel           string               `json:"vision_model"`
-	VisionPrompt          string               `json:"vision_prompt"`
-	VisionEnabled         *bool                `json:"vision_enabled"`
-	ClientAPIKeys         []string             `json:"client_api_keys,omitempty"`
-	ClientAPIKeyEntries   []clientAPIKeyEntry  `json:"client_api_key_entries"`
-	OpenWindow            bool                 `json:"open_window"`
-	OpenBrowser           bool                 `json:"open_browser"`
+	Addr                              string               `json:"addr"`
+	ActiveModelProfileID              string               `json:"active_model_profile_id,omitempty"`
+	ModelProfiles                     []modelProfile       `json:"model_profiles,omitempty"`
+	ActiveTextProfileID               string               `json:"active_text_profile_id"`
+	TextModelProfiles                 []textModelProfile   `json:"text_model_profiles"`
+	ActiveVisionProfileID             string               `json:"active_vision_profile_id"`
+	VisionModelProfiles               []visionModelProfile `json:"vision_model_profiles"`
+	TextProvider                      string               `json:"text_provider"`
+	TextBaseURL                       string               `json:"text_base_url"`
+	TextAPIKey                        string               `json:"text_api_key"`
+	TextModelOverride                 string               `json:"text_model_override"`
+	TextModelOverrides                []string             `json:"text_model_overrides,omitempty"`
+	TextModelMappings                 []textModelMapping   `json:"text_model_mappings,omitempty"`
+	TextWireAPI                       string               `json:"text_wire_api"`
+	TextSupportsImages                bool                 `json:"text_supports_images,omitempty"`
+	ProxyURL                          string               `json:"proxy_url"`
+	VisionProvider                    string               `json:"vision_provider"`
+	VisionBaseURL                     string               `json:"vision_base_url"`
+	VisionAPIKey                      string               `json:"vision_api_key"`
+	VisionModel                       string               `json:"vision_model"`
+	VisionPrompt                      string               `json:"vision_prompt"`
+	VisionEnabled                     *bool                `json:"vision_enabled"`
+	PreserveCodexOfficialAuthOnSwitch *bool                `json:"preserve_codex_official_auth_on_switch"`
+	UnifyCodexSessionHistory          bool                 `json:"unify_codex_session_history"`
+	ClientAPIKeys                     []string             `json:"client_api_keys,omitempty"`
+	ClientAPIKeyEntries               []clientAPIKeyEntry  `json:"client_api_key_entries"`
+	OpenWindow                        bool                 `json:"open_window"`
+	OpenBrowser                       bool                 `json:"open_browser"`
 }
 
 type textModelProfile struct {
@@ -48,7 +50,7 @@ type textModelProfile struct {
 	ModelOverrides []string           `json:"model_overrides,omitempty"`
 	ModelMappings  []textModelMapping `json:"model_mappings,omitempty"`
 	WireAPI        string             `json:"wire_api"`
-	SupportsImages bool               `json:"supports_images"`
+	SupportsImages bool               `json:"supports_images,omitempty"`
 	ProxyURL       string             `json:"proxy_url"`
 }
 
@@ -71,7 +73,7 @@ type modelProfile struct {
 	TextModelOverrides []string           `json:"text_model_overrides,omitempty"`
 	TextModelMappings  []textModelMapping `json:"text_model_mappings,omitempty"`
 	TextWireAPI        string             `json:"text_wire_api"`
-	TextSupportsImages bool               `json:"text_supports_images"`
+	TextSupportsImages bool               `json:"text_supports_images,omitempty"`
 	ProxyURL           string             `json:"proxy_url"`
 	VisionProvider     string             `json:"vision_provider"`
 	VisionBaseURL      string             `json:"vision_base_url"`
@@ -80,9 +82,10 @@ type modelProfile struct {
 }
 
 type textModelMapping struct {
-	Name          string  `json:"name"`
-	Model         string  `json:"model"`
-	ContextWindow flexInt `json:"context_window,omitempty"`
+	Name           string  `json:"name"`
+	Model          string  `json:"model"`
+	ContextWindow  flexInt `json:"context_window,omitempty"`
+	SupportsImages bool    `json:"supports_images,omitempty"`
 }
 
 type flexInt int

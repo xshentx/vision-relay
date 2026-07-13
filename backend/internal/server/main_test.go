@@ -400,7 +400,7 @@ func TestProcessOpenAIChatSkipsVisionWhenDisabled(t *testing.T) {
 	_ = resp.Body.Close()
 }
 
-func TestProcessOpenAIChatBypassesVisionWhenTextSupportsImages(t *testing.T) {
+func TestProcessOpenAIChatBypassesVisionWhenSelectedModelSupportsImages(t *testing.T) {
 	textServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -426,14 +426,17 @@ func TestProcessOpenAIChatBypassesVisionWhenTextSupportsImages(t *testing.T) {
 	defer visionServer.Close()
 	a := &app{
 		cfg: normalizeSeparateModelProfiles(config{
-			TextProvider:       "openai",
-			TextBaseURL:        textServer.URL,
-			TextSupportsImages: true,
-			VisionProvider:     "openai",
-			VisionBaseURL:      visionServer.URL,
-			VisionAPIKey:       "vision-key",
-			VisionModel:        "vision-test",
-			VisionEnabled:      boolPtr(true),
+			TextProvider: "openai",
+			TextBaseURL:  textServer.URL,
+			TextModelMappings: []textModelMapping{
+				{Name: "glm-5.1", Model: "glm-5.1", SupportsImages: true},
+				{Name: "glm-5.1-text", Model: "glm-5.1-text"},
+			},
+			VisionProvider: "openai",
+			VisionBaseURL:  visionServer.URL,
+			VisionAPIKey:   "vision-key",
+			VisionModel:    "vision-test",
+			VisionEnabled:  boolPtr(true),
 		}),
 		httpClient: textServer.Client(),
 	}
@@ -959,13 +962,15 @@ func TestOpenAIModelsDoesNotAdvertiseImageSupportWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestOpenAIModelsAdvertisesImageSupportWhenTextSupportsImages(t *testing.T) {
+func TestOpenAIModelsAdvertisesImageSupportFromVisionCapability(t *testing.T) {
 	a := &app{
 		cfg: normalizeSeparateModelProfiles(config{
-			TextProvider:       "openai",
-			TextModelOverride:  "native-vision-text",
-			TextSupportsImages: true,
-			VisionEnabled:      boolPtr(false),
+			TextProvider: "openai",
+			TextModelMappings: []textModelMapping{
+				{Name: "native-vision-text", Model: "native-vision-text", SupportsImages: true},
+				{Name: "plain-text", Model: "plain-text"},
+			},
+			VisionEnabled: boolPtr(false),
 		}),
 		httpClient: http.DefaultClient,
 	}
@@ -980,9 +985,70 @@ func TestOpenAIModelsAdvertisesImageSupportWhenTextSupportsImages(t *testing.T) 
 		t.Fatal(err)
 	}
 	data := payload["data"].([]any)
-	model := data[0].(map[string]any)
-	if model["attachment"] != true || model["supports_images"] != true || model["vision"] != true {
-		t.Fatalf("model should advertise direct image support: %#v", model)
+	for _, item := range data {
+		model := item.(map[string]any)
+		if model["attachment"] == true || model["supports_images"] == true || model["vision"] == true {
+			t.Fatalf("vision-disabled model should not advertise image support: %#v", model)
+		}
+	}
+
+	a.cfg.VisionEnabled = boolPtr(true)
+	rec = httptest.NewRecorder()
+	a.handleRoute(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	payload = nil
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	data = payload["data"].([]any)
+	for _, item := range data {
+		model := item.(map[string]any)
+		if model["attachment"] != true || model["supports_images"] != true || model["vision"] != true {
+			t.Fatalf("vision-enabled model should advertise image support: %#v", model)
+		}
+	}
+}
+
+func TestNormalizeTextProfileMigratesLegacyImageSupportToMappings(t *testing.T) {
+	cfg := normalizeSeparateModelProfiles(config{
+		ActiveTextProfileID: "text-legacy",
+		TextModelProfiles: []textModelProfile{{
+			ID: "text-legacy",
+			ModelMappings: []textModelMapping{
+				{Name: "model-a", Model: "model-a"},
+				{Name: "model-b", Model: "model-b"},
+			},
+			SupportsImages: true,
+		}},
+		VisionEnabled: boolPtr(false),
+	})
+
+	profile := cfg.TextModelProfiles[0]
+	if profile.SupportsImages || cfg.TextSupportsImages {
+		t.Fatalf("legacy provider-level image flags should be consumed: %#v", profile)
+	}
+	for _, mapping := range profile.ModelMappings {
+		if !mapping.SupportsImages {
+			t.Fatalf("legacy image support was not migrated to model %q: %#v", mapping.Name, profile.ModelMappings)
+		}
+	}
+}
+
+func TestShouldAugmentImagesUsesSelectedModelCapability(t *testing.T) {
+	cfg := config{
+		TextModelMappings: []textModelMapping{
+			{Name: "vision-model", Model: "upstream-vision", SupportsImages: true},
+			{Name: "text-model", Model: "upstream-text"},
+		},
+		VisionEnabled: boolPtr(true),
+	}
+	if shouldAugmentImages(cfg, "vision-model") {
+		t.Fatal("multimodal model should receive images directly")
+	}
+	if !shouldAugmentImages(cfg, "text-model") {
+		t.Fatal("text-only model should use the configured vision relay")
 	}
 }
 
@@ -1320,6 +1386,55 @@ func TestAuthorizedAcceptsCodexAccountBearer(t *testing.T) {
 	localReq.Header.Set("Authorization", "Bearer sk-local-client")
 	if !a.authorized(localReq) {
 		t.Fatal("configured local client key should be accepted")
+	}
+}
+
+func TestClientLogIdentityMapsCodexManagedBearer(t *testing.T) {
+	a := &app{
+		cfg: config{
+			ClientAPIKeyEntries: []clientAPIKeyEntry{
+				{Name: "Codex Client", Key: "sk-codex-client"},
+			},
+		},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.Header.Set("Authorization", "Bearer "+codexManagedBearerToken)
+	name, preview := a.clientLogIdentity(req)
+	if name != "Codex Client" || preview != keyPreview("sk-codex-client") {
+		t.Fatalf("managed bearer was not mapped to the configured client: %q %q", name, preview)
+	}
+}
+
+func TestCurrentLogsPageRepairsLegacyCodexManagedIdentity(t *testing.T) {
+	db, err := openAppDB(filepath.Join(t.TempDir(), appSlug+".db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := insertRequestLogDB(db, requestLog{
+		At:               time.Now(),
+		Method:           http.MethodPost,
+		Path:             "/v1/responses",
+		ClientName:       "未匹配密钥",
+		ClientKeyPreview: keyPreview(codexManagedBearerToken),
+		Status:           http.StatusOK,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{
+		db: db,
+		cfg: config{
+			ClientAPIKeyEntries: []clientAPIKeyEntry{
+				{Name: "Codex Client", Key: "sk-codex-client"},
+			},
+		},
+	}
+	logs, total := a.currentLogsPage(1, 20)
+	if total != 1 || len(logs) != 1 {
+		t.Fatalf("expected one log, total=%d logs=%d", total, len(logs))
+	}
+	if logs[0].ClientName != "Codex Client" || logs[0].ClientKeyPreview != keyPreview("sk-codex-client") {
+		t.Fatalf("legacy managed log was not repaired: %#v", logs[0])
 	}
 }
 

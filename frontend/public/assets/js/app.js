@@ -24,6 +24,9 @@ const opencodeConfig = document.querySelector("#opencodeConfig");
 const configureOpenCode = document.querySelector("#configureOpenCode");
 const codexConfig = document.querySelector("#codexConfig");
 const configureCodex = document.querySelector("#configureCodex");
+const restoreCodex = document.querySelector("#restoreCodex");
+const preserveCodexOfficialAuth = document.querySelector("#preserveCodexOfficialAuth");
+const unifyCodexSessionHistory = document.querySelector("#unifyCodexSessionHistory");
 
 const claudeCodeConfig = document.querySelector("#claudeCodeConfig");
 const configureClaudeCode = document.querySelector("#configureClaudeCode");
@@ -60,8 +63,6 @@ const addFetchedModels = document.querySelector("#addFetchedModels");
 const modelPickerStatus = document.querySelector("#modelPickerStatus");
 const modalProfileProxyWrap = document.querySelector("#modalProfileProxyWrap");
 const modalProfileProxyURL = document.querySelector("#modalProfileProxyURL");
-const modalProfileSupportsImagesWrap = document.querySelector("#modalProfileSupportsImagesWrap");
-const modalProfileSupportsImages = document.querySelector("#modalProfileSupportsImages");
 const navItems = [...document.querySelectorAll(".nav-item")];
 const pages = [...document.querySelectorAll("[data-page-panel]")];
 const homeJumpButtons = [...document.querySelectorAll(".home-jump")];
@@ -71,6 +72,7 @@ const homeTextProvider = document.querySelector("#homeTextProvider");
 const homeVisionModel = document.querySelector("#homeVisionModel");
 const homeVisionProvider = document.querySelector("#homeVisionProvider");
 const homeKeyCount = document.querySelector("#homeKeyCount");
+const tokenPageKeyCount = document.querySelector("#tokenPageKeyCount");
 const homeTextProfile = document.querySelector("#homeTextProfile");
 const homeVisionProfile = document.querySelector("#homeVisionProfile");
 const homeProxyState = document.querySelector("#homeProxyState");
@@ -82,6 +84,9 @@ const updatePublishedAt = document.querySelector("#updatePublishedAt");
 const updateState = document.querySelector("#updateState");
 const updateNotes = document.querySelector("#updateNotes");
 const releaseLink = document.querySelector("#releaseLink");
+const serviceCard = document.querySelector("#serviceCard");
+const clientTabButtons = [...document.querySelectorAll("[data-client-tab]")];
+const clientTabPanels = [...document.querySelectorAll("[data-client-panel]")];
 
 let imageDataUrl = "";
 let testMode = "chat";
@@ -136,6 +141,22 @@ homeJumpButtons.forEach((button) => {
   });
 });
 
+clientTabButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const client = button.dataset.clientTab;
+    clientTabButtons.forEach((tab) => {
+      const active = tab.dataset.clientTab === client;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+    });
+    clientTabPanels.forEach((panel) => {
+      const active = panel.dataset.clientPanel === client;
+      panel.classList.toggle("active", active);
+      panel.hidden = !active;
+    });
+  });
+});
+
 function showPage(page) {
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.page === page));
   pages.forEach((panel) => panel.classList.toggle("active", panel.dataset.pagePanel === page));
@@ -145,13 +166,33 @@ function setStatus(text) {
   statusEl.textContent = text;
 }
 
+function setServiceOnline(online) {
+  serviceState.textContent = online ? "服务运行正常" : "服务连接失败";
+  if (serviceCard) {
+    serviceCard.classList.toggle("online", online);
+    serviceCard.classList.toggle("offline", !online);
+  }
+}
+
 function showToast(message, type = "info") {
+  if (window.VisionRelayUI?.notify) {
+    window.VisionRelayUI.notify(message, type);
+    return;
+  }
   clearTimeout(toastTimer);
   toast.textContent = message;
   toast.className = `toast show ${type}`;
   toastTimer = setTimeout(() => {
     toast.className = "toast";
   }, 3200);
+}
+
+async function confirmAction(options) {
+  if (window.VisionRelayUI?.confirm) {
+    return await window.VisionRelayUI.confirm(options);
+  }
+  showToast("确认组件加载失败，请刷新页面后重试", "error");
+  return false;
 }
 
 async function readErrorMessage(res) {
@@ -192,22 +233,28 @@ async function loadConfig() {
       field.value = value ?? "";
     }
   }
+  if (preserveCodexOfficialAuth) {
+    preserveCodexOfficialAuth.checked = cfg.preserve_codex_official_auth_on_switch !== false;
+  }
+  if (unifyCodexSessionHistory) {
+    unifyCodexSessionHistory.checked = cfg.unify_codex_session_history === true;
+  }
   renderTextProfiles();
   applyTextProfile(activeTextProfileId);
   renderVisionProfiles();
   applyVisionProfile(activeVisionProfileId);
   clientKeys = normalizeClientKeys(cfg.client_api_key_entries || keysToEntries(cfg.client_api_keys || []));
   renderClientKeys();
+  setServiceOnline(true);
   renderOverview();
   setStatus("已加载");
-  serviceState.textContent = "在线";
 }
 
 reloadConfig.addEventListener("click", () => {
   loadConfig().catch((err) => {
     console.error(err);
     setStatus("加载失败");
-    serviceState.textContent = "离线";
+    setServiceOnline(false);
   });
 });
 
@@ -276,6 +323,28 @@ visionEnabledInput?.addEventListener("change", () => {
   persistConfig(message).catch((err) => {
     console.error(err);
     showToast(`保存失败：${err.message || err}`, "error");
+  });
+});
+
+preserveCodexOfficialAuth?.addEventListener("change", () => {
+	const enabled = preserveCodexOfficialAuth.checked;
+  const message = preserveCodexOfficialAuth.checked ? "切换第三方时将保留官方登录" : "切换第三方时将使用中转认证";
+  persistConfig(message).catch((err) => {
+    console.error(err);
+		preserveCodexOfficialAuth.checked = !enabled;
+    showToast(`保存失败：${err.message || err}`, "error");
+  });
+});
+
+unifyCodexSessionHistory?.addEventListener("change", () => {
+	const enabled = unifyCodexSessionHistory.checked;
+	updateCodexHistorySetting(enabled).catch((err) => {
+    console.error(err);
+		if (!err.codexSettingPersisted) {
+			unifyCodexSessionHistory.checked = !enabled;
+		}
+		const prefix = err.codexSettingPersisted ? "开关已保存，但 Codex 会话历史处理失败" : "更新 Codex 会话历史失败";
+		showToast(`${prefix}：${err.message || err}`, "error");
   });
 });
 
@@ -358,6 +427,8 @@ async function persistConfig(successMessage = "配置已自动保存") {
   data.open_browser = false;
   data.vision_prompt = currentConfig.vision_prompt || "";
   data.vision_enabled = visionCapabilityEnabled;
+  data.preserve_codex_official_auth_on_switch = preserveCodexOfficialAuth?.checked !== false;
+  data.unify_codex_session_history = unifyCodexSessionHistory?.checked === true;
   syncClientKeyNames();
   data.client_api_key_entries = normalizeClientKeys(clientKeys);
   data.text_model_profiles = normalizeTextProfiles(textProfiles);
@@ -429,6 +500,13 @@ clientConfigureActions.forEach(({button, client, name}) => {
   });
 });
 
+restoreCodex?.addEventListener("click", () => {
+  restoreCodexOfficialMode().catch((err) => {
+    console.error(err);
+    showToast(`恢复 Codex 官方模式失败：${err.message || err}`, "error");
+  });
+});
+
 async function configureClient({button, client, name}) {
   if (button) button.disabled = true;
   try {
@@ -446,6 +524,89 @@ async function configureClient({button, client, name}) {
   } finally {
     if (button) button.disabled = false;
   }
+}
+
+async function restoreCodexOfficialMode() {
+  restoreCodex.disabled = true;
+  try {
+    const res = await fetch("/api/client/restore", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({client: "codex"})
+    });
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    showToast("已恢复 Codex 官方模式；请重新启动 Codex", "success");
+    setStatus("Codex 官方模式已恢复");
+  } finally {
+    restoreCodex.disabled = false;
+  }
+}
+
+async function updateCodexHistorySetting(enabled) {
+  let settingPersisted = false;
+  try {
+    if (enabled) {
+      const migrateExisting = await confirmAction({
+        title: "开启统一会话历史",
+        message: "系统将安全地整理现有 Codex 会话，并保留一份迁移前备份。",
+        variant: "success",
+        steps: [
+          "自动备份当前官方会话数据",
+          "合并官方与第三方历史记录",
+          "后续会话统一展示与管理"
+        ],
+        alertTitle: "请注意",
+        alertMessage: "含加密推理内容的旧会话，跨供应商继续时可能无法恢复完整上下文。",
+        confirmText: "确认开启",
+        cancelText: "暂不迁移"
+      });
+      await persistConfig("已开启 Codex 统一会话历史");
+      settingPersisted = true;
+      const prepared = await runCodexHistoryAction("prepare");
+      if (prepared.config_updated) {
+        showToast("已将当前官方 provider 统一为 custom；请重新启动 Codex", "success");
+      }
+      if (!migrateExisting) return;
+      const result = await runCodexHistoryAction("migrate");
+      showToast(`已迁移 ${result.sessions || 0} 个会话、${result.threads || 0} 条线程`, "success");
+      return;
+    }
+
+    const statusRes = await fetch("/api/client/codex/history");
+    if (!statusRes.ok) throw new Error(await readErrorMessage(statusRes));
+    const historyStatus = await statusRes.json();
+    const restoreExisting = historyStatus.has_backup && await confirmAction({
+      title: "恢复原官方会话标识？",
+      message: "检测到统一历史迁移备份，可把迁移前的官方会话精确恢复为 openai 标识。",
+      variant: "warning",
+      alertTitle: "恢复范围",
+      alertMessage: "开启统一历史后新建的第三方会话不会被改回。",
+      confirmText: "恢复备份",
+      cancelText: "仅关闭功能"
+    });
+    await persistConfig("已关闭 Codex 统一会话历史");
+    settingPersisted = true;
+    const unprepared = await runCodexHistoryAction("unprepare");
+    if (unprepared.config_updated) {
+      showToast("已将官方 provider 恢复为 openai；请重新启动 Codex", "success");
+    }
+    if (!restoreExisting) return;
+    const result = await runCodexHistoryAction("restore");
+    showToast(`已恢复 ${result.sessions || 0} 个会话、${result.threads || 0} 条线程`, "success");
+  } catch (err) {
+    err.codexSettingPersisted = settingPersisted;
+    throw err;
+  }
+}
+
+async function runCodexHistoryAction(action) {
+  const res = await fetch("/api/client/codex/history", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({action})
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  return await res.json();
 }
 
 function renderClientKeys() {
@@ -610,6 +771,7 @@ function renderOverview() {
   if (homeVisionModel) homeVisionModel.textContent = visionProfile?.model || "未设置模型";
   if (homeVisionProvider) homeVisionProvider.textContent = profileHeadline(visionProfile, "vision");
   if (homeKeyCount) homeKeyCount.textContent = `${keys.length} 个`;
+  if (tokenPageKeyCount) tokenPageKeyCount.textContent = `${keys.length} 个`;
   if (homeTextProfile) homeTextProfile.textContent = profileDetail(textProfile, "text");
   if (homeVisionProfile) homeVisionProfile.textContent = profileDetail(visionProfile, "vision");
   if (!visionCapabilityEnabled) {
@@ -740,8 +902,6 @@ function openProfileModal(kind, mode, profileId = "") {
   renderModelMappingRows();
   modalProfileProxyWrap.hidden = !isText;
   modalProfileWireAPIWrap.hidden = !isText;
-  modalProfileSupportsImagesWrap.hidden = !isText;
-  modalProfileSupportsImages.checked = isText && profile?.supports_images === true;
   modalProfileProxyURL.value = isText ? profile?.proxy_url || "" : "";
   resetModelPicker();
   if (profileModal.showModal) {
@@ -849,6 +1009,10 @@ function renderModelMappingRows() {
       <input data-field="name" value="${escapeAttr(mapping.name || "")}" placeholder="例如：DeepSeek V4 Flash">
       <input data-field="model" value="${escapeAttr(mapping.model || "")}" placeholder="例如：deepseek-v4-flash">
       <input data-field="context_window" type="number" min="0" step="1" value="${escapeAttr(mapping.context_window || "")}" placeholder="例如：128000">
+      <label class="model-mapping-supports-images" title="勾选后图片直接发送给该文本模型">
+        <input data-field="supports_images" type="checkbox" ${mapping.supports_images === true ? "checked" : ""}>
+        <span>多模态</span>
+      </label>
       <button class="icon-button model-mapping-delete" type="button" aria-label="删除模型">×</button>
     `;
     row.querySelectorAll("input").forEach((input) => {
@@ -870,8 +1034,8 @@ function addModelMappingRow(mapping = {}, focus = true) {
   modalModelMappings.push(normalizeModelMapping(mapping));
   renderModelMappingRows();
   if (focus) {
-    const inputs = modelMappingRows.querySelectorAll(".model-mapping-row input");
-    inputs[Math.max(0, inputs.length - 3)]?.focus();
+    const rows = modelMappingRows.querySelectorAll(".model-mapping-row");
+    rows[rows.length - 1]?.querySelector('[data-field="name"]')?.focus();
   }
 }
 
@@ -881,7 +1045,8 @@ function updateModelMappingFromRows() {
     .map((row) => normalizeModelMapping({
       name: row.querySelector('[data-field="name"]')?.value,
       model: row.querySelector('[data-field="model"]')?.value,
-      context_window: row.querySelector('[data-field="context_window"]')?.value
+      context_window: row.querySelector('[data-field="context_window"]')?.value,
+      supports_images: row.querySelector('[data-field="supports_images"]')?.checked === true
     }));
 }
 
@@ -899,7 +1064,7 @@ function addSelectedModelsToModal(showMessage) {
     const existing = new Set(modalModelMappings.map((mapping) => mapping.model || mapping.name).filter(Boolean));
     selected.forEach((model) => {
       if (!existing.has(model)) {
-        modalModelMappings.push({name: model, model, context_window: ""});
+        modalModelMappings.push({name: model, model, context_window: "", supports_images: false});
         existing.add(model);
       }
     });
@@ -945,7 +1110,6 @@ async function createProfileFromModal() {
       model_overrides: modelMappingsToModels(modalModelMappings),
       model_mappings: normalizeModelMappings(modalModelMappings),
       wire_api: modalProfileWireAPI.value,
-      supports_images: modalProfileSupportsImages.checked,
       proxy_url: modalProfileProxyURL.value
     }, textProfiles.length);
     if (isEdit) {
@@ -1001,7 +1165,6 @@ function defaultProfileDraft(kind, index) {
       model_override: "",
       model_overrides: [],
       wire_api: "chat_completions",
-      supports_images: false,
       proxy_url: ""
     };
   }
@@ -1079,7 +1242,8 @@ function normalizeModelMapping(value) {
   return {
     name: name || model,
     model: model || name,
-    context_window: Number.isFinite(contextWindow) && contextWindow > 0 ? Math.floor(contextWindow) : 0
+    context_window: Number.isFinite(contextWindow) && contextWindow > 0 ? Math.floor(contextWindow) : 0,
+    supports_images: value?.supports_images === true
   };
 }
 
@@ -1109,20 +1273,20 @@ function modelMappingsToModels(mappings) {
     });
 }
 
-function visionInputModalities() {
-  return relayImageInputEnabled() ? ["text", "image"] : ["text"];
+function visionInputModalities(imageEnabled) {
+  return imageEnabled ? ["text", "image"] : ["text"];
 }
 
-function relayImageInputEnabled() {
-  return activeTextProfile()?.supports_images === true || visionCapabilityEnabled;
+function clientImageInputEnabled() {
+  return visionCapabilityEnabled;
 }
 
 function renderOpenCodeSnippet() {
   const profile = activeTextProfile();
-  const models = textProfileModels(profile);
-  const model = (models[0] || "z-ai/glm-5.2").trim();
+  const mappings = textProfileMappings(profile);
+  const snippetMappings = mappings.length ? mappings : [{name: "z-ai/glm-5.2", model: "z-ai/glm-5.2", context_window: 0, supports_images: false}];
+  const model = (snippetMappings[0].model || "z-ai/glm-5.2").trim();
   const key = normalizeClientKeys(clientKeys)[0]?.key || "请先生成客户端 Key";
-  const inputModalities = visionInputModalities();
   if (opencodeConfig) {
     opencodeConfig.textContent = JSON.stringify({
       "$schema": "https://opencode.ai/config.json",
@@ -1134,30 +1298,36 @@ function renderOpenCodeSnippet() {
             baseURL: `${location.origin}/v1`,
             apiKey: key
           },
-          models: Object.fromEntries(modelsForSnippet(profile).map((modelName) => [modelName, {
+          models: Object.fromEntries(snippetMappings.map((mapping) => {
+            const modelName = mapping.name || mapping.model;
+            const imageEnabled = clientImageInputEnabled();
+            const inputModalities = visionInputModalities(imageEnabled);
+            return [modelName, {
               name: modelName,
-              attachment: relayImageInputEnabled(),
-              attachments: relayImageInputEnabled(),
-              vision: relayImageInputEnabled(),
+              attachment: imageEnabled,
+              attachments: imageEnabled,
+              vision: imageEnabled,
               input_modalities: inputModalities,
               output_modalities: ["text"],
               modalities: {
                 input: inputModalities,
                 output: ["text"]
               }
-            }]))
+            }];
+          }))
         }
       },
       model: `vision-relay/${model}`
     }, null, 2);
   }
   if (codexConfig) {
-    const codexMappings = textProfileMappings(profile);
-    const catalogMappings = codexMappings.length ? codexMappings : [{name: "z-ai/glm-5.2", model: "z-ai/glm-5.2", context_window: 0}];
+    const catalogMappings = snippetMappings;
     const codexDefaultModel = catalogMappings[0].name || catalogMappings[0].model;
     const codexCatalog = {
       models: catalogMappings.map((mapping, index) => {
         const slug = mapping.name || mapping.model;
+        const imageEnabled = clientImageInputEnabled();
+        const inputModalities = visionInputModalities(imageEnabled);
         return {
         slug,
         display_name: slug,
@@ -1180,7 +1350,7 @@ function renderOpenCodeSnippet() {
         shell_type: "shell_command",
         input_modalities: inputModalities,
         supports_parallel_tool_calls: false,
-        supports_image_detail_original: relayImageInputEnabled(),
+        supports_image_detail_original: imageEnabled,
         supports_reasoning_summaries: true,
         supports_search_tool: false,
         support_verbosity: false,
@@ -1375,7 +1545,10 @@ function normalizeProfileList(profiles, normalizer, fallback) {
 }
 
 function normalizeTextProfile(profile, index) {
-  const modelMappings = normalizeModelMappings(profile.model_mappings || profile.text_model_mappings || profile.model_overrides || profile.text_model_overrides || profile.model_override);
+  let modelMappings = normalizeModelMappings(profile.model_mappings || profile.text_model_mappings || profile.model_overrides || profile.text_model_overrides || profile.model_override);
+  if (profile.supports_images === true || profile.text_supports_images === true) {
+    modelMappings = modelMappings.map((mapping) => ({...mapping, supports_images: true}));
+  }
   const modelOverrides = modelMappingsToModels(modelMappings);
   return {
     id: String(profile.id || `text-${index + 1}`).trim(),
@@ -1387,7 +1560,6 @@ function normalizeTextProfile(profile, index) {
     model_overrides: modelOverrides,
     model_mappings: modelMappings,
     wire_api: normalizeWireAPI(profile.wire_api),
-    supports_images: profile.supports_images === true,
     proxy_url: String(profile.proxy_url || "").trim()
   };
 }
@@ -1648,7 +1820,16 @@ async function checkForUpdate(showErrors = false) {
 
 checkUpdateButton.addEventListener("click", () => checkForUpdate(true));
 installUpdateButton.addEventListener("click", async () => {
-  if (!confirm(updateText("&#23558;&#19979;&#36733;&#26368;&#26032;&#29256;&#12289;&#20851;&#38381; Vision Relay &#24182;&#33258;&#21160;&#37325;&#21551;&#12290;&#26159;&#21542;&#32487;&#32493;&#65311;"))) return;
+  const confirmed = await confirmAction({
+    title: "下载并安装更新？",
+    message: "Vision Relay 将下载最新版本，完成校验后关闭当前程序并自动重启。",
+    variant: "warning",
+    alertTitle: "更新期间请勿关闭程序",
+    alertMessage: "安装完成前请保持网络连接。",
+    confirmText: "下载并重启",
+    cancelText: "稍后更新"
+  });
+  if (!confirmed) return;
   installUpdateButton.disabled = true;
   checkUpdateButton.disabled = true;
   updateState.textContent = updateText("&#27491;&#22312;&#19979;&#36733;&#24182;&#26657;&#39564;&#26356;&#26032;&#65292;&#35831;&#21247;&#20851;&#38381;&#31243;&#24207;&hellip;");
@@ -1669,5 +1850,5 @@ installUpdateButton.addEventListener("click", async () => {
 loadConfig().then(() => checkForUpdate(false)).catch((err) => {
   console.error(err);
   setStatus("加载失败");
-  serviceState.textContent = "离线";
+  setServiceOnline(false);
 });

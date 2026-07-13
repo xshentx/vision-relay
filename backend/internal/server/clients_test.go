@@ -145,6 +145,40 @@ func TestWriteOpenCodeConfigCanDisableImageSupport(t *testing.T) {
 	}
 }
 
+func TestClientCatalogUsesVisionCapabilitySetting(t *testing.T) {
+	ctx := clientConfigContext{
+		Model: "vision-model",
+		ModelMappings: []textModelMapping{
+			{Name: "vision-model", Model: "upstream-vision", SupportsImages: true},
+			{Name: "text-model", Model: "upstream-text"},
+		},
+		VisionEnabled: false,
+	}
+	entries := codexModelCatalogEntries(ctx, nil)
+	if len(entries) != 2 {
+		t.Fatalf("expected two catalog entries, got %#v", entries)
+	}
+	for _, entry := range entries {
+		if got := entry["input_modalities"].([]string); len(got) != 1 || got[0] != "text" {
+			t.Fatalf("vision-disabled model should advertise text input only: %#v", entry)
+		}
+		if entry["supports_image_detail_original"] != false {
+			t.Fatalf("vision-disabled model should not support original image detail: %#v", entry)
+		}
+	}
+
+	ctx.VisionEnabled = true
+	entries = codexModelCatalogEntries(ctx, nil)
+	for _, entry := range entries {
+		if got := entry["input_modalities"].([]string); len(got) != 2 || got[0] != "text" || got[1] != "image" {
+			t.Fatalf("vision-enabled model should advertise image input: %#v", entry)
+		}
+		if entry["supports_image_detail_original"] != true {
+			t.Fatalf("vision-enabled model should support original image detail: %#v", entry)
+		}
+	}
+}
+
 func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	home := t.TempDir()
 	projectDir := filepath.Join(home, "project")

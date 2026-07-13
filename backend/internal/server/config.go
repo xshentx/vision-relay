@@ -23,22 +23,23 @@ var codexAccountModelAliases = []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 
 func defaultConfig() config {
 	cfg := config{
-		Addr:                envAny(defaultAddr, "VISION_RELAY_ADDR", "CODEX_PROXY_ADDR"),
-		TextProvider:        env("TEXT_PROVIDER", defaultTextProvider),
-		TextBaseURL:         env("TEXT_BASE_URL", "https://api.openai.com"),
-		TextAPIKey:          env("TEXT_API_KEY", ""),
-		TextModelOverride:   env("TEXT_MODEL_OVERRIDE", ""),
-		TextWireAPI:         env("TEXT_WIRE_API", defaultTextWireAPI),
-		ProxyURL:            env("PROXY_URL", ""),
-		VisionProvider:      env("VISION_PROVIDER", "openai"),
-		VisionBaseURL:       env("VISION_BASE_URL", "https://api.openai.com"),
-		VisionAPIKey:        env("VISION_API_KEY", ""),
-		VisionModel:         env("VISION_MODEL", defaultVisionModel),
-		VisionPrompt:        defaultVisionPrompt,
-		VisionEnabled:       boolPtr(env("VISION_ENABLED", "true") != "false"),
-		ClientAPIKeyEntries: keysToEntries(splitKeys(env("CLIENT_API_KEYS", ""))),
-		OpenWindow:          env("OPEN_WINDOW", "true") != "false",
-		OpenBrowser:         env("OPEN_BROWSER", "false") == "true",
+		Addr:                              envAny(defaultAddr, "VISION_RELAY_ADDR", "CODEX_PROXY_ADDR"),
+		TextProvider:                      env("TEXT_PROVIDER", defaultTextProvider),
+		TextBaseURL:                       env("TEXT_BASE_URL", "https://api.openai.com"),
+		TextAPIKey:                        env("TEXT_API_KEY", ""),
+		TextModelOverride:                 env("TEXT_MODEL_OVERRIDE", ""),
+		TextWireAPI:                       env("TEXT_WIRE_API", defaultTextWireAPI),
+		ProxyURL:                          env("PROXY_URL", ""),
+		VisionProvider:                    env("VISION_PROVIDER", "openai"),
+		VisionBaseURL:                     env("VISION_BASE_URL", "https://api.openai.com"),
+		VisionAPIKey:                      env("VISION_API_KEY", ""),
+		VisionModel:                       env("VISION_MODEL", defaultVisionModel),
+		VisionPrompt:                      defaultVisionPrompt,
+		VisionEnabled:                     boolPtr(env("VISION_ENABLED", "true") != "false"),
+		PreserveCodexOfficialAuthOnSwitch: boolPtr(true),
+		ClientAPIKeyEntries:               keysToEntries(splitKeys(env("CLIENT_API_KEYS", ""))),
+		OpenWindow:                        env("OPEN_WINDOW", "true") != "false",
+		OpenBrowser:                       env("OPEN_BROWSER", "false") == "true",
 	}
 	cfg.TextModelProfiles = []textModelProfile{textProfileFromConfig(cfg, "text-default", "默认文本模型")}
 	cfg.ActiveTextProfileID = cfg.TextModelProfiles[0].ID
@@ -161,6 +162,10 @@ func mergeConfig(base, loaded config) config {
 	if loaded.VisionEnabled != nil {
 		base.VisionEnabled = loaded.VisionEnabled
 	}
+	if loaded.PreserveCodexOfficialAuthOnSwitch != nil {
+		base.PreserveCodexOfficialAuthOnSwitch = loaded.PreserveCodexOfficialAuthOnSwitch
+	}
+	base.UnifyCodexSessionHistory = loaded.UnifyCodexSessionHistory
 	if len(loaded.ClientAPIKeyEntries) > 0 {
 		base.ClientAPIKeyEntries = loaded.ClientAPIKeyEntries
 	} else if len(loaded.ClientAPIKeys) > 0 {
@@ -233,6 +238,9 @@ func (a *app) setConfig(cfg config) error {
 	if cfg.VisionEnabled == nil {
 		cfg.VisionEnabled = boolPtr(true)
 	}
+	if cfg.PreserveCodexOfficialAuthOnSwitch == nil {
+		cfg.PreserveCodexOfficialAuthOnSwitch = boolPtr(true)
+	}
 	cfg.VisionPrompt = defaultVisionPrompt
 	cfg.ProxyURL = strings.TrimSpace(cfg.ProxyURL)
 	cfg.ClientAPIKeyEntries = normalizeClientAPIKeyEntries(cfg.ClientAPIKeyEntries)
@@ -258,16 +266,21 @@ func visionEnabled(cfg config) bool {
 	return cfg.VisionEnabled == nil || *cfg.VisionEnabled
 }
 
-func textSupportsImages(cfg config) bool {
-	return cfg.TextSupportsImages
+func preserveCodexOfficialAuth(cfg config) bool {
+	return cfg.PreserveCodexOfficialAuthOnSwitch == nil || *cfg.PreserveCodexOfficialAuthOnSwitch
+}
+
+func textSupportsImages(cfg config, requested string) bool {
+	mapping, ok := effectiveTextModelMapping(cfg, requested)
+	return ok && mapping.SupportsImages
 }
 
 func relayImageInputEnabled(cfg config) bool {
-	return textSupportsImages(cfg) || visionEnabled(cfg)
+	return visionEnabled(cfg)
 }
 
-func shouldAugmentImages(cfg config) bool {
-	return !textSupportsImages(cfg) && visionEnabled(cfg)
+func shouldAugmentImages(cfg config, requested string) bool {
+	return !textSupportsImages(cfg, requested) && visionEnabled(cfg)
 }
 
 func normalizeSeparateModelProfiles(cfg config) config {
@@ -287,6 +300,18 @@ func normalizeSeparateModelProfiles(cfg config) config {
 	}
 	if cfg.ActiveVisionProfileID == "" || !hasVisionProfile(cfg.VisionModelProfiles, cfg.ActiveVisionProfileID) {
 		cfg.ActiveVisionProfileID = cfg.VisionModelProfiles[0].ID
+	}
+	if cfg.TextSupportsImages {
+		for i := range cfg.TextModelProfiles {
+			if cfg.TextModelProfiles[i].ID != cfg.ActiveTextProfileID {
+				continue
+			}
+			for j := range cfg.TextModelProfiles[i].ModelMappings {
+				cfg.TextModelProfiles[i].ModelMappings[j].SupportsImages = true
+			}
+			break
+		}
+		cfg.TextSupportsImages = false
 	}
 	for _, profile := range cfg.TextModelProfiles {
 		if profile.ID == cfg.ActiveTextProfileID {
@@ -373,6 +398,12 @@ func normalizeTextProfiles(profiles []textModelProfile) []textModelProfile {
 		profile.APIKey = strings.TrimSpace(profile.APIKey)
 		profile.ModelOverride = strings.TrimSpace(profile.ModelOverride)
 		profile.ModelMappings = normalizeTextModelMappings(profile.ModelMappings, profile.ModelOverrides, profile.ModelOverride)
+		if profile.SupportsImages {
+			for j := range profile.ModelMappings {
+				profile.ModelMappings[j].SupportsImages = true
+			}
+			profile.SupportsImages = false
+		}
 		profile.ModelOverrides = modelOverridesFromMappings(profile.ModelMappings)
 		profile.ModelOverride = firstModelOverride(profile.ModelOverrides)
 		profile.WireAPI = normalizeWireAPI(profile.WireAPI)
@@ -470,7 +501,7 @@ func applyTextProfileToConfig(cfg config, profile textModelProfile) config {
 	cfg.TextModelOverrides = profile.ModelOverrides
 	cfg.TextModelMappings = profile.ModelMappings
 	cfg.TextWireAPI = profile.WireAPI
-	cfg.TextSupportsImages = profile.SupportsImages
+	cfg.TextSupportsImages = false
 	cfg.ProxyURL = profile.ProxyURL
 	return cfg
 }
@@ -530,6 +561,12 @@ func normalizeModelProfile(profile modelProfile) modelProfile {
 	profile.TextAPIKey = strings.TrimSpace(profile.TextAPIKey)
 	profile.TextModelOverride = strings.TrimSpace(profile.TextModelOverride)
 	profile.TextModelMappings = normalizeTextModelMappings(profile.TextModelMappings, profile.TextModelOverrides, profile.TextModelOverride)
+	if profile.TextSupportsImages {
+		for i := range profile.TextModelMappings {
+			profile.TextModelMappings[i].SupportsImages = true
+		}
+		profile.TextSupportsImages = false
+	}
 	profile.TextModelOverrides = modelOverridesFromMappings(profile.TextModelMappings)
 	profile.TextModelOverride = firstModelOverride(profile.TextModelOverrides)
 	profile.TextWireAPI = normalizeWireAPI(profile.TextWireAPI)
@@ -579,7 +616,7 @@ func applyProfileToConfig(cfg config, profile modelProfile) config {
 	cfg.TextModelOverrides = profile.TextModelOverrides
 	cfg.TextModelMappings = profile.TextModelMappings
 	cfg.TextWireAPI = profile.TextWireAPI
-	cfg.TextSupportsImages = profile.TextSupportsImages
+	cfg.TextSupportsImages = false
 	cfg.ProxyURL = profile.ProxyURL
 	cfg.VisionProvider = profile.VisionProvider
 	cfg.VisionBaseURL = profile.VisionBaseURL
@@ -718,20 +755,28 @@ func textModelOverrides(cfg config) []string {
 }
 
 func effectiveTextModel(cfg config, requested string) string {
+	mapping, ok := effectiveTextModelMapping(cfg, requested)
+	if !ok {
+		return ""
+	}
+	return mapping.Model
+}
+
+func effectiveTextModelMapping(cfg config, requested string) (textModelMapping, bool) {
 	mappings := textModelMappings(cfg)
 	if len(mappings) == 0 {
-		return ""
+		return textModelMapping{}, false
 	}
 	requested = strings.TrimSpace(requested)
 	for _, mapping := range mappings {
 		if requested == mapping.Name || requested == mapping.Model {
-			return mapping.Model
+			return mapping, true
 		}
 	}
-	if model, ok := codexAccountAliasTextModel(mappings, requested); ok {
-		return model
+	if index, ok := codexAccountModelAliasIndex(requested); ok && index < len(mappings) {
+		return mappings[index], true
 	}
-	return mappings[0].Model
+	return mappings[0], true
 }
 
 func codexAccountAliasTextModel(mappings []textModelMapping, requested string) (string, bool) {

@@ -126,7 +126,7 @@ func (a *app) currentLogsPage(page, pageSize int) ([]requestLog, int) {
 		total, countErr := countRequestLogsDB(a.db)
 		logs, listErr := listRequestLogsPageDB(a.db, pageSize, offset)
 		if countErr == nil && listErr == nil {
-			return logs, total
+			return a.resolveManagedCodexClientLogs(logs), total
 		}
 		if countErr != nil {
 			stdlog.Printf("database logs count warning: %v", countErr)
@@ -151,17 +151,17 @@ func (a *app) currentLogs() []requestLog {
 	if a.db != nil {
 		logs, err := listRequestLogsDB(a.db, maxLogs)
 		if err == nil {
-			return logs
+			return a.resolveManagedCodexClientLogs(logs)
 		}
 		stdlog.Printf("database logs read warning: %v", err)
 	}
 	a.logMu.Lock()
-	defer a.logMu.Unlock()
 	out := make([]requestLog, len(a.logs))
 	for i := range a.logs {
 		out[len(a.logs)-1-i] = a.logs[i]
 	}
-	return out
+	a.logMu.Unlock()
+	return a.resolveManagedCodexClientLogs(out)
 }
 
 func (a *app) clearLogs() {
@@ -268,20 +268,45 @@ func (a *app) clientLogIdentity(r *http.Request) (string, string) {
 		candidates = append(candidates, key)
 	}
 	cfg := a.currentConfig()
+	entries := normalizeClientAPIKeyEntries(cfg.ClientAPIKeyEntries)
 	for _, got := range candidates {
-		for _, entry := range cfg.ClientAPIKeyEntries {
+		for _, entry := range entries {
 			if got == entry.Key {
 				return firstString(entry.Name, "未命名客户端"), keyPreview(got)
 			}
 		}
 	}
+	for _, got := range candidates {
+		if got == codexManagedBearerToken {
+			return managedCodexClientLogIdentity(entries)
+		}
+	}
 	if len(candidates) > 0 {
 		return "未匹配密钥", keyPreview(candidates[0])
 	}
-	if len(cfg.ClientAPIKeyEntries) == 0 {
+	if len(entries) == 0 {
 		return "未启用鉴权", ""
 	}
 	return "未提供密钥", ""
+}
+
+func managedCodexClientLogIdentity(entries []clientAPIKeyEntry) (string, string) {
+	if len(entries) == 0 {
+		return "Codex 托管登录", keyPreview(codexManagedBearerToken)
+	}
+	return firstString(entries[0].Name, "未命名客户端"), keyPreview(entries[0].Key)
+}
+
+func (a *app) resolveManagedCodexClientLogs(logs []requestLog) []requestLog {
+	entries := normalizeClientAPIKeyEntries(a.currentConfig().ClientAPIKeyEntries)
+	managedPreview := keyPreview(codexManagedBearerToken)
+	for i := range logs {
+		if logs[i].ClientName != "未匹配密钥" || logs[i].ClientKeyPreview != managedPreview {
+			continue
+		}
+		logs[i].ClientName, logs[i].ClientKeyPreview = managedCodexClientLogIdentity(entries)
+	}
+	return logs
 }
 
 func keyPreview(key string) string {

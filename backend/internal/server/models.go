@@ -28,28 +28,27 @@ func (a *app) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.currentConfig()
-	imageCapable := relayImageInputEnabled(cfg)
 	if len(textModelOverrides(cfg)) > 0 {
-		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), imageCapable))
+		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), cfg))
 		return
 	}
 	resp, err := a.forwardRaw(r.Context(), a.textEndpoint(cfg), http.MethodGet, canonicalRequestURI(r.URL.RequestURI()), nil, r.Header)
 	if err != nil {
-		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), imageCapable))
+		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), cfg))
 		return
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), imageCapable))
+		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), cfg))
 		return
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), imageCapable))
+		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), cfg))
 		return
 	}
-	writeJSON(w, http.StatusOK, augmentModelListPayload(payload, imageCapable))
+	writeJSON(w, http.StatusOK, augmentModelListPayload(payload, cfg))
 }
 
 func (a *app) handleListModels(w http.ResponseWriter, r *http.Request) {
@@ -98,14 +97,14 @@ func defaultModelListPayload(cfg config) map[string]any {
 	}
 }
 
-func augmentModelListPayload(payload map[string]any, imageCapable bool) map[string]any {
+func augmentModelListPayload(payload map[string]any, cfg config) map[string]any {
 	data, _ := payload["data"].([]any)
 	for _, item := range data {
 		model, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		if imageCapable {
+		if relayImageInputEnabled(cfg) {
 			markModelImageCapable(model)
 		}
 	}
