@@ -80,10 +80,11 @@ func defaultModelListPayload(cfg config) map[string]any {
 	data := make([]any, 0, len(mappings))
 	for _, mapping := range mappings {
 		model := map[string]any{
-			"id":       mapping.Name,
-			"object":   "model",
-			"created":  time.Now().Unix(),
-			"owned_by": appSlug,
+			"id":        mapping.Name,
+			"object":    "model",
+			"created":   time.Now().Unix(),
+			"owned_by":  appSlug,
+			"reasoning": textModelSupportsReasoning(mapping),
 		}
 		if mapping.ContextWindow > 0 {
 			model["context_window"] = mapping.ContextWindow

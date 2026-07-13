@@ -30,6 +30,8 @@ const unifyCodexSessionHistory = document.querySelector("#unifyCodexSessionHisto
 
 const claudeCodeConfig = document.querySelector("#claudeCodeConfig");
 const configureClaudeCode = document.querySelector("#configureClaudeCode");
+const openclawConfig = document.querySelector("#openclawConfig");
+const configureOpenClaw = document.querySelector("#configureOpenClaw");
 const textProfileList = document.querySelector("#textProfileList");
 const addTextProfile = document.querySelector("#addTextProfile");
 const visionProfileList = document.querySelector("#visionProfileList");
@@ -488,7 +490,8 @@ generateKey.addEventListener("click", async () => {
 const clientConfigureActions = [
   {button: configureOpenCode, client: "opencode", name: "OpenCode"},
   {button: configureCodex, client: "codex", name: "Codex"},
-  {button: configureClaudeCode, client: "claude-code", name: "Claude Code"}
+  {button: configureClaudeCode, client: "claude-code", name: "Claude Code"},
+  {button: configureOpenClaw, client: "openclaw", name: "OpenClaw"}
 ];
 
 clientConfigureActions.forEach(({button, client, name}) => {
@@ -517,8 +520,11 @@ async function configureClient({button, client, name}) {
     });
     if (!res.ok) throw new Error(await readErrorMessage(res));
     const payload = await res.json();
+    if (payload?.key_created) await loadConfig();
     const path = payload?.path ? `：${payload.path}` : "";
-    const launchText = payload?.started ? `并已启动 ${name}` : "";
+    const launchText = payload?.stopped && payload?.started
+      ? `并已重启 ${name}`
+      : (payload?.started ? `并已启动 ${name}` : "");
     showToast(`已一键配置 ${name}${launchText}${path}`, "success");
     setStatus(`${name} 已配置${launchText}`);
   } finally {
@@ -892,7 +898,7 @@ function openProfileModal(kind, mode, profileId = "") {
   modalProfileWireAPI.value = isText ? normalizeWireAPI(profile?.wire_api) : "chat_completions";
   modalProfileBaseURL.value = profile?.base_url || "";
   modalProfileAPIKey.value = profile?.api_key || "";
-  modalProfileModelLabel.textContent = isText ? "强制模型名" : "模型名";
+  modalProfileModelLabel.textContent = "模型名";
   modalProfileModel.placeholder = isText ? "可填多个，换行或逗号分隔；留空则使用客户端请求里的 model" : "例如 gpt-4o-mini";
   modalProfileModel.value = isText ? textProfileModels(profile).join("\n") : profile?.model || "";
   modalModelMappings = isText ? textProfileMappings(profile) : [];
@@ -995,13 +1001,24 @@ function renderFetchedModels() {
   }
 }
 
+const reasoningEffortChoices = [
+  {value: "none", label: "\u4e0d\u652f\u6301"},
+  {value: "low", label: "\u4f4e"},
+  {value: "medium", label: "\u4e2d"},
+  {value: "high", label: "\u9ad8"},
+  {value: "xhigh", label: "\u8d85\u9ad8"}
+];
+
+function reasoningEffortOptions(selected) {
+  return reasoningEffortChoices
+    .map((choice) => `<option value="${choice.value}" ${selected === choice.value ? "selected" : ""}>${choice.label}</option>`)
+    .join("");
+}
+
 function renderModelMappingRows() {
   if (!modelMappingRows) return;
   modelMappingRows.innerHTML = "";
-  if (modalModelMappings.length === 0) {
-    addModelMappingRow({name: "", model: "", context_window: ""}, false);
-    return;
-  }
+  if (modalModelMappings.length === 0) return;
   modalModelMappings.forEach((mapping, index) => {
     const row = document.createElement("div");
     row.className = "model-mapping-row";
@@ -1013,9 +1030,14 @@ function renderModelMappingRows() {
         <input data-field="supports_images" type="checkbox" ${mapping.supports_images === true ? "checked" : ""}>
         <span>多模态</span>
       </label>
+      <label class="model-mapping-supports-reasoning" title="\u9009\u62e9\u8be5\u6a21\u578b\u652f\u6301\u7684\u63a8\u7406\u5f3a\u5ea6">
+        <select data-field="reasoning_effort" aria-label="\u63a8\u7406\u5f3a\u5ea6">
+          ${reasoningEffortOptions(mapping.reasoning_effort)}
+        </select>
+      </label>
       <button class="icon-button model-mapping-delete" type="button" aria-label="删除模型">×</button>
     `;
-    row.querySelectorAll("input").forEach((input) => {
+    row.querySelectorAll("input, select").forEach((input) => {
       input.addEventListener("input", () => {
         updateModelMappingFromRows();
       });
@@ -1046,7 +1068,8 @@ function updateModelMappingFromRows() {
       name: row.querySelector('[data-field="name"]')?.value,
       model: row.querySelector('[data-field="model"]')?.value,
       context_window: row.querySelector('[data-field="context_window"]')?.value,
-      supports_images: row.querySelector('[data-field="supports_images"]')?.checked === true
+      supports_images: row.querySelector('[data-field="supports_images"]')?.checked === true,
+      reasoning_effort: row.querySelector('[data-field="reasoning_effort"]')?.value
     }));
 }
 
@@ -1064,7 +1087,7 @@ function addSelectedModelsToModal(showMessage) {
     const existing = new Set(modalModelMappings.map((mapping) => mapping.model || mapping.name).filter(Boolean));
     selected.forEach((model) => {
       if (!existing.has(model)) {
-        modalModelMappings.push({name: model, model, context_window: "", supports_images: false});
+        modalModelMappings.push(normalizeModelMapping({name: model, model}));
         existing.add(model);
       }
     });
@@ -1236,15 +1259,51 @@ function firstModelOverride(value) {
 }
 
 function normalizeModelMapping(value) {
-  const name = String(value?.name || value?.display_name || "").trim();
-  const model = String(value?.model || value || "").trim();
+  const mapping = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const scalar = typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+  const name = String(mapping.name || mapping.display_name || scalar).trim();
+  const model = String(mapping.model || scalar).trim();
   const contextWindow = Number(value?.context_window || value?.contextWindow || 0);
+  const configuredReasoningEffort = normalizeReasoningEffort(mapping.reasoning_effort);
+  const reasoningEffort = configuredReasoningEffort || (typeof mapping.supports_reasoning === "boolean"
+    ? (mapping.supports_reasoning ? "high" : "none")
+    : (inferModelReasoningSupport(name, model) ? "high" : "none"));
   return {
     name: name || model,
     model: model || name,
     context_window: Number.isFinite(contextWindow) && contextWindow > 0 ? Math.floor(contextWindow) : 0,
-    supports_images: value?.supports_images === true
+    supports_images: value?.supports_images === true,
+    reasoning_effort: reasoningEffort
   };
+}
+
+function normalizeReasoningEffort(value) {
+  const effort = String(value || "").trim().toLowerCase();
+  if (["none", "low", "medium", "high", "xhigh"].includes(effort)) return effort;
+  if (["extra-high", "extra_high"].includes(effort)) return "xhigh";
+  return "";
+}
+
+function reasoningEffortDescription(effort) {
+  return {
+    low: "Low reasoning",
+    medium: "Medium reasoning",
+    high: "High reasoning",
+    xhigh: "Extra high reasoning"
+  }[effort] || "Enable reasoning";
+}
+
+function inferModelReasoningSupport(...values) {
+  const value = values.join(" ").toLowerCase();
+  const markers = [
+    "reasoning", "reasoner", "thinking",
+    "deepseek-r1", "deepseek-v4",
+    "glm-4.5", "glm-4.6", "glm-4.7", "glm-5",
+    "grok-3-mini", "grok-4",
+    "gpt-5", "qwen3", "gemini-2.5", "gemini-3"
+  ];
+  if (markers.some((marker) => value.includes(marker))) return true;
+  return value.split(/[\/_.:\s-]+/).some((token) => token === "o1" || token === "o3" || token === "o4");
 }
 
 function normalizeModelMappings(value) {
@@ -1284,9 +1343,12 @@ function clientImageInputEnabled() {
 function renderOpenCodeSnippet() {
   const profile = activeTextProfile();
   const mappings = textProfileMappings(profile);
-  const snippetMappings = mappings.length ? mappings : [{name: "z-ai/glm-5.2", model: "z-ai/glm-5.2", context_window: 0, supports_images: false}];
-  const model = (snippetMappings[0].model || "z-ai/glm-5.2").trim();
-  const key = normalizeClientKeys(clientKeys)[0]?.key || "请先生成客户端 Key";
+  const snippetMappings = mappings.length ? mappings : [normalizeModelMapping({name: "z-ai/glm-5.2", model: "z-ai/glm-5.2"})];
+  const defaultClientModel = (snippetMappings[0].name || snippetMappings[0].model || "z-ai/glm-5.2").trim();
+  const codexKey = clientNamedKey("Codex");
+  const openCodeKey = clientNamedKey("OpenCode");
+  const openClawKey = clientNamedKey("OpenClaw");
+  const claudeCodeKey = clientNamedKey("Claude Code");
   if (opencodeConfig) {
     opencodeConfig.textContent = JSON.stringify({
       "$schema": "https://opencode.ai/config.json",
@@ -1296,7 +1358,7 @@ function renderOpenCodeSnippet() {
           name: "Vision Relay",
           options: {
             baseURL: `${location.origin}/v1`,
-            apiKey: key
+            apiKey: openCodeKey
           },
           models: Object.fromEntries(snippetMappings.map((mapping) => {
             const modelName = mapping.name || mapping.model;
@@ -1304,6 +1366,7 @@ function renderOpenCodeSnippet() {
             const inputModalities = visionInputModalities(imageEnabled);
             return [modelName, {
               name: modelName,
+              reasoning: mapping.reasoning_effort !== "none",
               attachment: imageEnabled,
               attachments: imageEnabled,
               vision: imageEnabled,
@@ -1312,22 +1375,58 @@ function renderOpenCodeSnippet() {
               modalities: {
                 input: inputModalities,
                 output: ["text"]
-              }
+              },
+              ...(mapping.context_window ? {limit: {context: mapping.context_window}} : {})
             }];
           }))
         }
       },
-      model: `vision-relay/${model}`
+      model: `vision-relay/${defaultClientModel}`
+    }, null, 2);
+  }
+  if (openclawConfig) {
+    const openclawModels = snippetMappings.map((mapping) => {
+      const modelName = mapping.name || mapping.model;
+      return {
+        id: modelName,
+        name: modelName,
+        input: visionInputModalities(clientImageInputEnabled()),
+        cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0},
+        contextWindow: mapping.context_window || 128000,
+        maxTokens: 8192
+      };
+    });
+    openclawConfig.textContent = JSON.stringify({
+      agents: {
+        defaults: {
+          model: {primary: `vision-relay/${openclawModels[0].id}`}
+        }
+      },
+      models: {
+        mode: "merge",
+        providers: {
+          "vision-relay": {
+            baseUrl: `${location.origin}/v1`,
+            apiKey: openClawKey,
+            api: "openai-completions",
+            models: openclawModels
+          }
+        }
+      }
     }, null, 2);
   }
   if (codexConfig) {
     const catalogMappings = snippetMappings;
     const codexDefaultModel = catalogMappings[0].name || catalogMappings[0].model;
+    const codexDefaultReasoningEffort = catalogMappings[0].reasoning_effort;
+    const codexDefaultSupportsReasoning = codexDefaultReasoningEffort !== "none";
     const codexCatalog = {
       models: catalogMappings.map((mapping, index) => {
         const slug = mapping.name || mapping.model;
         const imageEnabled = clientImageInputEnabled();
         const inputModalities = visionInputModalities(imageEnabled);
+        const reasoningEffort = mapping.reasoning_effort;
+        const supportsReasoning = reasoningEffort !== "none";
         return {
         slug,
         display_name: slug,
@@ -1338,12 +1437,12 @@ function renderOpenCodeSnippet() {
         context_window: mapping.context_window || 128000,
         max_context_window: mapping.context_window || 128000,
         effective_context_window_percent: 95,
-        default_reasoning_level: "high",
+        ...(supportsReasoning ? {default_reasoning_level: reasoningEffort} : {}),
         default_reasoning_summary: "none",
-        supported_reasoning_levels: [
+        supported_reasoning_levels: supportsReasoning ? [
           {effort: "none", description: "Disable reasoning"},
-          {effort: "high", description: "Enable reasoning"}
-        ],
+          {effort: reasoningEffort, description: reasoningEffortDescription(reasoningEffort)}
+        ] : [],
         visibility: "list",
         supported_in_api: true,
         priority: 1000 + index,
@@ -1351,7 +1450,8 @@ function renderOpenCodeSnippet() {
         input_modalities: inputModalities,
         supports_parallel_tool_calls: false,
         supports_image_detail_original: imageEnabled,
-        supports_reasoning_summaries: true,
+        supports_reasoning_summaries: supportsReasoning,
+        supports_reasoning_summary_parameter: supportsReasoning,
         supports_search_tool: false,
         support_verbosity: false,
         truncation_policy: {mode: "bytes", limit: 10000},
@@ -1368,7 +1468,7 @@ function renderOpenCodeSnippet() {
       `model_provider = "custom"`,
       `model = "${codexDefaultModel}"`,
       `disable_response_storage = true`,
-      `model_reasoning_effort = "high"`,
+      ...(codexDefaultSupportsReasoning ? [`model_reasoning_effort = "${codexDefaultReasoningEffort}"`] : []),
       `model_catalog_json = "vision-relay-model.json"`,
       `web_search = "disabled"`,
       ``,
@@ -1377,7 +1477,7 @@ function renderOpenCodeSnippet() {
       `wire_api = "responses"`,
       `requires_openai_auth = true`,
       `base_url = "${location.origin}/v1"`,
-      `experimental_bearer_token = "PROXY_MANAGED"`,
+      `experimental_bearer_token = "${codexKey}"`,
       ``,
       `[windows]`,
       `sandbox = "unelevated"`,
@@ -1389,7 +1489,7 @@ function renderOpenCodeSnippet() {
       `model_provider = "custom"`,
       `model = "${codexDefaultModel}"`,
       `disable_response_storage = true`,
-      `model_reasoning_effort = "high"`,
+      ...(codexDefaultSupportsReasoning ? [`model_reasoning_effort = "${codexDefaultReasoningEffort}"`] : []),
       `model_catalog_json = "vision-relay-model.json"`,
       `web_search = "disabled"`,
       ``,
@@ -1398,25 +1498,34 @@ function renderOpenCodeSnippet() {
       `wire_api = "responses"`,
       `requires_openai_auth = true`,
       `base_url = "${location.origin}/v1"`,
-      `experimental_bearer_token = "PROXY_MANAGED"`,
+      `experimental_bearer_token = "${codexKey}"`,
       ``,
       `[windows]`,
       `sandbox = "unelevated"`
     ].join("\n");
   }
   if (claudeCodeConfig) {
-    claudeCodeConfig.textContent = [
-      `# PowerShell`,
-      `$env:ANTHROPIC_BASE_URL = "${location.origin}"`,
-      `$env:ANTHROPIC_AUTH_TOKEN = "${key}"`,
-      ``,
-      `# Claude Code 会请求：`,
-      `${location.origin}/v1/messages`,
-      `${location.origin}/v1/messages/count_tokens`,
-      ``,
-      `# 模型名可继续填写客户端里的 Claude 模型名；`,
-      `# 如果在文本模型中设置了强制模型名，则最终会转发到当前文本模型：${model}`
-    ].join("\n");
+    const claudeModelIDs = snippetMappings.map((mapping) => mapping.name || mapping.model);
+    const claudeEnv = {
+      ANTHROPIC_BASE_URL: location.origin,
+      ANTHROPIC_AUTH_TOKEN: claudeCodeKey
+    };
+    [
+      ["ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
+      ["ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"],
+      ["ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"],
+      ["ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"]
+    ].forEach(([modelKey, nameKey], index) => {
+      if (!claudeModelIDs[index]) return;
+      claudeEnv[modelKey] = claudeModelIDs[index];
+      claudeEnv[nameKey] = `Vision Relay ${claudeModelIDs[index]}`;
+    });
+    claudeCodeConfig.textContent = JSON.stringify({
+      "$schema": "https://json.schemastore.org/claude-code-settings.json",
+      model: claudeModelIDs[0],
+      availableModels: claudeModelIDs,
+      env: claudeEnv
+    }, null, 2);
   }
 }
 
@@ -1625,6 +1734,12 @@ function normalizeClientKeys(entries) {
       seen.add(entry.key);
       return true;
     });
+}
+
+function clientNamedKey(name) {
+  const normalizedName = String(name || "").trim().toLowerCase();
+  return normalizeClientKeys(clientKeys).find((entry) => entry.name.toLowerCase() === normalizedName)?.key
+    || `Auto-created when configuring ${name}`;
 }
 
 function keysToEntries(keys) {

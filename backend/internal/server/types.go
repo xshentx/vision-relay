@@ -82,10 +82,12 @@ type modelProfile struct {
 }
 
 type textModelMapping struct {
-	Name           string  `json:"name"`
-	Model          string  `json:"model"`
-	ContextWindow  flexInt `json:"context_window,omitempty"`
-	SupportsImages bool    `json:"supports_images,omitempty"`
+	Name              string  `json:"name"`
+	Model             string  `json:"model"`
+	ContextWindow     flexInt `json:"context_window,omitempty"`
+	SupportsImages    bool    `json:"supports_images,omitempty"`
+	ReasoningEffort   string  `json:"reasoning_effort,omitempty"`
+	SupportsReasoning *bool   `json:"supports_reasoning,omitempty"` // legacy boolean setting
 }
 
 type flexInt int

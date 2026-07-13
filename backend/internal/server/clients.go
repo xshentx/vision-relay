@@ -12,12 +12,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/titanous/json5"
 )
 
 const (
 	clientCodex               = "codex"
 	clientOpenCode            = "opencode"
 	clientClaudeCode          = "claude-code"
+	clientOpenClaw            = "openclaw"
 	relayProviderID           = "vision-relay"
 	codexProviderID           = "custom"
 	relayEnvKey               = "VISION_RELAY_API_KEY"
@@ -46,24 +49,30 @@ type clientConfigRequest struct {
 	Stop    *bool  `json:"stop"`
 }
 
-func (a *app) ensureClientKey() (string, bool, error) {
+func (a *app) ensureClientKey(client string) (string, string, bool, error) {
+	name := clientKeyName(client)
+	if name == "" {
+		return "", "", false, errors.New("unsupported client")
+	}
 	cfg := a.currentConfig()
 	entries := normalizeClientAPIKeyEntries(cfg.ClientAPIKeyEntries)
-	if len(entries) > 0 {
-		return entries[0].Key, false, nil
+	for _, entry := range entries {
+		if strings.EqualFold(entry.Name, name) {
+			return entry.Key, name, false, nil
+		}
 	}
 	key, err := generateClientAPIKey()
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 	cfg.ClientAPIKeyEntries = append(entries, clientAPIKeyEntry{
-		Name: "Client Access",
+		Name: name,
 		Key:  key,
 	})
 	if err := a.setConfig(cfg); err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
-	return key, true, nil
+	return key, name, true, nil
 }
 
 func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
@@ -84,7 +93,7 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	key, created, err := a.ensureClientKey()
+	key, keyName, created, err := a.ensureClientKey(client)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -100,7 +109,7 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		ModelMappings:        textModelMappings(cfg),
 		VisionEnabled:        visionEnabled(cfg),
 		PreserveOfficialAuth: boolPtr(preserveCodexOfficialAuth(cfg)),
-		LaunchPath:           currentCodexDesktopPath(),
+		LaunchPath:           currentClientDesktopPath(client, home),
 		LaunchAppID:          currentCodexAppID(),
 	}
 	path, err := writeClientConfig(client, ctx)
@@ -112,9 +121,9 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 	if client != clientCodex {
 		warnings = append(warnings, persistClientEnv(key)...)
 	}
-	restartCodex := client == clientCodex
-	stopRequested := optionalBool(req.Stop, restartCodex)
-	startRequested := optionalBool(req.Start, restartCodex)
+	restartClient := clientRestartsByDefault(client)
+	stopRequested := optionalBool(req.Stop, restartClient)
+	startRequested := optionalBool(req.Start, restartClient)
 	stopped := false
 	if stopRequested {
 		stopped = stopClient(client)
@@ -135,6 +144,7 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		"path":        path,
 		"project_dir": projectDir,
 		"key_created": created,
+		"key_name":    keyName,
 		"stopped":     stopped,
 		"started":     started,
 		"command":     command,
@@ -147,6 +157,10 @@ func optionalBool(value *bool, fallback bool) bool {
 		return fallback
 	}
 	return *value
+}
+
+func clientRestartsByDefault(client string) bool {
+	return client == clientCodex || client == clientOpenCode
 }
 
 func (a *app) handleClientRestore(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +207,23 @@ func normalizeClientID(client string) string {
 		return clientOpenCode
 	case "claude", "claude-code", "claudecode":
 		return clientClaudeCode
+	case "openclaw", "open-claw":
+		return clientOpenClaw
+	default:
+		return ""
+	}
+}
+
+func clientKeyName(client string) string {
+	switch client {
+	case clientCodex:
+		return "Codex"
+	case clientOpenCode:
+		return "OpenCode"
+	case clientClaudeCode:
+		return "Claude Code"
+	case clientOpenClaw:
+		return "OpenClaw"
 	default:
 		return ""
 	}
@@ -268,6 +299,8 @@ func writeClientConfig(client string, ctx clientConfigContext) (string, error) {
 		return writeOpenCodeConfig(ctx)
 	case clientClaudeCode:
 		return writeClaudeCodeConfig(ctx)
+	case clientOpenClaw:
+		return writeOpenClawConfig(ctx)
 	default:
 		return "", errors.New("unsupported client")
 	}
@@ -323,17 +356,21 @@ func codexRelayConfigBlock(ctx clientConfigContext, model string) []string {
 		fmt.Sprintf("model_catalog_json = %q", codexModelCatalogFilename()),
 		fmt.Sprintf("model_provider = %q", codexProviderID),
 		`disable_response_storage = true`,
-		`model_reasoning_effort = "high"`,
+	}
+	if effort := codexDefaultModelReasoningEffort(ctx); effort != "none" {
+		block = append(block, fmt.Sprintf("model_reasoning_effort = %q", effort))
+	}
+	block = append(block,
 		`web_search = "disabled"`,
 		"",
-		"[model_providers." + codexProviderID + "]",
+		"[model_providers."+codexProviderID+"]",
 		`name = "Vision Relay"`,
 		`wire_api = "responses"`,
 		`requires_openai_auth = true`,
 		fmt.Sprintf("base_url = %q", strings.TrimRight(ctx.Origin, "/")+"/v1"),
-	}
+	)
 	if preserveCodexOfficialAuthForContext(ctx) {
-		block = append(block, fmt.Sprintf("experimental_bearer_token = %q", codexManagedBearerToken))
+		block = append(block, fmt.Sprintf("experimental_bearer_token = %q", ctx.Key))
 	}
 	return block
 }
@@ -373,6 +410,14 @@ func codexConfigModel(ctx clientConfigContext) string {
 		}
 	}
 	return strings.TrimSpace(ctx.Model)
+}
+
+func codexDefaultModelReasoningEffort(ctx clientConfigContext) string {
+	mappings := normalizeTextModelMappings(ctx.ModelMappings, nil, ctx.Model)
+	if len(mappings) == 0 {
+		return "none"
+	}
+	return textModelReasoningEffort(mappings[0])
 }
 
 func removeCodexRelayConfig(lines []string) []string {
@@ -1080,8 +1125,15 @@ func codexModelCatalogEntry(ctx clientConfigContext, template map[string]any, ma
 	model["display_name"] = codexAccountModelDisplayName(slug)
 	model["description"] = description
 	model["base_instructions"] = codexBaseInstructions
-	model["default_reasoning_level"] = "high"
-	model["supported_reasoning_levels"] = codexReasoningLevels()
+	reasoningEffort := textModelReasoningEffort(mapping)
+	supportsReasoning := reasoningEffort != "none"
+	if supportsReasoning {
+		model["default_reasoning_level"] = reasoningEffort
+		model["supported_reasoning_levels"] = codexReasoningLevels(reasoningEffort)
+	} else {
+		delete(model, "default_reasoning_level")
+		model["supported_reasoning_levels"] = []any{}
+	}
 	model["visibility"] = "list"
 	model["supported_in_api"] = true
 	model["priority"] = priority
@@ -1094,7 +1146,10 @@ func codexModelCatalogEntry(ctx clientConfigContext, template map[string]any, ma
 	model["service_tiers"] = []any{}
 	model["availability_nux"] = nil
 	model["upgrade"] = nil
-	model["supports_reasoning_summaries"] = true
+	// Keep the legacy field for older Codex desktop builds and write the
+	// current field used by newer Codex model catalogs as well.
+	model["supports_reasoning_summaries"] = supportsReasoning
+	model["supports_reasoning_summary_parameter"] = supportsReasoning
 	model["default_reasoning_summary"] = "none"
 	model["support_verbosity"] = false
 	model["shell_type"] = "shell_command"
@@ -1130,10 +1185,19 @@ func cloneStringAnyMap(in map[string]any) map[string]any {
 	return out
 }
 
-func codexReasoningLevels() []any {
+func codexReasoningLevels(effort string) []any {
+	description := map[string]string{
+		"low":    "Low reasoning",
+		"medium": "Medium reasoning",
+		"high":   "High reasoning",
+		"xhigh":  "Extra high reasoning",
+	}[effort]
+	if description == "" {
+		description = "Enable reasoning"
+	}
 	return []any{
 		map[string]any{"effort": "none", "description": "Disable reasoning"},
-		map[string]any{"effort": "high", "description": "Enable reasoning"},
+		map[string]any{"effort": effort, "description": description},
 	}
 }
 
@@ -1145,26 +1209,42 @@ func writeOpenCodeConfig(ctx clientConfigContext) (string, error) {
 	}
 	cfg["$schema"] = "https://opencode.ai/config.json"
 	providers := ensureJSONMap(cfg, "provider")
-	provider := ensureJSONMap(providers, relayProviderID)
-	provider["npm"] = "@ai-sdk/openai-compatible"
-	provider["name"] = "Vision Relay"
-	options := ensureJSONMap(provider, "options")
-	options["baseURL"] = strings.TrimRight(ctx.Origin, "/") + "/v1"
-	options["apiKey"] = ctx.Key
-	models := ensureJSONMap(provider, "models")
-	model := ensureJSONMap(models, ctx.Model)
-	imageEnabled := ctx.VisionEnabled
-	model["name"] = ctx.Model
-	model["attachment"] = imageEnabled
-	model["attachments"] = imageEnabled
-	model["vision"] = imageEnabled
-	model["input_modalities"] = relayInputModalities(imageEnabled)
-	model["output_modalities"] = []string{"text"}
-	model["modalities"] = map[string]any{
-		"input":  relayInputModalities(imageEnabled),
-		"output": []string{"text"},
+	mappings := clientTextModelMappings(ctx)
+	configuredModels := make(map[string]any, len(mappings))
+	for _, mapping := range mappings {
+		modelID := clientTextModelID(mapping)
+		imageEnabled := ctx.VisionEnabled
+		model := map[string]any{
+			"name":              modelID,
+			"reasoning":         textModelSupportsReasoning(mapping),
+			"attachment":        imageEnabled,
+			"attachments":       imageEnabled,
+			"vision":            imageEnabled,
+			"input_modalities":  relayInputModalities(imageEnabled),
+			"output_modalities": []string{"text"},
+			"modalities": map[string]any{
+				"input":  relayInputModalities(imageEnabled),
+				"output": []string{"text"},
+			},
+		}
+		if mapping.ContextWindow > 0 {
+			model["limit"] = map[string]any{"context": int(mapping.ContextWindow)}
+		}
+		configuredModels[modelID] = model
 	}
-	cfg["model"] = relayProviderID + "/" + ctx.Model
+	// The Vision Relay provider is fully regenerated on every one-click setup.
+	// Preserving its previous model map leaves stale models selectable after the
+	// active upstream profile changes, so only unrelated providers are retained.
+	providers[relayProviderID] = map[string]any{
+		"npm":  "@ai-sdk/openai-compatible",
+		"name": "Vision Relay",
+		"options": map[string]any{
+			"baseURL": strings.TrimRight(ctx.Origin, "/") + "/v1",
+			"apiKey":  ctx.Key,
+		},
+		"models": configuredModels,
+	}
+	cfg["model"] = relayProviderID + "/" + clientTextModelID(mappings[0])
 	return path, writeJSONFile(path, cfg)
 }
 
@@ -1182,14 +1262,188 @@ func writeClaudeCodeConfig(ctx clientConfigContext) (string, error) {
 		return "", err
 	}
 	cfg["$schema"] = "https://json.schemastore.org/claude-code-settings.json"
-	cfg["model"] = ctx.Model
+	mappings := clientTextModelMappings(ctx)
+	modelIDs := make([]string, 0, len(mappings))
+	for _, mapping := range mappings {
+		modelIDs = append(modelIDs, clientTextModelID(mapping))
+	}
+	cfg["model"] = modelIDs[0]
+	// Current Claude Code releases surface arbitrary IDs listed here in /model.
+	// Older releases still support direct `/model <id>` selection, while the
+	// custom/family slots below keep the first four routes visible in the picker.
+	cfg["availableModels"] = modelIDs
 	env := ensureJSONMap(cfg, "env")
 	env["ANTHROPIC_BASE_URL"] = strings.TrimRight(ctx.Origin, "/")
 	env["ANTHROPIC_AUTH_TOKEN"] = ctx.Key
-	env["ANTHROPIC_CUSTOM_MODEL_OPTION"] = ctx.Model
-	env["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"] = "Vision Relay " + ctx.Model
-	env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = ctx.Model
+	configureClaudeCodeModelSlots(env, modelIDs)
 	return path, writeJSONFile(path, cfg)
+}
+
+func configureClaudeCodeModelSlots(env map[string]any, modelIDs []string) {
+	slots := []struct {
+		model string
+		name  string
+	}{
+		{"ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"},
+		{"ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"},
+		{"ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"},
+		{"ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"},
+	}
+	for index, slot := range slots {
+		if index >= len(modelIDs) {
+			delete(env, slot.model)
+			delete(env, slot.name)
+			continue
+		}
+		env[slot.model] = modelIDs[index]
+		env[slot.name] = "Vision Relay " + modelIDs[index]
+	}
+}
+
+func clientTextModelMappings(ctx clientConfigContext) []textModelMapping {
+	mappings := normalizeTextModelMappings(ctx.ModelMappings, nil, ctx.Model)
+	if len(mappings) == 0 {
+		mappings = []textModelMapping{{Name: "z-ai/glm-5.2", Model: "z-ai/glm-5.2"}}
+	}
+	return mappings
+}
+
+func clientTextModelID(mapping textModelMapping) string {
+	if modelID := strings.TrimSpace(mapping.Name); modelID != "" {
+		return modelID
+	}
+	return strings.TrimSpace(mapping.Model)
+}
+
+func writeOpenClawConfig(ctx clientConfigContext) (string, error) {
+	path := openClawConfigPath(ctx.HomeDir)
+	cfg, err := readJSON5Map(path)
+	if err != nil {
+		return "", err
+	}
+
+	mappings := clientTextModelMappings(ctx)
+	primaryModel := strings.TrimSpace(mappings[0].Name)
+	if primaryModel == "" {
+		primaryModel = strings.TrimSpace(mappings[0].Model)
+	}
+
+	agents := ensureJSONMap(cfg, "agents")
+	defaults := ensureJSONMap(agents, "defaults")
+	modelSelection := ensureJSONMap(defaults, "model")
+	modelSelection["primary"] = relayProviderID + "/" + primaryModel
+	if allowedModels, ok := defaults["models"].(map[string]any); ok {
+		for _, mapping := range mappings {
+			modelID := strings.TrimSpace(mapping.Name)
+			if modelID == "" {
+				modelID = strings.TrimSpace(mapping.Model)
+			}
+			ref := relayProviderID + "/" + modelID
+			if _, exists := allowedModels[ref]; !exists {
+				allowedModels[ref] = map[string]any{}
+			}
+		}
+	}
+
+	models := ensureJSONMap(cfg, "models")
+	if _, exists := models["mode"]; !exists {
+		models["mode"] = "merge"
+	}
+	providers := ensureJSONMap(models, "providers")
+	provider := map[string]any{
+		"baseUrl": strings.TrimRight(ctx.Origin, "/") + "/v1",
+		"apiKey":  ctx.Key,
+		"api":     "openai-completions",
+		"models":  openClawModels(ctx, mappings),
+	}
+	providers[relayProviderID] = provider
+	return path, writeJSONFile(path, cfg)
+}
+
+func openClawModels(ctx clientConfigContext, mappings []textModelMapping) []any {
+	items := make([]any, 0, len(mappings))
+	for _, mapping := range mappings {
+		modelID := strings.TrimSpace(mapping.Name)
+		if modelID == "" {
+			modelID = strings.TrimSpace(mapping.Model)
+		}
+		contextWindow := int(mapping.ContextWindow)
+		if contextWindow <= 0 {
+			contextWindow = 128000
+		}
+		items = append(items, map[string]any{
+			"id":            modelID,
+			"name":          modelID,
+			"input":         relayInputModalities(ctx.VisionEnabled),
+			"cost":          map[string]any{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+			"contextWindow": contextWindow,
+			"maxTokens":     8192,
+		})
+	}
+	return items
+}
+
+func openClawConfigPath(homeDir string) string {
+	effectiveHome := strings.TrimSpace(os.Getenv("OPENCLAW_HOME"))
+	if effectiveHome == "" {
+		effectiveHome = homeDir
+	} else {
+		effectiveHome = resolveClientPath(effectiveHome, homeDir)
+	}
+	if override := strings.TrimSpace(os.Getenv("OPENCLAW_CONFIG_PATH")); override != "" {
+		return resolveClientPath(override, effectiveHome)
+	}
+
+	stateDir := strings.TrimSpace(os.Getenv("OPENCLAW_STATE_DIR"))
+	if stateDir != "" {
+		stateDir = resolveClientPath(stateDir, effectiveHome)
+	} else {
+		stateDir = filepath.Join(effectiveHome, ".openclaw")
+		if _, err := os.Stat(stateDir); errors.Is(err, os.ErrNotExist) {
+			legacyDir := filepath.Join(effectiveHome, ".clawdbot")
+			if _, legacyErr := os.Stat(legacyDir); legacyErr == nil {
+				stateDir = legacyDir
+			}
+		}
+	}
+	for _, name := range []string{"openclaw.json", "clawdbot.json"} {
+		candidate := filepath.Join(stateDir, name)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return filepath.Join(stateDir, "openclaw.json")
+}
+
+func resolveClientPath(value, homeDir string) string {
+	value = os.ExpandEnv(strings.TrimSpace(value))
+	if value == "~" {
+		value = homeDir
+	} else if strings.HasPrefix(value, "~/") || strings.HasPrefix(value, `~\`) {
+		value = filepath.Join(homeDir, value[2:])
+	}
+	if abs, err := filepath.Abs(value); err == nil {
+		return abs
+	}
+	return filepath.Clean(value)
+}
+
+func readJSON5Map(path string) (map[string]any, error) {
+	cfg := map[string]any{}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return cfg, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if len(strings.TrimSpace(string(b))) == 0 {
+		return cfg, nil
+	}
+	if err := json5.Unmarshal(b, &cfg); err != nil {
+		return nil, fmt.Errorf("parse OpenClaw config %s: %w", path, err)
+	}
+	return cfg, nil
 }
 
 func readJSONMap(path string) (map[string]any, error) {
@@ -1325,6 +1579,8 @@ func clientProcessNames(client string) []string {
 		return []string{"opencode.exe"}
 	case clientClaudeCode:
 		return []string{"claude.exe"}
+	case clientOpenClaw:
+		return []string{"openclaw.exe"}
 	default:
 		return nil
 	}
@@ -1336,7 +1592,11 @@ func startClient(client, workDir string, ctx clientConfigContext) (bool, string,
 		return false, "", []string{"Unsupported client."}
 	}
 	if _, err := exec.LookPath(command); err != nil {
-		if client != clientCodex || !codexLauncherAvailable(ctx) {
+		desktopLauncherAvailable := client == clientCodex && codexLauncherAvailable(ctx)
+		if runtime.GOOS == "windows" && client == clientOpenCode {
+			_, desktopLauncherAvailable = openCodeDesktopPath(ctx.LaunchPath, ctx.HomeDir)
+		}
+		if !desktopLauncherAvailable {
 			return false, command, []string{command + " was not found in PATH. Config was written, but the client was not started."}
 		}
 	}
@@ -1344,6 +1604,17 @@ func startClient(client, workDir string, ctx clientConfigContext) (bool, string,
 		workDir = ctx.HomeDir
 	}
 	if runtime.GOOS == "windows" {
+		if client == clientOpenCode {
+			if desktopPath, ok := openCodeDesktopPath(ctx.LaunchPath, ctx.HomeDir); ok {
+				cmd := exec.Command(desktopPath)
+				cmd.Dir = workDir
+				cmd.Env = clientEnv(client, ctx)
+				if err := cmd.Start(); err != nil {
+					return false, filepath.Base(desktopPath), []string{err.Error()}
+				}
+				return true, filepath.Base(desktopPath), nil
+			}
+		}
 		if client == clientCodex {
 			if appID := strings.TrimSpace(ctx.LaunchAppID); appID != "" {
 				cmd := exec.Command("explorer.exe", codexAppsFolderTarget(appID))
@@ -1378,6 +1649,56 @@ func startClient(client, workDir string, ctx clientConfigContext) (bool, string,
 		return false, command, []string{err.Error()}
 	}
 	return true, command, nil
+}
+
+func currentClientDesktopPath(client, homeDir string) string {
+	switch client {
+	case clientCodex:
+		return currentCodexDesktopPath()
+	case clientOpenCode:
+		return currentOpenCodeDesktopPath(homeDir)
+	default:
+		return ""
+	}
+}
+
+func currentOpenCodeDesktopPath(homeDir string) string {
+	if runtime.GOOS == "windows" {
+		command := `(Get-CimInstance Win32_Process -Filter "Name='opencode.exe'" | Where-Object { $_.ExecutablePath -like '*\@opencode-aidesktop\*' } | Select-Object -First 1 -ExpandProperty ExecutablePath)`
+		if out, err := exec.Command("powershell", "-NoProfile", "-Command", command).Output(); err == nil {
+			if runningPath := strings.TrimSpace(string(out)); runningPath != "" {
+				if _, err := os.Stat(runningPath); err == nil {
+					return runningPath
+				}
+			}
+		}
+	}
+	path, _ := openCodeDesktopPath("", homeDir)
+	return path
+}
+
+func openCodeDesktopPath(preferred, homeDir string) (string, bool) {
+	candidates := []string{strings.TrimSpace(preferred)}
+	localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
+	if localAppData == "" && strings.TrimSpace(homeDir) != "" {
+		localAppData = filepath.Join(homeDir, "AppData", "Local")
+	}
+	if localAppData != "" {
+		candidates = append(candidates,
+			filepath.Join(localAppData, "Programs", "@opencode-aidesktop", "OpenCode.exe"),
+			filepath.Join(localAppData, "Programs", "OpenCode", "OpenCode.exe"),
+			filepath.Join(localAppData, "OpenCode", "OpenCode.exe"),
+		)
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 func codexLauncherAvailable(ctx clientConfigContext) bool {
@@ -1441,6 +1762,8 @@ func clientCommand(client string) string {
 		return "opencode"
 	case clientClaudeCode:
 		return "claude"
+	case clientOpenClaw:
+		return "openclaw"
 	default:
 		return ""
 	}
@@ -1455,8 +1778,27 @@ func clientEnv(client string, ctx clientConfigContext) []string {
 	env = append(env, "OPENAI_API_KEY="+ctx.Key)
 	env = append(env, "ANTHROPIC_BASE_URL="+strings.TrimRight(ctx.Origin, "/"))
 	env = append(env, "ANTHROPIC_AUTH_TOKEN="+ctx.Key)
-	env = append(env, "ANTHROPIC_CUSTOM_MODEL_OPTION="+ctx.Model)
-	env = append(env, "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME=Vision Relay "+ctx.Model)
-	env = append(env, "ANTHROPIC_DEFAULT_SONNET_MODEL="+ctx.Model)
+	if client == clientClaudeCode {
+		mappings := clientTextModelMappings(ctx)
+		modelIDs := make([]string, 0, len(mappings))
+		for _, mapping := range mappings {
+			modelIDs = append(modelIDs, clientTextModelID(mapping))
+		}
+		slotEnv := map[string]any{}
+		configureClaudeCodeModelSlots(slotEnv, modelIDs)
+		for _, key := range []string{
+			"ANTHROPIC_CUSTOM_MODEL_OPTION",
+			"ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+			"ANTHROPIC_DEFAULT_SONNET_MODEL",
+			"ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+			"ANTHROPIC_DEFAULT_OPUS_MODEL",
+			"ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+			"ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+		} {
+			value, _ := slotEnv[key].(string)
+			env = append(env, key+"="+value)
+		}
+	}
 	return env
 }

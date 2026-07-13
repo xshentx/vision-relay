@@ -275,6 +275,71 @@ func textSupportsImages(cfg config, requested string) bool {
 	return ok && mapping.SupportsImages
 }
 
+func textModelReasoningEffort(mapping textModelMapping) string {
+	if effort := normalizeTextModelReasoningEffort(mapping.ReasoningEffort); effort != "" {
+		return effort
+	}
+	if mapping.SupportsReasoning != nil {
+		if *mapping.SupportsReasoning {
+			return "high"
+		}
+		return "none"
+	}
+	if inferTextModelReasoningSupport(mapping.Name, mapping.Model) {
+		return "high"
+	}
+	return "none"
+}
+
+func normalizeTextModelReasoningEffort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none", "unsupported":
+		return "none"
+	case "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high":
+		return "high"
+	case "xhigh", "extra-high", "extra_high":
+		return "xhigh"
+	default:
+		return ""
+	}
+}
+
+func textModelSupportsReasoning(mapping textModelMapping) bool {
+	return textModelReasoningEffort(mapping) != "none"
+}
+
+func inferTextModelReasoningSupport(values ...string) bool {
+	value := strings.ToLower(strings.Join(values, " "))
+	for _, marker := range []string{
+		"reasoning", "reasoner", "thinking",
+		"deepseek-r1", "deepseek-v4",
+		"glm-4.5", "glm-4.6", "glm-4.7", "glm-5",
+		"grok-3-mini", "grok-4",
+		"gpt-5", "qwen3", "gemini-2.5", "gemini-3",
+	} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	for _, token := range strings.FieldsFunc(value, func(r rune) bool {
+		switch r {
+		case '/', '\\', '-', '_', '.', ':', ' ', '\t':
+			return true
+		default:
+			return false
+		}
+	}) {
+		if token == "o1" || token == "o3" || token == "o4" {
+			return true
+		}
+	}
+	return false
+}
+
 func relayImageInputEnabled(cfg config) bool {
 	return visionEnabled(cfg)
 }
@@ -720,6 +785,8 @@ func normalizeTextModelMappings(mappings []textModelMapping, models []string, le
 		if mapping.ContextWindow < 0 {
 			mapping.ContextWindow = 0
 		}
+		mapping.ReasoningEffort = textModelReasoningEffort(mapping)
+		mapping.SupportsReasoning = nil
 		out = append(out, mapping)
 	}
 	return out

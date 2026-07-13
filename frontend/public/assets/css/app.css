@@ -940,6 +940,10 @@ button[type="submit"]:hover,
   gap: 14px;
 }
 
+.modal-grid > [hidden] {
+  display: none !important;
+}
+
 .model-picker-line {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 96px;
@@ -986,7 +990,7 @@ button[type="submit"]:hover,
 .model-mapping-grid,
 .model-mapping-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) 140px 110px 34px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr) 140px 100px 110px 34px;
   gap: 10px;
   align-items: center;
 }
@@ -1002,11 +1006,13 @@ button[type="submit"]:hover,
   gap: 8px;
 }
 
-.model-mapping-row input {
+.model-mapping-row input,
+.model-mapping-row select {
   min-width: 0;
 }
 
-.model-mapping-supports-images {
+.model-mapping-supports-images,
+.model-mapping-supports-reasoning {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -1020,6 +1026,11 @@ button[type="submit"]:hover,
   width: 17px;
   height: 17px;
   margin: 0;
+}
+
+.model-mapping-supports-reasoning select {
+  width: 100%;
+  min-height: 38px;
 }
 
 .model-mapping-row .icon-button {

@@ -1237,6 +1237,49 @@ func TestOpenAIChatMapsDisplayedModelToActualModel(t *testing.T) {
 	}
 }
 
+func TestRouteLogsActualForwardedModelAfterProfileSwitch(t *testing.T) {
+	var upstreamModel string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		upstreamModel = firstString(payload["model"])
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":      "chatcmpl-log-model",
+			"model":   upstreamModel,
+			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "ok"}}},
+		})
+	}))
+	defer upstream.Close()
+
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			TextProvider: "openai",
+			TextBaseURL:  upstream.URL,
+			TextModelMappings: []textModelMapping{
+				{Name: "grok-4.5", Model: "grok-4.5"},
+			},
+			ClientAPIKeyEntries: []clientAPIKeyEntry{{Name: "OpenCode", Key: "sk-opencode"}},
+		}),
+		httpClient: upstream.Client(),
+	}
+	body := `{"model":"z-ai/glm-5.2","messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-opencode")
+	rec := httptest.NewRecorder()
+	a.handleRoute(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	if upstreamModel != "grok-4.5" {
+		t.Fatalf("request should be forwarded with the current actual model, got %q", upstreamModel)
+	}
+	logs := a.currentLogs()
+	if len(logs) != 1 || logs[0].Model != upstreamModel {
+		t.Fatalf("log model should match the actual forwarded model %q: %#v", upstreamModel, logs)
+	}
+}
 func TestExtractModelItems(t *testing.T) {
 	openAI := extractModelItems("openai", map[string]any{
 		"data": []any{

@@ -194,7 +194,7 @@
 
         <section class="page access-page span-12" id="access" data-page-panel="access">
           <div class="page-heading">
-            <div><span class="page-kicker">CLIENT CONNECTIONS</span><h3>客户端接入</h3><p>统一管理 Codex、OpenCode、Claude Code 与兼容 API 的连接配置。</p></div>
+            <div><span class="page-kicker">CLIENT CONNECTIONS</span><h3>客户端接入</h3><p>统一管理 Codex、OpenCode、Claude Code、OpenClaw 与兼容 API 的连接配置。</p></div>
             <span class="configuration-status"><i></i>配置已同步</span>
           </div>
 
@@ -210,7 +210,7 @@
             </article>
             <article class="component-card access-guide-card">
               <div class="component-card-head"><div><h4>快速配置</h4><p>推荐按以下流程完成客户端接入。</p></div><span class="component-tag success">3 步</span></div>
-              <div class="access-guide-list"><div><span>1</span><p><strong>创建独立访问令牌</strong><small>在“访问令牌”菜单中为客户端生成专属令牌。</small></p></div><div><span>2</span><p><strong>选择并配置客户端</strong><small>在下方标签中选择 Codex、OpenCode 或 Claude Code。</small></p></div><div><span>3</span><p><strong>重启并发送测试消息</strong><small>模型列表与多模态能力会自动同步。</small></p></div></div>
+              <div class="access-guide-list"><div><span>1</span><p><strong>创建独立访问令牌</strong><small>在“访问令牌”菜单中为客户端生成专属令牌。</small></p></div><div><span>2</span><p><strong>选择并配置客户端</strong><small>在下方标签中选择 Codex、OpenCode、Claude Code 或 OpenClaw。</small></p></div><div><span>3</span><p><strong>重启并发送测试消息</strong><small>模型列表与多模态能力会自动同步。</small></p></div></div>
               <div class="component-alert info"><strong>配置提示</strong><span>切换文本模型后，无需重新生成客户端配置。</span></div>
             </article>
           </div>
@@ -225,10 +225,11 @@
 
           <article class="component-card client-config-card">
             <div class="component-card-head client-config-heading"><div><h4>客户端配置</h4><p>选择客户端后复制配置，或使用一键配置写入本地文件。</p></div><span class="component-tag">自动生成</span></div>
-            <div class="client-tabs" role="tablist" aria-label="客户端类型"><button class="client-tab active" type="button" role="tab" aria-selected="true" data-client-tab="codex">Codex</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="opencode">OpenCode</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="claude-code">Claude Code</button></div>
+            <div class="client-tabs" role="tablist" aria-label="客户端类型"><button class="client-tab active" type="button" role="tab" aria-selected="true" data-client-tab="codex">Codex</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="opencode">OpenCode</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="claude-code">Claude Code</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="openclaw">OpenClaw</button></div>
             <div class="client-tab-panel active" data-client-panel="codex"><div class="client-panel-intro"><div><h4>Codex</h4><p>通过 Responses 接口连接本机中转，并保留工具调用和图片解析结果。</p></div><div class="panel-actions"><button class="secondary small-action" id="restoreCodex" type="button">恢复官方模式</button><button class="primary-action small-action" id="configureCodex" type="button">一键配置 Codex</button></div></div><pre><code id="codexConfig"></code></pre></div>
             <div class="client-tab-panel" data-client-panel="opencode" hidden><div class="client-panel-intro"><div><h4>OpenCode</h4><p>配置 OpenAI-compatible 模型的图片附件能力，避免客户端在本地拦截图片。</p></div><div class="panel-actions"><button class="primary-action small-action" id="configureOpenCode" type="button">一键配置 OpenCode</button></div></div><pre><code id="opencodeConfig"></code></pre></div>
             <div class="client-tab-panel" data-client-panel="claude-code" hidden><div class="client-panel-intro"><div><h4>Claude Code</h4><p>通过 Anthropic Messages 接口连接，并保留工具调用和视觉识别结果。</p></div><div class="panel-actions"><button class="primary-action small-action" id="configureClaudeCode" type="button">一键配置 Claude Code</button></div></div><pre><code id="claudeCodeConfig"></code></pre></div>
+            <div class="client-tab-panel" data-client-panel="openclaw" hidden><div class="client-panel-intro"><div><h4>OpenClaw</h4><p>写入 OpenAI-compatible 自定义供应商、可用模型与图片输入能力，并切换默认模型。</p></div><div class="panel-actions"><button class="primary-action small-action" id="configureOpenClaw" type="button">一键配置 OpenClaw</button></div></div><pre><code id="openclawConfig"></code></pre></div>
           </article>
         </section>
 
@@ -367,7 +368,7 @@
           <input id="modalProfileAPIKey" type="password" autocomplete="off" placeholder="上游模型 Key">
         </label>
         <label id="modalProfileModelWrap">
-          <span id="modalProfileModelLabel">强制模型名</span>
+          <span id="modalProfileModelLabel">模型名</span>
           <div class="model-picker-line">
             <textarea id="modalProfileModel" rows="3" placeholder="留空则使用客户端请求里的 model"></textarea>
             <button class="secondary" id="fetchModels" type="button">获取模型列表</button>
@@ -377,7 +378,7 @@
           <div class="model-mapping-head">
             <div>
               <strong>模型映射</strong>
-              <small>每个模型可独立勾选是否原生支持多模态；未勾选时，如视觉能力开启则先调用视觉模型识别。</small>
+              <small>每个模型可独立设置多模态与推理强度；常见推理模型会自动识别为高，也可从下拉菜单手动调整。</small>
             </div>
             <div class="model-mapping-actions">
               <button class="secondary small-action" id="fetchModelsForMapping" type="button">获取模型列表</button>
@@ -389,6 +390,7 @@
             <span>实际请求模型</span>
             <span>上下文窗口</span>
             <span>支持多模态</span>
+            <span>推理强度</span>
             <span></span>
           </div>
           <div class="model-mapping-rows" id="modelMappingRows"></div>

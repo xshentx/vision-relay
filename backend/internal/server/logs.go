@@ -209,7 +209,7 @@ func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, st
 	log.UpstreamName, log.UpstreamProvider = a.upstreamLogIdentity()
 	log.ClientName, log.ClientKeyPreview = a.clientLogIdentity(r)
 	if payload := decodeJSONMap(body); payload != nil {
-		log.Model = requestModel(payload)
+		log.Model = a.effectiveRequestLogModel(r, payload)
 	}
 	if response := decodeJSONMap(responseBody); response != nil {
 		fillUsageFromPayload(&log, response)
@@ -352,6 +352,25 @@ func decodeJSONMap(body []byte) map[string]any {
 
 func requestModel(payload map[string]any) string {
 	return firstString(payload["model"])
+}
+
+func (a *app) effectiveRequestLogModel(r *http.Request, payload map[string]any) string {
+	requested := requestModel(payload)
+	if isGeminiGeneratePath(r.URL.Path) {
+		requested = firstString(geminiRequestedModel(r.URL.RequestURI()), requested)
+	}
+	switch {
+	case isOpenAIChatPath(r.URL.Path),
+		isOpenAIResponsesPath(r.URL.Path),
+		isAnthropicMessagesPath(r.URL.Path),
+		isGeminiGeneratePath(r.URL.Path),
+		isOllamaChatPath(r.URL.Path),
+		isOllamaGeneratePath(r.URL.Path):
+		if model := effectiveTextModel(a.currentConfig(), requested); model != "" {
+			return model
+		}
+	}
+	return requested
 }
 
 func requestTextFromPayload(protocol string, payload map[string]any) string {

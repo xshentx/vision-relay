@@ -13,6 +13,128 @@ import (
 	"testing"
 )
 
+func TestClientKeyName(t *testing.T) {
+	tests := map[string]string{
+		clientCodex:      "Codex",
+		clientOpenCode:   "OpenCode",
+		clientClaudeCode: "Claude Code",
+		clientOpenClaw:   "OpenClaw",
+	}
+	for client, want := range tests {
+		if got := clientKeyName(client); got != want {
+			t.Fatalf("clientKeyName(%q) = %q, want %q", client, got, want)
+		}
+	}
+	if got := clientKeyName("unknown"); got != "" {
+		t.Fatalf("unknown client key name = %q, want empty", got)
+	}
+}
+
+func TestClientRestartsByDefault(t *testing.T) {
+	for _, client := range []string{clientCodex, clientOpenCode} {
+		if !clientRestartsByDefault(client) {
+			t.Fatalf("%s should stop and start during one-click configuration", client)
+		}
+	}
+	for _, client := range []string{clientClaudeCode, clientOpenClaw, "unknown"} {
+		if clientRestartsByDefault(client) {
+			t.Fatalf("%s should not restart by default", client)
+		}
+	}
+}
+
+func TestOpenCodeDesktopPathFindsInstalledClient(t *testing.T) {
+	localAppData := t.TempDir()
+	t.Setenv("LOCALAPPDATA", localAppData)
+	desktopPath := filepath.Join(localAppData, "Programs", "@opencode-aidesktop", "OpenCode.exe")
+	if err := os.MkdirAll(filepath.Dir(desktopPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(desktopPath, []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := openCodeDesktopPath("", t.TempDir()); !ok || got != desktopPath {
+		t.Fatalf("installed OpenCode Desktop was not found: got %q ok=%v", got, ok)
+	}
+
+	preferred := filepath.Join(t.TempDir(), "CustomOpenCode.exe")
+	if err := os.WriteFile(preferred, []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := openCodeDesktopPath(preferred, ""); !ok || got != preferred {
+		t.Fatalf("running OpenCode path should be preferred: got %q ok=%v", got, ok)
+	}
+}
+
+func TestEnsureClientKeyUsesClientNamedToken(t *testing.T) {
+	a := &app{cfg: config{ClientAPIKeyEntries: []clientAPIKeyEntry{
+		{Name: "First token", Key: "sk-first"},
+		{Name: "openclaw", Key: "sk-openclaw"},
+		{Name: "Codex", Key: "sk-codex"},
+	}}}
+
+	key, name, created, err := a.ensureClientKey(clientOpenClaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "sk-openclaw" || name != "OpenClaw" || created {
+		t.Fatalf("wrong named token selection: key=%q name=%q created=%v", key, name, created)
+	}
+	if got := len(a.currentConfig().ClientAPIKeyEntries); got != 3 {
+		t.Fatalf("existing named token should be reused without adding entries: got %d", got)
+	}
+}
+
+func TestEnsureClientKeyCreatesAndReusesClientNamedTokens(t *testing.T) {
+	a := &app{
+		cfg:        config{ClientAPIKeyEntries: []clientAPIKeyEntry{{Name: "Other", Key: "sk-other"}}},
+		configPath: filepath.Join(t.TempDir(), "config.json"),
+	}
+	tests := []struct {
+		client string
+		name   string
+	}{
+		{client: clientCodex, name: "Codex"},
+		{client: clientOpenCode, name: "OpenCode"},
+		{client: clientClaudeCode, name: "Claude Code"},
+		{client: clientOpenClaw, name: "OpenClaw"},
+	}
+	createdKeys := map[string]string{}
+	for _, tt := range tests {
+		key, name, created, err := a.ensureClientKey(tt.client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !created || name != tt.name || !strings.HasPrefix(key, "sk-") {
+			t.Fatalf("wrong token created for %s: key=%q name=%q created=%v", tt.client, key, name, created)
+		}
+		createdKeys[tt.client] = key
+	}
+	entries := a.currentConfig().ClientAPIKeyEntries
+	if len(entries) != len(tests)+1 {
+		t.Fatalf("client-named tokens were not all saved: %#v", entries)
+	}
+	for i, tt := range tests {
+		entry := entries[i+1]
+		if entry.Name != tt.name || entry.Key != createdKeys[tt.client] {
+			t.Fatalf("wrong saved token for %s: %#v", tt.client, entry)
+		}
+	}
+
+	for _, tt := range tests {
+		key, name, created, err := a.ensureClientKey(tt.client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if key != createdKeys[tt.client] || name != tt.name || created {
+			t.Fatalf("created token was not reused for %s: key=%q name=%q created=%v", tt.client, key, name, created)
+		}
+	}
+	if got := len(a.currentConfig().ClientAPIKeyEntries); got != len(tests)+1 {
+		t.Fatalf("reusing tokens should not add entries: got %d", got)
+	}
+}
+
 func TestWriteClientConfigs(t *testing.T) {
 	home := t.TempDir()
 	projectDir := filepath.Join(home, "project")
@@ -23,6 +145,10 @@ func TestWriteClientConfigs(t *testing.T) {
 		Key:           "sk-local",
 		Model:         "z-ai/glm-5.2",
 		VisionEnabled: true,
+		ModelMappings: []textModelMapping{
+			{Name: "z-ai/glm-5.2", Model: "z-ai/glm-5.2", ContextWindow: flexInt(196000)},
+			{Name: "deepseek-ai/deepseek-v4-pro", Model: "deepseek-ai/deepseek-v4-pro"},
+		},
 	}
 
 	codexPath, err := writeClientConfig(clientCodex, ctx)
@@ -44,7 +170,7 @@ func TestWriteClientConfigs(t *testing.T) {
 		!strings.Contains(codexUser, `[windows]`) ||
 		!strings.Contains(codexUser, `sandbox = "unelevated"`) ||
 		!strings.Contains(codexUser, `base_url = "http://127.0.0.1:8787/v1"`) ||
-		!strings.Contains(codexUser, `experimental_bearer_token = "PROXY_MANAGED"`) {
+		!strings.Contains(codexUser, `experimental_bearer_token = "sk-local"`) {
 		t.Fatalf("bad codex user config:\n%s", codexUser)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "auth.json")); !os.IsNotExist(err) {
@@ -97,9 +223,19 @@ func TestWriteClientConfigs(t *testing.T) {
 	if options["baseURL"] != "http://127.0.0.1:8787/v1" || options["apiKey"] != "sk-local" {
 		t.Fatalf("bad opencode options: %#v", options)
 	}
-	model := provider["models"].(map[string]any)["z-ai/glm-5.2"].(map[string]any)
+	models := provider["models"].(map[string]any)
+	if len(models) != 2 {
+		t.Fatalf("OpenCode should expose every configured model: %#v", models)
+	}
+	model := models["z-ai/glm-5.2"].(map[string]any)
 	if model["attachment"] != true || model["vision"] != true {
 		t.Fatalf("opencode model does not advertise image support: %#v", model)
+	}
+	if model["limit"].(map[string]any)["context"] != float64(196000) {
+		t.Fatalf("OpenCode model context limit was not synchronized: %#v", model)
+	}
+	if _, ok := models["deepseek-ai/deepseek-v4-pro"]; !ok {
+		t.Fatalf("OpenCode secondary model is missing: %#v", models)
 	}
 
 	claudePath, err := writeClientConfig(clientClaudeCode, ctx)
@@ -113,6 +249,230 @@ func TestWriteClientConfigs(t *testing.T) {
 	env := claude["env"].(map[string]any)
 	if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8787" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-local" {
 		t.Fatalf("bad claude env: %#v", env)
+	}
+	availableModels := claude["availableModels"].([]any)
+	if len(availableModels) != 2 || availableModels[0] != "z-ai/glm-5.2" || availableModels[1] != "deepseek-ai/deepseek-v4-pro" {
+		t.Fatalf("Claude Code should expose every configured model: %#v", availableModels)
+	}
+	if env["ANTHROPIC_CUSTOM_MODEL_OPTION"] != "z-ai/glm-5.2" ||
+		env["ANTHROPIC_DEFAULT_SONNET_MODEL"] != "deepseek-ai/deepseek-v4-pro" ||
+		env["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"] != "Vision Relay deepseek-ai/deepseek-v4-pro" {
+		t.Fatalf("Claude Code picker slots were not synchronized: %#v", env)
+	}
+}
+
+func TestWriteOpenClawConfigPreservesExistingJSON5AndAddsModels(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("OPENCLAW_HOME", "")
+	t.Setenv("OPENCLAW_STATE_DIR", "")
+	t.Setenv("OPENCLAW_CONFIG_PATH", "")
+	path := filepath.Join(home, ".openclaw", "openclaw.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := `{
+		// Existing settings must survive a one-click configuration.
+		gateway: { mode: 'local', },
+		agents: { defaults: { models: { 'anthropic/claude-sonnet-4-6': { alias: 'sonnet' }, }, }, },
+		models: { providers: { existing: { baseUrl: 'https://example.com/v1', apiKey: 'keep-me', }, }, },
+	}`
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := clientConfigContext{
+		HomeDir:       home,
+		Origin:        "http://127.0.0.1:8787",
+		Key:           "sk-local",
+		Model:         "upstream-model",
+		VisionEnabled: true,
+		ModelMappings: []textModelMapping{
+			{Name: "relay-default", Model: "upstream-model", ContextWindow: flexInt(196000)},
+			{Name: "relay-fast", Model: "upstream-fast"},
+		},
+	}
+	gotPath, err := writeClientConfig(clientOpenClaw, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != path {
+		t.Fatalf("wrong OpenClaw config path: got %q want %q", gotPath, path)
+	}
+
+	var cfg map[string]any
+	if err := readJSON(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	gateway := cfg["gateway"].(map[string]any)
+	if gateway["mode"] != "local" {
+		t.Fatalf("existing OpenClaw settings were not preserved: %#v", gateway)
+	}
+	defaults := cfg["agents"].(map[string]any)["defaults"].(map[string]any)
+	if defaults["model"].(map[string]any)["primary"] != "vision-relay/relay-default" {
+		t.Fatalf("wrong OpenClaw primary model: %#v", defaults["model"])
+	}
+	allowed := defaults["models"].(map[string]any)
+	if _, ok := allowed["anthropic/claude-sonnet-4-6"]; !ok {
+		t.Fatalf("existing model allowlist entry was removed: %#v", allowed)
+	}
+	if _, ok := allowed["vision-relay/relay-default"]; !ok {
+		t.Fatalf("Vision Relay model was not added to existing allowlist: %#v", allowed)
+	}
+	if _, ok := allowed["vision-relay/relay-fast"]; !ok {
+		t.Fatalf("Vision Relay secondary model was not added to existing allowlist: %#v", allowed)
+	}
+
+	modelConfig := cfg["models"].(map[string]any)
+	if modelConfig["mode"] != "merge" {
+		t.Fatalf("OpenClaw model catalog should merge configured providers: %#v", modelConfig)
+	}
+	providers := modelConfig["providers"].(map[string]any)
+	if _, ok := providers["existing"]; !ok {
+		t.Fatalf("existing provider was removed: %#v", providers)
+	}
+	provider := providers["vision-relay"].(map[string]any)
+	if provider["baseUrl"] != "http://127.0.0.1:8787/v1" || provider["apiKey"] != "sk-local" || provider["api"] != "openai-completions" {
+		t.Fatalf("bad OpenClaw provider: %#v", provider)
+	}
+	models := provider["models"].([]any)
+	if len(models) != 2 {
+		t.Fatalf("wrong OpenClaw model count: %#v", models)
+	}
+	first := models[0].(map[string]any)
+	if first["id"] != "relay-default" || first["contextWindow"] != float64(196000) {
+		t.Fatalf("bad OpenClaw model: %#v", first)
+	}
+	inputs := first["input"].([]any)
+	if len(inputs) != 2 || inputs[1] != "image" {
+		t.Fatalf("OpenClaw model does not advertise image support: %#v", inputs)
+	}
+	if backups, err := filepath.Glob(path + ".bak.*"); err != nil || len(backups) != 1 {
+		t.Fatalf("OpenClaw config backup was not created: paths=%#v err=%v", backups, err)
+	}
+}
+
+func TestOpenClawConfigPathHonorsEnvironmentOverrides(t *testing.T) {
+	home := t.TempDir()
+	customHome := filepath.Join(home, "custom-home")
+	t.Setenv("OPENCLAW_HOME", customHome)
+	t.Setenv("OPENCLAW_STATE_DIR", "~/state")
+	t.Setenv("OPENCLAW_CONFIG_PATH", "")
+	if got, want := openClawConfigPath(home), filepath.Join(customHome, "state", "openclaw.json"); got != want {
+		t.Fatalf("OPENCLAW_STATE_DIR was not honored: got %q want %q", got, want)
+	}
+
+	override := filepath.Join(home, "config", "custom.json5")
+	t.Setenv("OPENCLAW_CONFIG_PATH", override)
+	if got := openClawConfigPath(home); got != override {
+		t.Fatalf("OPENCLAW_CONFIG_PATH was not honored: got %q want %q", got, override)
+	}
+}
+
+func TestWriteOpenCodeConfigSynchronizesModelCatalog(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := map[string]any{
+		"provider": map[string]any{
+			"keep-provider": map[string]any{"name": "Keep Me"},
+			relayProviderID: map[string]any{
+				"obsoleteProviderOption": true,
+				"models": map[string]any{
+					"stale-model": map[string]any{"name": "stale-model"},
+				},
+			},
+		},
+	}
+	if err := writeJSONFile(path, existing); err != nil {
+		t.Fatal(err)
+	}
+	ctx := clientConfigContext{
+		HomeDir:       home,
+		Origin:        "http://127.0.0.1:8787",
+		Key:           "sk-local",
+		Model:         "z-ai/glm-5.2",
+		VisionEnabled: true,
+		ModelMappings: []textModelMapping{{Name: "z-ai/glm-5.2", Model: "z-ai/glm-5.2"}},
+	}
+	if _, err := writeOpenCodeConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx.Model = "grok-4.5"
+	ctx.ModelMappings = []textModelMapping{{Name: "grok-4.5", Model: "grok-4.5", ContextWindow: 256000}}
+	if _, err := writeOpenCodeConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg map[string]any
+	if err := readJSON(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["model"] != "vision-relay/grok-4.5" {
+		t.Fatalf("OpenCode default should be replaced with the current model: %#v", cfg["model"])
+	}
+	providers := cfg["provider"].(map[string]any)
+	if _, exists := providers["keep-provider"]; !exists {
+		t.Fatalf("unrelated OpenCode providers should be preserved: %#v", providers)
+	}
+	provider := providers[relayProviderID].(map[string]any)
+	if _, exists := provider["obsoleteProviderOption"]; exists {
+		t.Fatalf("Vision Relay provider should be fully regenerated: %#v", provider)
+	}
+	models := provider["models"].(map[string]any)
+	if len(models) != 1 {
+		t.Fatalf("OpenCode catalog should exactly match the current profile: %#v", models)
+	}
+	if _, exists := models["z-ai/glm-5.2"]; exists {
+		t.Fatalf("previous profile model should be removed: %#v", models)
+	}
+	grok, exists := models["grok-4.5"].(map[string]any)
+	if !exists {
+		t.Fatalf("current profile model should be configured: %#v", models)
+	}
+	if grok["limit"].(map[string]any)["context"] != float64(256000) {
+		t.Fatalf("current model metadata should be regenerated: %#v", grok)
+	}
+}
+func TestWriteClaudeCodeConfigExposesAllModelsAndLegacyPickerSlots(t *testing.T) {
+	home := t.TempDir()
+	mappings := make([]textModelMapping, 0, 5)
+	for i := 1; i <= 5; i++ {
+		id := "relay-model-" + strconv.Itoa(i)
+		mappings = append(mappings, textModelMapping{Name: id, Model: "upstream-" + strconv.Itoa(i)})
+	}
+	ctx := clientConfigContext{
+		HomeDir:       home,
+		Origin:        "http://127.0.0.1:8787",
+		Key:           "sk-local",
+		Model:         "upstream-1",
+		ModelMappings: mappings,
+	}
+	path, err := writeClaudeCodeConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := readJSON(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	available := cfg["availableModels"].([]any)
+	if len(available) != 5 || available[4] != "relay-model-5" {
+		t.Fatalf("Claude Code available model catalog is incomplete: %#v", available)
+	}
+	env := cfg["env"].(map[string]any)
+	wantSlots := map[string]string{
+		"ANTHROPIC_CUSTOM_MODEL_OPTION":  "relay-model-1",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL": "relay-model-2",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL":   "relay-model-3",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL":  "relay-model-4",
+	}
+	for key, want := range wantSlots {
+		if env[key] != want {
+			t.Fatalf("Claude Code picker slot %s = %#v, want %q; env=%#v", key, env[key], want, env)
+		}
 	}
 }
 
@@ -179,6 +539,83 @@ func TestClientCatalogUsesVisionCapabilitySetting(t *testing.T) {
 	}
 }
 
+func TestCodexCatalogUsesReasoningEffortPerModel(t *testing.T) {
+	ctx := clientConfigContext{
+		Model: "chat-only",
+		ModelMappings: []textModelMapping{
+			{Name: "chat-only", Model: "gpt-5-chat-only", ReasoningEffort: "none"},
+			{Name: "reasoning-low", Model: "upstream-low", ReasoningEffort: "low"},
+			{Name: "reasoning-medium", Model: "upstream-medium", ReasoningEffort: "medium"},
+			{Name: "reasoning-high", Model: "upstream-high", ReasoningEffort: "high"},
+			{Name: "reasoning-xhigh", Model: "upstream-xhigh", ReasoningEffort: "xhigh"},
+		},
+	}
+	entries := codexModelCatalogEntries(ctx, nil)
+	if len(entries) != 5 {
+		t.Fatalf("expected five catalog entries, got %#v", entries)
+	}
+
+	unsupported := entries[0]
+	if _, exists := unsupported["default_reasoning_level"]; exists {
+		t.Fatalf("non-reasoning model should not define a default reasoning level: %#v", unsupported)
+	}
+	levels, ok := unsupported["supported_reasoning_levels"].([]any)
+	if !ok || len(levels) != 0 {
+		t.Fatalf("non-reasoning model should not expose reasoning levels: %#v", unsupported)
+	}
+	if unsupported["supports_reasoning_summaries"] != false || unsupported["supports_reasoning_summary_parameter"] != false {
+		t.Fatalf("non-reasoning model should disable reasoning summaries: %#v", unsupported)
+	}
+
+	for index, effort := range []string{"low", "medium", "high", "xhigh"} {
+		entry := entries[index+1]
+		if entry["default_reasoning_level"] != effort || entry["supports_reasoning_summaries"] != true || entry["supports_reasoning_summary_parameter"] != true {
+			t.Fatalf("%s model should advertise its configured reasoning effort: %#v", effort, entry)
+		}
+		levels, ok := entry["supported_reasoning_levels"].([]any)
+		if !ok || len(levels) != 2 {
+			t.Fatalf("%s model should expose none/%s levels: %#v", effort, effort, entry)
+		}
+		configured, ok := levels[1].(map[string]any)
+		if !ok || configured["effort"] != effort {
+			t.Fatalf("%s model has the wrong reasoning level: %#v", effort, entry)
+		}
+	}
+}
+
+func TestCodexConfigUsesDefaultModelReasoningEffort(t *testing.T) {
+	ctx := clientConfigContext{
+		Origin: "http://127.0.0.1:8787",
+		ModelMappings: []textModelMapping{
+			{Name: "chat-only", Model: "gpt-5-chat-only", ReasoningEffort: "none"},
+			{Name: "reasoning-model", Model: "upstream-reasoning", ReasoningEffort: "xhigh"},
+		},
+	}
+	block := strings.Join(codexRelayConfigBlock(ctx, codexConfigModel(ctx)), "\n")
+	if strings.Contains(block, "model_reasoning_effort") {
+		t.Fatalf("non-reasoning default model should not force a reasoning effort:\n%s", block)
+	}
+
+	ctx.ModelMappings[0], ctx.ModelMappings[1] = ctx.ModelMappings[1], ctx.ModelMappings[0]
+	block = strings.Join(codexRelayConfigBlock(ctx, codexConfigModel(ctx)), "\n")
+	if !strings.Contains(block, `model_reasoning_effort = "xhigh"`) {
+		t.Fatalf("reasoning default model should use its configured effort:\n%s", block)
+	}
+}
+
+func TestTextModelReasoningEffortMigratesLegacyBoolean(t *testing.T) {
+	mappings := normalizeTextModelMappings([]textModelMapping{
+		{Name: "legacy-reasoning", Model: "legacy-reasoning", SupportsReasoning: boolPtr(true)},
+		{Name: "legacy-chat", Model: "legacy-chat", SupportsReasoning: boolPtr(false)},
+	}, nil, "")
+	if mappings[0].ReasoningEffort != "high" || mappings[1].ReasoningEffort != "none" {
+		t.Fatalf("legacy reasoning booleans were not migrated: %#v", mappings)
+	}
+	if mappings[0].SupportsReasoning != nil || mappings[1].SupportsReasoning != nil {
+		t.Fatalf("normalized mappings should not retain the legacy boolean: %#v", mappings)
+	}
+}
+
 func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	home := t.TempDir()
 	projectDir := filepath.Join(home, "project")
@@ -191,9 +628,10 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 				{Name: "gpt-5.5", Model: "gpt-5.5"},
 				{Name: "gpt-5.4", Model: "gpt-5.4"},
 			},
-			ClientAPIKeyEntries: []clientAPIKeyEntry{{Name: "Local", Key: "sk-local"}},
+			ClientAPIKeyEntries: []clientAPIKeyEntry{{Name: "Other", Key: "sk-local"}},
 			VisionEnabled:       boolPtr(true),
 		}),
+		configPath: filepath.Join(home, "vision-relay-config.json"),
 	}
 	body := bytes.NewBufferString(`{"client":"codex","start":false,"stop":false,"work_dir":` + strconv.Quote(projectDir) + `}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/client/configure", body)
@@ -203,6 +641,25 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
 	}
+	var result struct {
+		KeyCreated bool   `json:"key_created"`
+		KeyName    string `json:"key_name"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.KeyCreated || result.KeyName != "Codex" {
+		t.Fatalf("Codex one-click config should create its named token: %#v", result)
+	}
+	var codexKey string
+	for _, entry := range a.currentConfig().ClientAPIKeyEntries {
+		if entry.Name == "Codex" {
+			codexKey = entry.Key
+		}
+	}
+	if !strings.HasPrefix(codexKey, "sk-") {
+		t.Fatalf("Codex token was not saved: %#v", a.currentConfig().ClientAPIKeyEntries)
+	}
 	raw, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +668,8 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	if !strings.Contains(config, `model_provider = "custom"`) ||
 		!strings.Contains(config, `requires_openai_auth = true`) ||
 		!strings.Contains(config, `model_catalog_json = "vision-relay-model.json"`) ||
-		!strings.Contains(config, `web_search = "disabled"`) {
+		!strings.Contains(config, `web_search = "disabled"`) ||
+		!strings.Contains(config, `experimental_bearer_token = "`+codexKey+`"`) {
 		t.Fatalf("codex config was not written:\n%s", config)
 	}
 	catalogRaw, err := os.ReadFile(filepath.Join(home, ".codex", "vision-relay-model.json"))
@@ -856,4 +1314,43 @@ func readJSON(path string, dst any) error {
 		return err
 	}
 	return json.Unmarshal(b, dst)
+}
+
+func TestWriteOpenCodeConfigAdvertisesReasoningModels(t *testing.T) {
+	home := t.TempDir()
+	ctx := clientConfigContext{
+		HomeDir: home,
+		Origin:  "http://127.0.0.1:8787",
+		Key:     "sk-local",
+		ModelMappings: []textModelMapping{
+			{Name: "deepseek-ai/deepseek-v4-pro", Model: "deepseek-ai/deepseek-v4-pro"},
+			{Name: "z-ai/glm-5.2", Model: "z-ai/glm-5.2"},
+			{Name: "grok-4.5", Model: "grok-4.5"},
+			{Name: "plain-chat", Model: "plain-chat"},
+			{Name: "grok-4.5-chat-only", Model: "grok-4.5", SupportsReasoning: boolPtr(false)},
+		},
+		VisionEnabled: true,
+	}
+	path, err := writeOpenCodeConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := readJSON(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	provider := cfg["provider"].(map[string]any)[relayProviderID].(map[string]any)
+	models := provider["models"].(map[string]any)
+	for _, id := range []string{"deepseek-ai/deepseek-v4-pro", "z-ai/glm-5.2", "grok-4.5"} {
+		model := models[id].(map[string]any)
+		if model["reasoning"] != true {
+			t.Fatalf("reasoning model %q should be advertised as supported: %#v", id, model)
+		}
+	}
+	if models["plain-chat"].(map[string]any)["reasoning"] != false {
+		t.Fatalf("plain model should not be advertised as reasoning: %#v", models["plain-chat"])
+	}
+	if models["grok-4.5-chat-only"].(map[string]any)["reasoning"] != false {
+		t.Fatalf("explicit reasoning override should win over name inference: %#v", models["grok-4.5-chat-only"])
+	}
 }

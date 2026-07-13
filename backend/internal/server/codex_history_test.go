@@ -73,8 +73,8 @@ func TestWriteCodexConfigCanReplaceAndRestoreOfficialAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(configRaw), `experimental_bearer_token = "PROXY_MANAGED"`) {
-		t.Fatalf("preserved auth mode should use the proxy-managed bearer:\n%s", configRaw)
+	if !strings.Contains(string(configRaw), `experimental_bearer_token = "sk-client-key"`) {
+		t.Fatalf("preserved auth mode should use the client-named token:\n%s", configRaw)
 	}
 }
 
