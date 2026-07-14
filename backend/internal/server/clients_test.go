@@ -3,11 +3,11 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -30,39 +30,17 @@ func TestClientKeyName(t *testing.T) {
 	}
 }
 
-func TestClientRestartsByDefault(t *testing.T) {
-	for _, client := range []string{clientCodex, clientOpenCode} {
-		if !clientRestartsByDefault(client) {
-			t.Fatalf("%s should stop and start during one-click configuration", client)
-		}
+func TestNormalizeClientRouteEnabled(t *testing.T) {
+	routes := normalizeClientRouteEnabled(map[string]bool{
+		"codex":     true,
+		"open-code": true,
+		"unknown":   true,
+	})
+	if !routes[clientCodex] || !routes[clientOpenCode] {
+		t.Fatalf("known client routes were not normalized: %#v", routes)
 	}
-	for _, client := range []string{clientClaudeCode, clientOpenClaw, "unknown"} {
-		if clientRestartsByDefault(client) {
-			t.Fatalf("%s should not restart by default", client)
-		}
-	}
-}
-
-func TestOpenCodeDesktopPathFindsInstalledClient(t *testing.T) {
-	localAppData := t.TempDir()
-	t.Setenv("LOCALAPPDATA", localAppData)
-	desktopPath := filepath.Join(localAppData, "Programs", "@opencode-aidesktop", "OpenCode.exe")
-	if err := os.MkdirAll(filepath.Dir(desktopPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(desktopPath, []byte("test"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := openCodeDesktopPath("", t.TempDir()); !ok || got != desktopPath {
-		t.Fatalf("installed OpenCode Desktop was not found: got %q ok=%v", got, ok)
-	}
-
-	preferred := filepath.Join(t.TempDir(), "CustomOpenCode.exe")
-	if err := os.WriteFile(preferred, []byte("test"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if got, ok := openCodeDesktopPath(preferred, ""); !ok || got != preferred {
-		t.Fatalf("running OpenCode path should be preferred: got %q ok=%v", got, ok)
+	if routes[clientClaudeCode] || routes[clientOpenClaw] || routes["unknown"] {
+		t.Fatalf("disabled or unknown routes were enabled: %#v", routes)
 	}
 }
 
@@ -631,9 +609,10 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 			ClientAPIKeyEntries: []clientAPIKeyEntry{{Name: "Other", Key: "sk-local"}},
 			VisionEnabled:       boolPtr(true),
 		}),
-		configPath: filepath.Join(home, "vision-relay-config.json"),
+		clientProgramController: &recordingClientProgramController{running: false},
+		configPath:              filepath.Join(home, "vision-relay-config.json"),
 	}
-	body := bytes.NewBufferString(`{"client":"codex","start":false,"stop":false,"work_dir":` + strconv.Quote(projectDir) + `}`)
+	body := bytes.NewBufferString(`{"client":"codex","work_dir":` + strconv.Quote(projectDir) + `}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/client/configure", body)
 	req.Host = "127.0.0.1:8787"
 	rec := httptest.NewRecorder()
@@ -642,14 +621,24 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
 	}
 	var result struct {
-		KeyCreated bool   `json:"key_created"`
-		KeyName    string `json:"key_name"`
+		KeyCreated      bool   `json:"key_created"`
+		KeyName         string `json:"key_name"`
+		RouteEnabled    bool   `json:"route_enabled"`
+		RestartRequired bool   `json:"restart_required"`
+		Builtin         bool   `json:"builtin"`
+		WasRunning      bool   `json:"was_running"`
+		AutoRestart     bool   `json:"auto_restart"`
+		AutoStart       bool   `json:"auto_start"`
+		ProgramAction   string `json:"program_action"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.KeyCreated || result.KeyName != "Codex" {
-		t.Fatalf("Codex one-click config should create its named token: %#v", result)
+	if !result.KeyCreated || result.KeyName != "Codex" || !result.RouteEnabled || result.RestartRequired || !result.Builtin || result.WasRunning || !result.AutoRestart || result.AutoStart || result.ProgramAction != "not-running" {
+		t.Fatalf("Codex one-click config should be built in, enable routing, create its named token, and keep a stopped client closed by default: %#v", result)
+	}
+	if !a.currentConfig().ClientRouteEnabled[clientCodex] {
+		t.Fatalf("Codex route was not persisted: %#v", a.currentConfig().ClientRouteEnabled)
 	}
 	var codexKey string
 	for _, entry := range a.currentConfig().ClientAPIKeyEntries {
@@ -679,6 +668,50 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	catalog := string(catalogRaw)
 	if !strings.Contains(catalog, `"slug": "gpt-5.5"`) || !strings.Contains(catalog, `"slug": "gpt-5.4"`) {
 		t.Fatalf("codex model catalog should include hot-switch models:\n%s", catalog)
+	}
+}
+
+func TestHandleClientRoutesApplyOnlyUpdatesEnabledClients(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			Addr:                "127.0.0.1:8787",
+			TextModelMappings:   []textModelMapping{{Name: "route-model", Model: "upstream-model"}},
+			ClientAPIKeyEntries: []clientAPIKeyEntry{{Name: "OpenCode", Key: "sk-opencode"}},
+			ClientRouteEnabled:  map[string]bool{clientOpenCode: true},
+			VisionEnabled:       boolPtr(true),
+		}),
+		configPath: filepath.Join(home, "vision-relay-config.json"),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/client/routes/apply", nil)
+	req.Host = "127.0.0.1:8787"
+	rec := httptest.NewRecorder()
+	a.handleClientRoutesApply(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		OK      bool                `json:"ok"`
+		Clients []clientRouteResult `json:"clients"`
+		Errors  []string            `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || len(result.Errors) != 0 || len(result.Clients) != 1 || result.Clients[0].Client != clientOpenCode {
+		t.Fatalf("wrong route apply result: %#v", result)
+	}
+	openCodeRaw, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(openCodeRaw), `"route-model"`) {
+		t.Fatalf("enabled OpenCode route was not updated:\n%s", openCodeRaw)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("disabled Codex route should not be updated: %v", err)
 	}
 }
 
@@ -1237,74 +1270,6 @@ func TestCodexProjectDirRequiresExplicitWorkDir(t *testing.T) {
 	projectDir := filepath.Join(home, "project")
 	if got := clientProjectDir(clientCodex, projectDir, home); got != projectDir {
 		t.Fatalf("wrong explicit Codex project directory: got %q want %q", got, projectDir)
-	}
-}
-
-func TestCodexLauncherAcceptsAppsFolderIDWithoutDesktopPath(t *testing.T) {
-	ctx := clientConfigContext{LaunchAppID: "OpenAI.Codex_2p2nqsd0c76g0!App"}
-	if !codexLauncherAvailable(ctx) {
-		t.Fatal("Windows AppsFolder ID should be sufficient to launch Codex")
-	}
-}
-func TestCodexDesktopPathUsesWindowsAppLayout(t *testing.T) {
-	home := t.TempDir()
-	appDir := filepath.Join(home, "OpenAI.Codex", "app")
-	resourcesDir := filepath.Join(appDir, "resources")
-	if err := os.MkdirAll(resourcesDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cliName := "codex"
-	if runtime.GOOS == "windows" {
-		cliName += ".exe"
-	}
-	if err := os.WriteFile(filepath.Join(resourcesDir, cliName), []byte{}, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	desktopPath := filepath.Join(appDir, "ChatGPT.exe")
-	if err := os.WriteFile(desktopPath, []byte{}, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", resourcesDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	got, ok := codexDesktopPath("codex", "")
-	if !ok {
-		t.Fatal("expected Codex desktop app path")
-	}
-	if got != desktopPath {
-		t.Fatalf("wrong desktop path: got %q want %q", got, desktopPath)
-	}
-}
-
-func TestCodexClientTargetsDesktopShellOnly(t *testing.T) {
-	names := clientProcessNames(clientCodex)
-	if len(names) == 0 || names[0] != "ChatGPT.exe" {
-		t.Fatalf("Codex desktop shell should be the first restart target: %#v", names)
-	}
-	if len(names) != 1 {
-		t.Fatalf("only the desktop shell may be restarted: %#v", names)
-	}
-}
-
-func TestCodexAppsFolderTarget(t *testing.T) {
-	got := codexAppsFolderTarget("OpenAI.Codex_2p2nqsd0c76g0!App")
-	want := `shell:AppsFolder\OpenAI.Codex_2p2nqsd0c76g0!App`
-	if got != want {
-		t.Fatalf("wrong packaged app launch target: got %q want %q", got, want)
-	}
-}
-
-func TestCodexDesktopPathPrefersCapturedPath(t *testing.T) {
-	home := t.TempDir()
-	preferred := filepath.Join(home, "Codex.exe")
-	if err := os.WriteFile(preferred, []byte{}, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	got, ok := codexDesktopPath("codex-missing", preferred)
-	if !ok {
-		t.Fatal("expected captured Codex desktop path")
-	}
-	if got != preferred {
-		t.Fatalf("wrong desktop path: got %q want %q", got, preferred)
 	}
 }
 

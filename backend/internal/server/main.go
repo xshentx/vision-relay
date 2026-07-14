@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -64,6 +65,18 @@ func Run() {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		log.Printf("config load warning: %v", err)
 	}
+	if !cfg.ClientPathsDetected || cfg.ClientPathDetectionVersion < currentClientPathDetectionVersion {
+		if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
+			// A detection revision only fills missing values so an upgrade never
+			// overwrites paths that the user has edited manually.
+			cfg = detectClientPaths(cfg, homeDir, !cfg.ClientPathsDetected)
+			if saveErr := saveConfigToDB(db, cfg); saveErr != nil {
+				log.Printf("client path detection save warning: %v", saveErr)
+			}
+		} else {
+			log.Printf("client path detection warning: %v", homeErr)
+		}
+	}
 	if *addrFlag != "" {
 		cfg.Addr = *addrFlag
 	}
@@ -92,7 +105,9 @@ func Run() {
 	mux.HandleFunc("/api/debug/vision", a.handleVisionDebug)
 	mux.HandleFunc("/api/key", a.handleGenerateKey)
 	mux.HandleFunc("/api/client/configure", a.handleClientConfigure)
+	mux.HandleFunc("/api/client/routes/apply", a.handleClientRoutesApply)
 	mux.HandleFunc("/api/client/restore", a.handleClientRestore)
+	mux.HandleFunc("/api/settings/detect-clients", a.handleClientPathDetection)
 	mux.HandleFunc("/api/client/codex/history", a.handleCodexHistory)
 	mux.HandleFunc("/api/logs", a.handleLogs)
 	mux.HandleFunc("/api/models", a.handleListModels)
@@ -104,11 +119,11 @@ func Run() {
 
 	server := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           withCORS(mux),
+		Handler:           withManagementAccess(withCORS(mux)),
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 
-	localURL := "http://" + cfg.Addr + "/"
+	localURL := localManagementURL(cfg.Addr)
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		if existingVisionRelayHealthy(localURL) {
@@ -157,6 +172,17 @@ func Run() {
 	}
 }
 
+func localManagementURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "http://" + addr + "/"
+	}
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/"
+}
 func existingVisionRelayHealthy(localURL string) bool {
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(localURL + "healthz")

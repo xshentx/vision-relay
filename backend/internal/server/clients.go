@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +21,6 @@ const (
 	clientOpenClaw            = "openclaw"
 	relayProviderID           = "vision-relay"
 	codexProviderID           = "custom"
-	relayEnvKey               = "VISION_RELAY_API_KEY"
 	codexManagedBearerToken   = "PROXY_MANAGED"
 	codexBaseInstructions     = "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals."
 	codexUnifiedHistoryMarker = "# Added by Vision Relay for unified Codex history."
@@ -32,21 +29,18 @@ const (
 type clientConfigContext struct {
 	HomeDir              string
 	ProjectDir           string
+	ConfigPath           string
 	Origin               string
 	Key                  string
 	Model                string
 	ModelMappings        []textModelMapping
 	VisionEnabled        bool
 	PreserveOfficialAuth *bool
-	LaunchPath           string
-	LaunchAppID          string
 }
 
 type clientConfigRequest struct {
 	Client  string `json:"client"`
 	WorkDir string `json:"work_dir"`
-	Start   *bool  `json:"start"`
-	Stop    *bool  `json:"stop"`
 }
 
 func (a *app) ensureClientKey(client string) (string, string, bool, error) {
@@ -75,6 +69,17 @@ func (a *app) ensureClientKey(client string) (string, string, bool, error) {
 	return key, name, true, nil
 }
 
+type clientRouteResult struct {
+	Client     string `json:"client"`
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	ProjectDir string `json:"project_dir,omitempty"`
+	KeyCreated bool   `json:"key_created"`
+	KeyName    string `json:"key_name"`
+}
+
+var clientRouteOrder = []string{clientCodex, clientOpenCode, clientClaudeCode, clientOpenClaw}
+
 func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -93,74 +98,124 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	key, keyName, created, err := a.ensureClientKey(client)
+	result, err := a.configureClientRoute(client, req.WorkDir, requestOrigin(r, a.currentConfig()), home)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := a.setClientRouteEnabled(client, true); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	cfg := a.currentConfig()
+	autoRestart := normalizeClientBehavior(cfg.ClientAutoRestart, true)[client]
+	autoStart := normalizeClientBehavior(cfg.ClientAutoStart, false)[client]
+	programResult := applyClientProgramBehavior(
+		a.configuredProgramController(),
+		client,
+		configuredClientProgramPath(cfg, client, home),
+		result.ProjectDir,
+		autoRestart,
+		autoStart,
+	)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"client":           result.Client,
+		"path":             result.Path,
+		"project_dir":      result.ProjectDir,
+		"key_created":      result.KeyCreated,
+		"key_name":         result.KeyName,
+		"route_enabled":    true,
+		"restart_required": programResult.RestartRequired,
+		"builtin":          true,
+		"program_path":     programResult.ProgramPath,
+		"was_running":      programResult.WasRunning,
+		"auto_restart":     programResult.AutoRestart,
+		"auto_start":       programResult.AutoStart,
+		"stopped":          programResult.Stopped,
+		"started":          programResult.Started,
+		"restarted":        programResult.Restarted,
+		"program_action":   programResult.Action,
+		"program_warning":  programResult.Warning,
+	})
+}
+
+func (a *app) handleClientRoutesApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	home, err := os.UserHomeDir()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	cfg := a.currentConfig()
-	projectDir := clientProjectDir(client, req.WorkDir, home)
+	routes := normalizeClientRouteEnabled(cfg.ClientRouteEnabled)
+	origin := requestOrigin(r, cfg)
+	results := make([]clientRouteResult, 0, len(clientRouteOrder))
+	applyErrors := make([]string, 0)
+	for _, client := range clientRouteOrder {
+		if !routes[client] {
+			continue
+		}
+		result, configureErr := a.configureClientRoute(client, "", origin, home)
+		if configureErr != nil {
+			applyErrors = append(applyErrors, clientKeyName(client)+": "+configureErr.Error())
+			continue
+		}
+		results = append(results, result)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               len(applyErrors) == 0,
+		"clients":          results,
+		"errors":           applyErrors,
+		"restart_required": len(results) > 0,
+	})
+}
+
+func (a *app) configureClientRoute(client, workDir, origin, home string) (clientRouteResult, error) {
+	key, keyName, created, err := a.ensureClientKey(client)
+	if err != nil {
+		return clientRouteResult{}, err
+	}
+	cfg := a.currentConfig()
+	projectDir := clientProjectDir(client, workDir, home)
 	ctx := clientConfigContext{
 		HomeDir:              home,
 		ProjectDir:           projectDir,
-		Origin:               requestOrigin(r, cfg),
+		ConfigPath:           configuredClientConfigPath(cfg, client, home),
+		Origin:               origin,
 		Key:                  key,
 		Model:                relayModelName(cfg),
 		ModelMappings:        textModelMappings(cfg),
 		VisionEnabled:        visionEnabled(cfg),
 		PreserveOfficialAuth: boolPtr(preserveCodexOfficialAuth(cfg)),
-		LaunchPath:           currentClientDesktopPath(client, home),
-		LaunchAppID:          currentCodexAppID(),
 	}
 	path, err := writeClientConfig(client, ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return clientRouteResult{}, err
 	}
-	warnings := []string{}
-	if client != clientCodex {
-		warnings = append(warnings, persistClientEnv(key)...)
-	}
-	restartClient := clientRestartsByDefault(client)
-	stopRequested := optionalBool(req.Stop, restartClient)
-	startRequested := optionalBool(req.Start, restartClient)
-	stopped := false
-	if stopRequested {
-		stopped = stopClient(client)
-		if stopped {
-			waitForClientStopped(client, 5*time.Second)
-		}
-	}
-	started := false
-	command := clientCommand(client)
-	if startRequested {
-		var startWarnings []string
-		started, command, startWarnings = startClient(client, projectDir, ctx)
-		warnings = append(warnings, startWarnings...)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":          true,
-		"client":      client,
-		"path":        path,
-		"project_dir": projectDir,
-		"key_created": created,
-		"key_name":    keyName,
-		"stopped":     stopped,
-		"started":     started,
-		"command":     command,
-		"warnings":    warnings,
-	})
+	return clientRouteResult{
+		Client:     client,
+		Name:       clientKeyName(client),
+		Path:       path,
+		ProjectDir: projectDir,
+		KeyCreated: created,
+		KeyName:    keyName,
+	}, nil
 }
 
-func optionalBool(value *bool, fallback bool) bool {
-	if value == nil {
-		return fallback
+func (a *app) setClientRouteEnabled(client string, enabled bool) error {
+	client = normalizeClientID(client)
+	if client == "" {
+		return errors.New("unsupported client")
 	}
-	return *value
-}
-
-func clientRestartsByDefault(client string) bool {
-	return client == clientCodex || client == clientOpenCode
+	cfg := a.currentConfig()
+	routes := normalizeClientRouteEnabled(cfg.ClientRouteEnabled)
+	routes[client] = enabled
+	cfg.ClientRouteEnabled = routes
+	return a.setConfig(cfg)
 }
 
 func (a *app) handleClientRestore(w http.ResponseWriter, r *http.Request) {
@@ -185,17 +240,24 @@ func (a *app) handleClientRestore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	cfg := a.currentConfig()
 	projectDir := clientProjectDir(client, req.WorkDir, home)
-	path, err := restoreCodexAccountConfigWithOptions(home, projectDir, a.currentConfig().UnifyCodexSessionHistory)
+	configPath := configuredClientConfigPath(cfg, client, home)
+	path, err := restoreCodexAccountConfigAtPath(home, configPath, projectDir, cfg.UnifyCodexSessionHistory)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if err := a.setClientRouteEnabled(client, false); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":          true,
-		"client":      client,
-		"path":        path,
-		"project_dir": projectDir,
+		"ok":            true,
+		"client":        client,
+		"path":          path,
+		"project_dir":   projectDir,
+		"route_enabled": false,
 	})
 }
 
@@ -307,8 +369,11 @@ func writeClientConfig(client string, ctx clientConfigContext) (string, error) {
 }
 
 func writeCodexConfig(ctx clientConfigContext) (string, error) {
-	configDir := codexConfigDir(ctx.HomeDir)
-	userPath := filepath.Join(configDir, "config.toml")
+	userPath := strings.TrimSpace(ctx.ConfigPath)
+	if userPath == "" {
+		userPath = defaultClientConfigPath(clientCodex, ctx.HomeDir)
+	}
+	configDir := filepath.Dir(userPath)
 	if err := saveCodexAccountConfigBackup(ctx.HomeDir, userPath); err != nil {
 		return "", err
 	}
@@ -545,7 +610,13 @@ func restoreCodexAccountConfig(homeDir, projectDir string) (string, error) {
 }
 
 func restoreCodexAccountConfigWithOptions(homeDir, projectDir string, unifySessionHistory bool) (string, error) {
-	userPath := filepath.Join(codexConfigDir(homeDir), "config.toml")
+	return restoreCodexAccountConfigAtPath(homeDir, defaultClientConfigPath(clientCodex, homeDir), projectDir, unifySessionHistory)
+}
+
+func restoreCodexAccountConfigAtPath(homeDir, userPath, projectDir string, unifySessionHistory bool) (string, error) {
+	if strings.TrimSpace(userPath) == "" {
+		userPath = defaultClientConfigPath(clientCodex, homeDir)
+	}
 	lines := []string{}
 	if raw, err := os.ReadFile(userPath); err == nil {
 		lines = strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
@@ -1202,7 +1273,10 @@ func codexReasoningLevels(effort string) []any {
 }
 
 func writeOpenCodeConfig(ctx clientConfigContext) (string, error) {
-	path := filepath.Join(ctx.HomeDir, ".config", "opencode", "opencode.json")
+	path := strings.TrimSpace(ctx.ConfigPath)
+	if path == "" {
+		path = defaultClientConfigPath(clientOpenCode, ctx.HomeDir)
+	}
 	cfg, err := readJSONMap(path)
 	if err != nil {
 		return "", err
@@ -1256,7 +1330,10 @@ func relayInputModalities(enabled bool) []string {
 }
 
 func writeClaudeCodeConfig(ctx clientConfigContext) (string, error) {
-	path := filepath.Join(ctx.HomeDir, ".claude", "settings.json")
+	path := strings.TrimSpace(ctx.ConfigPath)
+	if path == "" {
+		path = defaultClientConfigPath(clientClaudeCode, ctx.HomeDir)
+	}
 	cfg, err := readJSONMap(path)
 	if err != nil {
 		return "", err
@@ -1316,7 +1393,10 @@ func clientTextModelID(mapping textModelMapping) string {
 }
 
 func writeOpenClawConfig(ctx clientConfigContext) (string, error) {
-	path := openClawConfigPath(ctx.HomeDir)
+	path := strings.TrimSpace(ctx.ConfigPath)
+	if path == "" {
+		path = defaultClientConfigPath(clientOpenClaw, ctx.HomeDir)
+	}
 	cfg, err := readJSON5Map(path)
 	if err != nil {
 		return "", err
@@ -1502,303 +1582,4 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, b, 0o600)
-}
-
-func persistClientEnv(key string) []string {
-	if runtime.GOOS != "windows" {
-		return nil
-	}
-	if err := exec.Command("setx", relayEnvKey, key).Run(); err != nil {
-		return []string{"VISION_RELAY_API_KEY was set for launched clients, but user environment persistence failed."}
-	}
-	return nil
-}
-
-func stopClient(client string) bool {
-	if runtime.GOOS != "windows" {
-		return false
-	}
-	names := clientProcessNames(client)
-	if len(names) == 0 {
-		return false
-	}
-	stopped := false
-	for _, name := range names {
-		if err := exec.Command("taskkill", "/F", "/T", "/IM", name).Run(); err == nil {
-			stopped = true
-		}
-	}
-	return stopped
-}
-
-func waitForClientStopped(client string, timeout time.Duration) {
-	names := clientProcessNames(client)
-	if len(names) == 0 {
-		return
-	}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		running := false
-		for _, name := range names {
-			if windowsProcessRunning(name) {
-				running = true
-				break
-			}
-		}
-		if !running {
-			return
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-}
-
-func windowsProcessRunning(imageName string) bool {
-	out, err := exec.Command("tasklist", "/FI", "IMAGENAME eq "+imageName, "/NH").Output()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(imageName))
-}
-
-func clientProcessName(client string) string {
-	names := clientProcessNames(client)
-	if len(names) == 0 {
-		return ""
-	}
-	return names[0]
-}
-
-func clientProcessNames(client string) []string {
-	switch client {
-	case clientCodex:
-		// The desktop shell is ChatGPT.exe in current Windows packages. Do not
-		// target codex.exe: it is the in-app server, and killing it leaves the
-		// desktop shell alive on its "code-mode host closed" error page.
-		return []string{"ChatGPT.exe"}
-	case clientOpenCode:
-		return []string{"opencode.exe"}
-	case clientClaudeCode:
-		return []string{"claude.exe"}
-	case clientOpenClaw:
-		return []string{"openclaw.exe"}
-	default:
-		return nil
-	}
-}
-
-func startClient(client, workDir string, ctx clientConfigContext) (bool, string, []string) {
-	command := clientCommand(client)
-	if command == "" {
-		return false, "", []string{"Unsupported client."}
-	}
-	if _, err := exec.LookPath(command); err != nil {
-		desktopLauncherAvailable := client == clientCodex && codexLauncherAvailable(ctx)
-		if runtime.GOOS == "windows" && client == clientOpenCode {
-			_, desktopLauncherAvailable = openCodeDesktopPath(ctx.LaunchPath, ctx.HomeDir)
-		}
-		if !desktopLauncherAvailable {
-			return false, command, []string{command + " was not found in PATH. Config was written, but the client was not started."}
-		}
-	}
-	if strings.TrimSpace(workDir) == "" {
-		workDir = ctx.HomeDir
-	}
-	if runtime.GOOS == "windows" {
-		if client == clientOpenCode {
-			if desktopPath, ok := openCodeDesktopPath(ctx.LaunchPath, ctx.HomeDir); ok {
-				cmd := exec.Command(desktopPath)
-				cmd.Dir = workDir
-				cmd.Env = clientEnv(client, ctx)
-				if err := cmd.Start(); err != nil {
-					return false, filepath.Base(desktopPath), []string{err.Error()}
-				}
-				return true, filepath.Base(desktopPath), nil
-			}
-		}
-		if client == clientCodex {
-			if appID := strings.TrimSpace(ctx.LaunchAppID); appID != "" {
-				cmd := exec.Command("explorer.exe", codexAppsFolderTarget(appID))
-				cmd.Dir = workDir
-				if err := cmd.Start(); err != nil {
-					return false, "ChatGPT", []string{err.Error()}
-				}
-				return true, "ChatGPT", nil
-			}
-			if desktopPath, ok := codexDesktopPath(command, ctx.LaunchPath); ok {
-				cmd := exec.Command(desktopPath)
-				cmd.Dir = workDir
-				cmd.Env = clientEnv(client, ctx)
-				if err := cmd.Start(); err != nil {
-					return false, filepath.Base(desktopPath), []string{err.Error()}
-				}
-				return true, filepath.Base(desktopPath), nil
-			}
-		}
-		cmd := exec.Command("cmd", "/c", "start", "Vision Relay "+command, "cmd", "/k", command)
-		cmd.Dir = workDir
-		cmd.Env = clientEnv(client, ctx)
-		if err := cmd.Start(); err != nil {
-			return false, command, []string{err.Error()}
-		}
-		return true, command, nil
-	}
-	cmd := exec.Command(command)
-	cmd.Dir = workDir
-	cmd.Env = clientEnv(client, ctx)
-	if err := cmd.Start(); err != nil {
-		return false, command, []string{err.Error()}
-	}
-	return true, command, nil
-}
-
-func currentClientDesktopPath(client, homeDir string) string {
-	switch client {
-	case clientCodex:
-		return currentCodexDesktopPath()
-	case clientOpenCode:
-		return currentOpenCodeDesktopPath(homeDir)
-	default:
-		return ""
-	}
-}
-
-func currentOpenCodeDesktopPath(homeDir string) string {
-	if runtime.GOOS == "windows" {
-		command := `(Get-CimInstance Win32_Process -Filter "Name='opencode.exe'" | Where-Object { $_.ExecutablePath -like '*\@opencode-aidesktop\*' } | Select-Object -First 1 -ExpandProperty ExecutablePath)`
-		if out, err := exec.Command("powershell", "-NoProfile", "-Command", command).Output(); err == nil {
-			if runningPath := strings.TrimSpace(string(out)); runningPath != "" {
-				if _, err := os.Stat(runningPath); err == nil {
-					return runningPath
-				}
-			}
-		}
-	}
-	path, _ := openCodeDesktopPath("", homeDir)
-	return path
-}
-
-func openCodeDesktopPath(preferred, homeDir string) (string, bool) {
-	candidates := []string{strings.TrimSpace(preferred)}
-	localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
-	if localAppData == "" && strings.TrimSpace(homeDir) != "" {
-		localAppData = filepath.Join(homeDir, "AppData", "Local")
-	}
-	if localAppData != "" {
-		candidates = append(candidates,
-			filepath.Join(localAppData, "Programs", "@opencode-aidesktop", "OpenCode.exe"),
-			filepath.Join(localAppData, "Programs", "OpenCode", "OpenCode.exe"),
-			filepath.Join(localAppData, "OpenCode", "OpenCode.exe"),
-		)
-	}
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, true
-		}
-	}
-	return "", false
-}
-
-func codexLauncherAvailable(ctx clientConfigContext) bool {
-	return strings.TrimSpace(ctx.LaunchPath) != "" || strings.TrimSpace(ctx.LaunchAppID) != ""
-}
-
-func codexAppsFolderTarget(appID string) string {
-	return `shell:AppsFolder\` + strings.TrimSpace(appID)
-}
-
-func codexDesktopPath(command, preferred string) (string, bool) {
-	if path := strings.TrimSpace(preferred); path != "" {
-		if _, err := os.Stat(path); err == nil {
-			return path, true
-		}
-	}
-	if path, err := exec.LookPath(command); err == nil {
-		appDir := filepath.Dir(filepath.Dir(path))
-		for _, name := range []string{"ChatGPT.exe", "Codex.exe"} {
-			candidate := filepath.Join(appDir, name)
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate, true
-			}
-		}
-	}
-	if path := currentCodexDesktopPath(); path != "" {
-		return path, true
-	}
-	return "", false
-}
-
-func currentCodexDesktopPath() string {
-	if runtime.GOOS != "windows" {
-		return ""
-	}
-	command := "(Get-Process -Name ChatGPT,Codex -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*\\ChatGPT.exe' -or $_.Path -like '*\\Codex.exe' } | Select-Object -First 1 -ExpandProperty Path)"
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", command).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func currentCodexAppID() string {
-	if runtime.GOOS != "windows" {
-		return ""
-	}
-	command := "(Get-StartApps | Where-Object { $_.AppID -like 'OpenAI.Codex_*!App' } | Select-Object -First 1 -ExpandProperty AppID)"
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", command).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func clientCommand(client string) string {
-	switch client {
-	case clientCodex:
-		return "codex"
-	case clientOpenCode:
-		return "opencode"
-	case clientClaudeCode:
-		return "claude"
-	case clientOpenClaw:
-		return "openclaw"
-	default:
-		return ""
-	}
-}
-
-func clientEnv(client string, ctx clientConfigContext) []string {
-	env := os.Environ()
-	env = append(env, relayEnvKey+"="+ctx.Key)
-	if client == clientCodex {
-		return env
-	}
-	env = append(env, "OPENAI_API_KEY="+ctx.Key)
-	env = append(env, "ANTHROPIC_BASE_URL="+strings.TrimRight(ctx.Origin, "/"))
-	env = append(env, "ANTHROPIC_AUTH_TOKEN="+ctx.Key)
-	if client == clientClaudeCode {
-		mappings := clientTextModelMappings(ctx)
-		modelIDs := make([]string, 0, len(mappings))
-		for _, mapping := range mappings {
-			modelIDs = append(modelIDs, clientTextModelID(mapping))
-		}
-		slotEnv := map[string]any{}
-		configureClaudeCodeModelSlots(slotEnv, modelIDs)
-		for _, key := range []string{
-			"ANTHROPIC_CUSTOM_MODEL_OPTION",
-			"ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
-			"ANTHROPIC_DEFAULT_SONNET_MODEL",
-			"ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
-			"ANTHROPIC_DEFAULT_OPUS_MODEL",
-			"ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
-			"ANTHROPIC_DEFAULT_HAIKU_MODEL",
-			"ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
-		} {
-			value, _ := slotEnv[key].(string)
-			env = append(env, key+"="+value)
-		}
-	}
-	return env
 }

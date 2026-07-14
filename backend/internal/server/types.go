@@ -36,6 +36,14 @@ type config struct {
 	UnifyCodexSessionHistory          bool                 `json:"unify_codex_session_history"`
 	ClientAPIKeys                     []string             `json:"client_api_keys,omitempty"`
 	ClientAPIKeyEntries               []clientAPIKeyEntry  `json:"client_api_key_entries"`
+	ClientRouteEnabled                map[string]bool      `json:"client_route_enabled"`
+	LocalAPIEnabled                   *bool                `json:"local_api_enabled"`
+	ClientConfigPaths                 map[string]string    `json:"client_config_paths"`
+	ClientProgramPaths                map[string]string    `json:"client_program_paths"`
+	ClientAutoRestart                 map[string]bool      `json:"client_auto_restart"`
+	ClientAutoStart                   map[string]bool      `json:"client_auto_start"`
+	ClientPathsDetected               bool                 `json:"client_paths_detected"`
+	ClientPathDetectionVersion        int                  `json:"client_path_detection_version"`
 	OpenWindow                        bool                 `json:"open_window"`
 	OpenBrowser                       bool                 `json:"open_browser"`
 }
@@ -129,17 +137,18 @@ type endpoint struct {
 }
 
 type app struct {
-	mu          sync.RWMutex
-	cfg         config
-	configPath  string
-	dbPath      string
-	db          *sql.DB
-	httpClient  *http.Client
-	lastVision  visionDebugInfo
-	visionCache map[string]string
-	logMu       sync.Mutex
-	logs        []requestLog
-	nextLogID   int64
+	mu                      sync.RWMutex
+	cfg                     config
+	configPath              string
+	dbPath                  string
+	db                      *sql.DB
+	httpClient              *http.Client
+	lastVision              visionDebugInfo
+	visionCache             map[string]string
+	clientProgramController clientProgramController
+	logMu                   sync.Mutex
+	logs                    []requestLog
+	nextLogID               int64
 }
 
 type requestLog struct {

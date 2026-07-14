@@ -24,7 +24,6 @@
       <nav class="nav" aria-label="主导航">
         <span class="nav-group-label">工作台</span>
         <button class="nav-item active" type="button" data-page="home"><span class="nav-icon">⌂</span><span>概览</span></button>
-        <button class="nav-item" type="button" data-page="update"><span class="nav-icon">&uarr;</span><span>&#31243;&#24207;&#26356;&#26032;</span></button>
         <span class="nav-group-label">模型与接入</span>
         <button class="nav-item" type="button" data-page="text"><span class="nav-icon">T</span><span>文本模型</span></button>
         <button class="nav-item" type="button" data-page="vision"><span class="nav-icon">V</span><span>视觉模型</span></button>
@@ -33,11 +32,14 @@
         <span class="nav-group-label">观测与调试</span>
         <button class="nav-item" type="button" data-page="logs"><span class="nav-icon">≡</span><span>使用日志</span></button>
         <button class="nav-item" type="button" data-page="playground"><span class="nav-icon">›_</span><span>测试台</span></button>
+        <span class="nav-group-label">系统</span>
+        <button class="nav-item" type="button" data-page="update"><span class="nav-icon">&uarr;</span><span>更新</span></button>
+        <button class="nav-item" type="button" data-page="settings"><span class="nav-icon">⚙</span><span>设置</span></button>
       </nav>
 
       <div class="side-note" id="serviceCard">
         <span class="dot" aria-hidden="true"></span>
-        <strong id="serviceState">服务检测中</strong>
+        <strong id="serviceState">本地 API 服务检测中</strong>
       </div>
     </aside>
 
@@ -127,7 +129,7 @@
       </section>
 
       <form id="configForm" class="layout">
-        <section class="page panel span-7" id="text" data-page-panel="text">
+        <section class="page panel standard-page span-12" id="text" data-page-panel="text">
           <div class="panel-head">
             <div>
               <h3>文本模型</h3>
@@ -138,7 +140,7 @@
           <div class="profile-list" id="textProfileList" aria-label="文本模型列表"></div>
         </section>
 
-        <section class="page panel span-7" id="vision" data-page-panel="vision">
+        <section class="page panel standard-page span-12" id="vision" data-page-panel="vision">
           <div class="panel-head">
             <div>
               <h3>视觉模型</h3>
@@ -157,9 +159,9 @@
           <div class="hint" id="visionModelHint">视觉模型需要能描述图片内容。不要使用 llama-guard、safety、moderation 这类安全分类模型，否则只会返回 safe/unsafe。</div>
         </section>
 
-        <section class="page token-page span-12" id="tokens" data-page-panel="tokens">
-          <div class="page-heading token-page-heading">
-            <div><span class="page-kicker">ACCESS TOKENS</span><h3>访问令牌</h3><p>为不同客户端创建独立令牌，便于识别调用来源并随时撤销访问。</p></div>
+        <section class="page panel standard-page token-page span-12" id="tokens" data-page-panel="tokens">
+          <div class="panel-head token-page-heading">
+            <div><h3>访问令牌</h3><p>为不同客户端创建独立令牌，便于识别调用来源并随时撤销访问。</p></div>
             <span class="configuration-status"><i></i>仅保存在本机</span>
           </div>
 
@@ -192,9 +194,9 @@
           </article>
         </section>
 
-        <section class="page access-page span-12" id="access" data-page-panel="access">
-          <div class="page-heading">
-            <div><span class="page-kicker">CLIENT CONNECTIONS</span><h3>客户端接入</h3><p>统一管理 Codex、OpenCode、Claude Code、OpenClaw 与兼容 API 的连接配置。</p></div>
+        <section class="page panel standard-page access-page span-12" id="access" data-page-panel="access">
+          <div class="panel-head access-page-heading">
+            <div><h3>客户端接入</h3><p>统一管理 Codex、OpenCode、Claude Code、OpenClaw 与兼容 API 的连接配置。</p></div>
             <span class="configuration-status"><i></i>配置已同步</span>
           </div>
 
@@ -211,7 +213,7 @@
             <article class="component-card access-guide-card">
               <div class="component-card-head"><div><h4>快速配置</h4><p>推荐按以下流程完成客户端接入。</p></div><span class="component-tag success">3 步</span></div>
               <div class="access-guide-list"><div><span>1</span><p><strong>创建独立访问令牌</strong><small>在“访问令牌”菜单中为客户端生成专属令牌。</small></p></div><div><span>2</span><p><strong>选择并配置客户端</strong><small>在下方标签中选择 Codex、OpenCode、Claude Code 或 OpenClaw。</small></p></div><div><span>3</span><p><strong>重启并发送测试消息</strong><small>模型列表与多模态能力会自动同步。</small></p></div></div>
-              <div class="component-alert info"><strong>配置提示</strong><span>切换文本模型后，无需重新生成客户端配置。</span></div>
+              <div class="component-alert info"><strong>配置提示</strong><span>切换文本供应商后，已启用路由的客户端配置会自动同步；成功后请重启客户端程序。</span></div>
             </article>
           </div>
 
@@ -224,16 +226,103 @@
           </article>
 
           <article class="component-card client-config-card">
-            <div class="component-card-head client-config-heading"><div><h4>客户端配置</h4><p>选择客户端后复制配置，或使用一键配置写入本地文件。</p></div><span class="component-tag">自动生成</span></div>
+            <div class="component-card-head client-config-heading"><div><h4>客户端配置</h4><p>一键配置由程序直接写入本地文件，不再启动终端；开启路由后，切换供应商会自动同步配置。</p></div><span class="component-tag">程序内置</span></div>
             <div class="client-tabs" role="tablist" aria-label="客户端类型"><button class="client-tab active" type="button" role="tab" aria-selected="true" data-client-tab="codex">Codex</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="opencode">OpenCode</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="claude-code">Claude Code</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="openclaw">OpenClaw</button></div>
-            <div class="client-tab-panel active" data-client-panel="codex"><div class="client-panel-intro"><div><h4>Codex</h4><p>通过 Responses 接口连接本机中转，并保留工具调用和图片解析结果。</p></div><div class="panel-actions"><button class="secondary small-action" id="restoreCodex" type="button">恢复官方模式</button><button class="primary-action small-action" id="configureCodex" type="button">一键配置 Codex</button></div></div><pre><code id="codexConfig"></code></pre></div>
-            <div class="client-tab-panel" data-client-panel="opencode" hidden><div class="client-panel-intro"><div><h4>OpenCode</h4><p>配置 OpenAI-compatible 模型的图片附件能力，避免客户端在本地拦截图片。</p></div><div class="panel-actions"><button class="primary-action small-action" id="configureOpenCode" type="button">一键配置 OpenCode</button></div></div><pre><code id="opencodeConfig"></code></pre></div>
-            <div class="client-tab-panel" data-client-panel="claude-code" hidden><div class="client-panel-intro"><div><h4>Claude Code</h4><p>通过 Anthropic Messages 接口连接，并保留工具调用和视觉识别结果。</p></div><div class="panel-actions"><button class="primary-action small-action" id="configureClaudeCode" type="button">一键配置 Claude Code</button></div></div><pre><code id="claudeCodeConfig"></code></pre></div>
-            <div class="client-tab-panel" data-client-panel="openclaw" hidden><div class="client-panel-intro"><div><h4>OpenClaw</h4><p>写入 OpenAI-compatible 自定义供应商、可用模型与图片输入能力，并切换默认模型。</p></div><div class="panel-actions"><button class="primary-action small-action" id="configureOpenClaw" type="button">一键配置 OpenClaw</button></div></div><pre><code id="openclawConfig"></code></pre></div>
+            <div class="client-tab-panel active" data-client-panel="codex"><div class="client-panel-intro"><div><h4>Codex</h4><p>通过 Responses 接口连接本机中转，并保留工具调用和图片解析结果。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeCodex" type="checkbox"><span aria-hidden="true"></span></span></label><button class="secondary small-action" id="restoreCodex" type="button">恢复官方模式</button><button class="primary-action small-action" id="configureCodex" type="button">一键配置 Codex</button></div></div><pre><code id="codexConfig"></code></pre></div>
+            <div class="client-tab-panel" data-client-panel="opencode" hidden><div class="client-panel-intro"><div><h4>OpenCode</h4><p>配置 OpenAI-compatible 模型的图片附件能力，避免客户端在本地拦截图片。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeOpenCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureOpenCode" type="button">一键配置 OpenCode</button></div></div><pre><code id="opencodeConfig"></code></pre></div>
+            <div class="client-tab-panel" data-client-panel="claude-code" hidden><div class="client-panel-intro"><div><h4>Claude Code</h4><p>通过 Anthropic Messages 接口连接，并保留工具调用和视觉识别结果。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureClaudeCode" type="button">一键配置 Claude Code</button></div></div><pre><code id="claudeCodeConfig"></code></pre></div>
+            <div class="client-tab-panel" data-client-panel="openclaw" hidden><div class="client-panel-intro"><div><h4>OpenClaw</h4><p>写入 OpenAI-compatible 自定义供应商、可用模型与图片输入能力，并切换默认模型。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeOpenClaw" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureOpenClaw" type="button">一键配置 OpenClaw</button></div></div><pre><code id="openclawConfig"></code></pre></div>
           </article>
         </section>
 
-        <section class="page panel span-12" id="logs" data-page-panel="logs">
+        <section class="page panel standard-page settings-page span-12" id="settings" data-page-panel="settings">
+          <div class="panel-head settings-page-heading">
+            <div><h3>设置</h3><p>管理本地 API，以及客户端配置文件和程序位置。</p></div>
+            <div class="panel-actions"><button class="primary-action" id="saveProgramSettings" type="button">保存设置</button></div>
+          </div>
+
+          <article class="component-card settings-api-card">
+            <div class="component-card-head"><div><h4>本地 API 接口</h4><p>设置客户端访问 Vision Relay 的监听地址；关闭接口不会影响管理页面。</p></div><label class="client-route-control"><span>启用接口</span><span class="switch-control"><input id="settingsLocalAPIEnabled" type="checkbox"><span aria-hidden="true"></span></span></label></div>
+            <div class="settings-grid api-settings-grid">
+              <label><span>监听地址</span><input id="settingsAPIHost" type="text" autocomplete="off" placeholder="127.0.0.1"><small>127.0.0.1 仅允许本机访问；0.0.0.0 允许局域网设备访问。</small></label>
+              <label><span>监听端口</span><input id="settingsAPIPort" type="number" min="1" max="65535" step="1" placeholder="8787"><small>地址或端口修改后，重启 Vision Relay 生效。</small></label>
+            </div>
+          </article>
+
+          <article class="component-card settings-behavior-card">
+            <div class="component-card-head"><div><h4>一键配置行为</h4><p>分别控制每个客户端写入配置后的运行行为；默认重启已运行的客户端，未运行时保持关闭。</p></div><span class="component-tag">按客户端设置</span></div>
+            <div class="client-behavior-list">
+              <div class="client-behavior-row">
+                <div class="client-behavior-name"><span class="client-path-mark">C</span><span><strong>Codex</strong><small>Microsoft Store / 桌面客户端</small></span></div>
+                <div class="client-behavior-options">
+                  <label class="client-behavior-option"><span><strong>自动重启</strong><small>配置前已运行时，自动关闭并重新启动。</small></span><span class="switch-control"><input id="autoRestartCodex" type="checkbox"><span aria-hidden="true"></span></span></label>
+                  <label class="client-behavior-option"><span><strong>未运行时自动启动</strong><small>配置前未运行时，完成后自动启动。</small></span><span class="switch-control"><input id="autoStartCodex" type="checkbox"><span aria-hidden="true"></span></span></label>
+                </div>
+              </div>
+              <div class="client-behavior-row">
+                <div class="client-behavior-name"><span class="client-path-mark">O</span><span><strong>OpenCode</strong><small>桌面客户端 / 命令行程序</small></span></div>
+                <div class="client-behavior-options">
+                  <label class="client-behavior-option"><span><strong>自动重启</strong><small>配置前已运行时，自动关闭并重新启动。</small></span><span class="switch-control"><input id="autoRestartOpenCode" type="checkbox"><span aria-hidden="true"></span></span></label>
+                  <label class="client-behavior-option"><span><strong>未运行时自动启动</strong><small>配置前未运行时，完成后自动启动。</small></span><span class="switch-control"><input id="autoStartOpenCode" type="checkbox"><span aria-hidden="true"></span></span></label>
+                </div>
+              </div>
+              <div class="client-behavior-row">
+                <div class="client-behavior-name"><span class="client-path-mark">CL</span><span><strong>Claude Code</strong><small>命令行客户端</small></span></div>
+                <div class="client-behavior-options">
+                  <label class="client-behavior-option"><span><strong>自动重启</strong><small>配置前已运行时，自动关闭并重新启动。</small></span><span class="switch-control"><input id="autoRestartClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label>
+                  <label class="client-behavior-option"><span><strong>未运行时自动启动</strong><small>配置前未运行时，完成后自动启动。</small></span><span class="switch-control"><input id="autoStartClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label>
+                </div>
+              </div>
+              <div class="client-behavior-row">
+                <div class="client-behavior-name"><span class="client-path-mark">OC</span><span><strong>OpenClaw</strong><small>桌面客户端 / 命令行程序</small></span></div>
+                <div class="client-behavior-options">
+                  <label class="client-behavior-option"><span><strong>自动重启</strong><small>配置前已运行时，自动关闭并重新启动。</small></span><span class="switch-control"><input id="autoRestartOpenClaw" type="checkbox"><span aria-hidden="true"></span></span></label>
+                  <label class="client-behavior-option"><span><strong>未运行时自动启动</strong><small>配置前未运行时，完成后自动启动。</small></span><span class="switch-control"><input id="autoStartOpenClaw" type="checkbox"><span aria-hidden="true"></span></span></label>
+                </div>
+              </div>
+            </div>
+            <div class="settings-note"><strong>默认行为</strong><span>客户端正在运行时自动重启；客户端未运行时不自动启动。两个开关仅在点击“一键配置”时生效。</span></div>
+          </article>
+
+          <article class="component-card settings-path-card">
+            <div class="component-card-head settings-path-head">
+              <div><h4>客户端位置</h4><p>首次运行和检测规则升级后会自动补全缺失位置，也可以手动修改或重新检测。</p></div>
+              <div class="settings-card-actions"><span class="component-tag" id="clientPathDetectionState">等待检测</span><button class="secondary small-action" id="detectClientPaths" type="button">重新检测</button></div>
+            </div>
+            <div class="client-path-list">
+              <div class="client-path-row">
+                <div class="client-path-name"><span class="client-path-mark">C</span><span><strong>Codex</strong><small>Microsoft Store / 桌面客户端</small></span></div>
+                <div class="client-path-fields">
+                  <label><span>配置文件</span><input id="configPathCodex" type="text" autocomplete="off" placeholder="未检测到配置文件"></label>
+                  <label><span>桌面客户端程序</span><input id="programPathCodex" type="text" autocomplete="off" placeholder="未检测到 Codex 桌面客户端"></label>
+                </div>
+              </div>
+              <div class="client-path-row">
+                <div class="client-path-name"><span class="client-path-mark">O</span><span><strong>OpenCode</strong><small>配置文件与客户端程序</small></span></div>
+                <div class="client-path-fields">
+                  <label><span>配置文件</span><input id="configPathOpenCode" type="text" autocomplete="off" placeholder="未检测到配置文件"></label>
+                  <label><span>客户端程序</span><input id="programPathOpenCode" type="text" autocomplete="off" placeholder="未检测到客户端程序"></label>
+                </div>
+              </div>
+              <div class="client-path-row">
+                <div class="client-path-name"><span class="client-path-mark">CL</span><span><strong>Claude Code</strong><small>配置文件与命令行程序</small></span></div>
+                <div class="client-path-fields">
+                  <label><span>配置文件</span><input id="configPathClaudeCode" type="text" autocomplete="off" placeholder="未检测到配置文件"></label>
+                  <label><span>客户端程序</span><input id="programPathClaudeCode" type="text" autocomplete="off" placeholder="未检测到客户端程序"></label>
+                </div>
+              </div>
+              <div class="client-path-row">
+                <div class="client-path-name"><span class="client-path-mark">OC</span><span><strong>OpenClaw</strong><small>配置文件与客户端程序</small></span></div>
+                <div class="client-path-fields">
+                  <label><span>配置文件</span><input id="configPathOpenClaw" type="text" autocomplete="off" placeholder="未检测到配置文件"></label>
+                  <label><span>客户端程序</span><input id="programPathOpenClaw" type="text" autocomplete="off" placeholder="未检测到客户端程序"></label>
+                </div>
+              </div>
+            </div>
+            <div class="settings-note"><strong>路径用途</strong><span>配置文件位置用于“一键配置”和供应商切换同步；客户端程序位置用于检测运行状态，并在对应开关启用时自动启动或重启客户端。</span></div>
+          </article>
+        </section>
+        <section class="page panel standard-page span-12" id="logs" data-page-panel="logs">
           <div class="panel-head">
             <div>
               <h3>使用日志</h3>
@@ -263,10 +352,10 @@
           </div>
         </section>
 
-        <section class="page panel span-12" id="update" data-page-panel="update">
+        <section class="page panel standard-page span-12" id="update" data-page-panel="update">
           <div class="panel-head">
             <div>
-              <h3>&#31243;&#24207;&#26356;&#26032;</h3>
+              <h3>更新</h3>
               <p>&#33258;&#21160;&#26816;&#26597; GitHub Releases&#65292;&#19979;&#36733;&#26368;&#26032;&#29256;&#24182;&#23433;&#20840;&#26367;&#25442;&#24403;&#21069;&#31243;&#24207;&#12290;</p>
             </div>
             <button class="secondary" id="checkUpdate" type="button">&#26816;&#26597;&#26356;&#26032;</button>
@@ -286,7 +375,7 @@
           </div>
         </section>
 
-        <section class="page panel span-12" id="playground" data-page-panel="playground">
+        <section class="page panel standard-page span-12" id="playground" data-page-panel="playground">
           <div class="panel-head">
             <div>
               <h3>请求测试台</h3>
@@ -403,7 +492,7 @@
           </div>
           <div class="model-picker-status" id="modelPickerStatus">点击模型即可填入。</div>
         </div>
-        <label id="modalProfileProxyWrap">
+        <label class="modal-wide-field" id="modalProfileProxyWrap">
           网络代理 URL
           <input id="modalProfileProxyURL" placeholder="例如 http://127.0.0.1:7890">
         </label>

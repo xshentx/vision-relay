@@ -2,6 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -38,6 +40,12 @@ func defaultConfig() config {
 		VisionEnabled:                     boolPtr(env("VISION_ENABLED", "true") != "false"),
 		PreserveCodexOfficialAuthOnSwitch: boolPtr(true),
 		ClientAPIKeyEntries:               keysToEntries(splitKeys(env("CLIENT_API_KEYS", ""))),
+		ClientRouteEnabled:                defaultClientRouteEnabled(),
+		LocalAPIEnabled:                   boolPtr(env("LOCAL_API_ENABLED", "true") != "false"),
+		ClientConfigPaths:                 map[string]string{},
+		ClientProgramPaths:                map[string]string{},
+		ClientAutoRestart:                 defaultClientAutoRestart(),
+		ClientAutoStart:                   defaultClientAutoStart(),
 		OpenWindow:                        env("OPEN_WINDOW", "true") != "false",
 		OpenBrowser:                       env("OPEN_BROWSER", "false") == "true",
 	}
@@ -171,6 +179,26 @@ func mergeConfig(base, loaded config) config {
 	} else if len(loaded.ClientAPIKeys) > 0 {
 		base.ClientAPIKeyEntries = keysToEntries(loaded.ClientAPIKeys)
 	}
+	if loaded.ClientRouteEnabled != nil {
+		base.ClientRouteEnabled = normalizeClientRouteEnabled(loaded.ClientRouteEnabled)
+	}
+	if loaded.LocalAPIEnabled != nil {
+		base.LocalAPIEnabled = loaded.LocalAPIEnabled
+	}
+	if loaded.ClientConfigPaths != nil {
+		base.ClientConfigPaths = normalizeClientPathMap(loaded.ClientConfigPaths)
+	}
+	if loaded.ClientProgramPaths != nil {
+		base.ClientProgramPaths = normalizeClientPathMap(loaded.ClientProgramPaths)
+	}
+	if loaded.ClientAutoRestart != nil {
+		base.ClientAutoRestart = normalizeClientBehavior(loaded.ClientAutoRestart, true)
+	}
+	if loaded.ClientAutoStart != nil {
+		base.ClientAutoStart = normalizeClientBehavior(loaded.ClientAutoStart, false)
+	}
+	base.ClientPathsDetected = loaded.ClientPathsDetected
+	base.ClientPathDetectionVersion = loaded.ClientPathDetectionVersion
 	base.OpenWindow = loaded.OpenWindow
 	base.OpenBrowser = loaded.OpenBrowser
 	base = normalizeSeparateModelProfiles(base)
@@ -216,6 +244,11 @@ func (a *app) setConfig(cfg config) error {
 	if cfg.Addr == "" {
 		cfg.Addr = defaultAddr
 	}
+	addr, err := normalizeListenAddress(cfg.Addr)
+	if err != nil {
+		return err
+	}
+	cfg.Addr = addr
 	if cfg.TextProvider == "" {
 		cfg.TextProvider = defaultTextProvider
 	}
@@ -245,6 +278,16 @@ func (a *app) setConfig(cfg config) error {
 	cfg.ProxyURL = strings.TrimSpace(cfg.ProxyURL)
 	cfg.ClientAPIKeyEntries = normalizeClientAPIKeyEntries(cfg.ClientAPIKeyEntries)
 	cfg.ClientAPIKeys = nil
+	cfg.ClientRouteEnabled = normalizeClientRouteEnabled(cfg.ClientRouteEnabled)
+	if cfg.LocalAPIEnabled == nil {
+		cfg.LocalAPIEnabled = boolPtr(true)
+	}
+	cfg.ClientConfigPaths = normalizeClientPathMap(cfg.ClientConfigPaths)
+	cfg.ClientProgramPaths = normalizeClientPathMap(cfg.ClientProgramPaths)
+	cfg.ClientAutoRestart = normalizeClientBehavior(cfg.ClientAutoRestart, true)
+	cfg.ClientAutoStart = normalizeClientBehavior(cfg.ClientAutoStart, false)
+	cfg.ClientPathsDetected = true
+	cfg.ClientPathDetectionVersion = currentClientPathDetectionVersion
 	cfg.TextProvider = normalizeProvider(cfg.TextProvider)
 	cfg.VisionProvider = normalizeProvider(cfg.VisionProvider)
 	cfg = normalizeSeparateModelProfiles(cfg)
@@ -258,6 +301,21 @@ func (a *app) setConfig(cfg config) error {
 	return saveConfig(a.configPath, cfg)
 }
 
+func normalizeListenAddress(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = defaultAddr
+	}
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return "", fmt.Errorf("API 监听地址必须使用 主机:端口 格式: %w", err)
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", fmt.Errorf("API 端口必须在 1 到 65535 之间")
+	}
+	return net.JoinHostPort(strings.TrimSpace(host), strconv.Itoa(portNumber)), nil
+}
 func boolPtr(value bool) *bool {
 	return &value
 }
@@ -268,6 +326,46 @@ func visionEnabled(cfg config) bool {
 
 func preserveCodexOfficialAuth(cfg config) bool {
 	return cfg.PreserveCodexOfficialAuthOnSwitch == nil || *cfg.PreserveCodexOfficialAuthOnSwitch
+}
+
+func defaultClientRouteEnabled() map[string]bool {
+	return map[string]bool{
+		clientCodex:      false,
+		clientOpenCode:   false,
+		clientClaudeCode: false,
+		clientOpenClaw:   false,
+	}
+}
+
+func normalizeClientRouteEnabled(routes map[string]bool) map[string]bool {
+	normalized := defaultClientRouteEnabled()
+	for client, enabled := range routes {
+		if id := normalizeClientID(client); id != "" {
+			normalized[id] = enabled
+		}
+	}
+	return normalized
+}
+
+func defaultClientAutoRestart() map[string]bool {
+	return normalizeClientBehavior(nil, true)
+}
+
+func defaultClientAutoStart() map[string]bool {
+	return normalizeClientBehavior(nil, false)
+}
+
+func normalizeClientBehavior(values map[string]bool, fallback bool) map[string]bool {
+	normalized := make(map[string]bool, len(clientRouteOrder))
+	for _, client := range clientRouteOrder {
+		normalized[client] = fallback
+	}
+	for client, enabled := range values {
+		if id := normalizeClientID(client); id != "" {
+			normalized[id] = enabled
+		}
+	}
+	return normalized
 }
 
 func textSupportsImages(cfg config, requested string) bool {

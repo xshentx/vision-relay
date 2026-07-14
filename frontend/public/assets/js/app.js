@@ -32,6 +32,42 @@ const claudeCodeConfig = document.querySelector("#claudeCodeConfig");
 const configureClaudeCode = document.querySelector("#configureClaudeCode");
 const openclawConfig = document.querySelector("#openclawConfig");
 const configureOpenClaw = document.querySelector("#configureOpenClaw");
+const clientRouteInputs = {
+  codex: document.querySelector("#routeCodex"),
+  opencode: document.querySelector("#routeOpenCode"),
+  "claude-code": document.querySelector("#routeClaudeCode"),
+  openclaw: document.querySelector("#routeOpenClaw")
+};
+const settingsLocalAPIEnabled = document.querySelector("#settingsLocalAPIEnabled");
+const settingsAPIHost = document.querySelector("#settingsAPIHost");
+const settingsAPIPort = document.querySelector("#settingsAPIPort");
+const saveProgramSettings = document.querySelector("#saveProgramSettings");
+const detectClientPaths = document.querySelector("#detectClientPaths");
+const clientPathDetectionState = document.querySelector("#clientPathDetectionState");
+const clientConfigPathInputs = {
+  codex: document.querySelector("#configPathCodex"),
+  opencode: document.querySelector("#configPathOpenCode"),
+  "claude-code": document.querySelector("#configPathClaudeCode"),
+  openclaw: document.querySelector("#configPathOpenClaw")
+};
+const clientProgramPathInputs = {
+  codex: document.querySelector("#programPathCodex"),
+  opencode: document.querySelector("#programPathOpenCode"),
+  "claude-code": document.querySelector("#programPathClaudeCode"),
+  openclaw: document.querySelector("#programPathOpenClaw")
+};
+const clientAutoRestartInputs = {
+  codex: document.querySelector("#autoRestartCodex"),
+  opencode: document.querySelector("#autoRestartOpenCode"),
+  "claude-code": document.querySelector("#autoRestartClaudeCode"),
+  openclaw: document.querySelector("#autoRestartOpenClaw")
+};
+const clientAutoStartInputs = {
+  codex: document.querySelector("#autoStartCodex"),
+  opencode: document.querySelector("#autoStartOpenCode"),
+  "claude-code": document.querySelector("#autoStartClaudeCode"),
+  openclaw: document.querySelector("#autoStartOpenClaw")
+};
 const textProfileList = document.querySelector("#textProfileList");
 const addTextProfile = document.querySelector("#addTextProfile");
 const visionProfileList = document.querySelector("#visionProfileList");
@@ -100,9 +136,22 @@ let activeVisionProfileId = "";
 let visionCapabilityEnabled = true;
 let toastTimer = 0;
 let currentConfig = {};
+let clientRouteEnabled = normalizeClientRoutes({});
+let programSettings = {
+  addr: "127.0.0.1:8787",
+  localAPIEnabled: true,
+  openWindow: true,
+  openBrowser: false,
+  clientConfigPaths: {},
+  clientProgramPaths: {},
+  clientAutoRestart: normalizeClientBehavior({}, true),
+  clientAutoStart: normalizeClientBehavior({}, false),
+  clientPathsDetected: false
+};
 let profileModalKind = "text";
 let profileModalMode = "create";
 let profileModalEditId = "";
+let profileDragState = null;
 let fetchedModels = [];
 let modalModelMappings = [];
 let currentLogPage = 1;
@@ -162,6 +211,7 @@ clientTabButtons.forEach((button) => {
 function showPage(page) {
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.page === page));
   pages.forEach((panel) => panel.classList.toggle("active", panel.dataset.pagePanel === page));
+  window.scrollTo({top: 0, left: 0, behavior: "auto"});
 }
 
 function setStatus(text) {
@@ -169,10 +219,16 @@ function setStatus(text) {
 }
 
 function setServiceOnline(online) {
-  serviceState.textContent = online ? "服务运行正常" : "服务连接失败";
+  const localAPIEnabled = programSettings.localAPIEnabled !== false;
+  const stateText = localAPIEnabled
+    ? (online ? "本地 API 服务运行正常" : "本地 API 服务连接失败")
+    : "本地 API 服务已关闭";
+  serviceState.textContent = stateText;
+  if (homeProxyState) homeProxyState.textContent = stateText;
   if (serviceCard) {
-    serviceCard.classList.toggle("online", online);
-    serviceCard.classList.toggle("offline", !online);
+    serviceCard.classList.toggle("online", localAPIEnabled && online);
+    serviceCard.classList.toggle("offline", localAPIEnabled && !online);
+    serviceCard.classList.toggle("disabled", !localAPIEnabled);
   }
 }
 
@@ -206,11 +262,95 @@ async function readErrorMessage(res) {
   }
 }
 
+function normalizeClientPaths(paths) {
+  return {
+    codex: String(paths?.codex || "").trim(),
+    opencode: String(paths?.opencode || "").trim(),
+    "claude-code": String(paths?.["claude-code"] || "").trim(),
+    openclaw: String(paths?.openclaw || "").trim()
+  };
+}
+
+function normalizeClientBehavior(values, fallback) {
+  return {
+    codex: typeof values?.codex === "boolean" ? values.codex : fallback,
+    opencode: typeof values?.opencode === "boolean" ? values.opencode : fallback,
+    "claude-code": typeof values?.["claude-code"] === "boolean" ? values["claude-code"] : fallback,
+    openclaw: typeof values?.openclaw === "boolean" ? values.openclaw : fallback
+  };
+}
+
+function splitListenAddress(value) {
+  const address = String(value || "").trim();
+  if (address.startsWith("[")) {
+    const bracket = address.indexOf("]");
+    if (bracket >= 0 && address[bracket + 1] === ":") {
+      return {host: address.slice(1, bracket), port: address.slice(bracket + 2)};
+    }
+  }
+  const separator = address.lastIndexOf(":");
+  if (separator >= 0) {
+    return {host: address.slice(0, separator), port: address.slice(separator + 1)};
+  }
+  return {host: "127.0.0.1", port: "8787"};
+}
+
+function joinListenAddress(host, port) {
+  const normalizedHost = String(host || "").trim().replace(/^\[|\]$/g, "");
+  return normalizedHost.includes(":")
+    ? `[${normalizedHost}]:${port}`
+    : `${normalizedHost}:${port}`;
+}
+
+function syncProgramSettingsInputs() {
+  const address = splitListenAddress(programSettings.addr);
+  if (settingsLocalAPIEnabled) settingsLocalAPIEnabled.checked = programSettings.localAPIEnabled;
+  if (settingsAPIHost) settingsAPIHost.value = address.host;
+  if (settingsAPIPort) settingsAPIPort.value = address.port || "8787";
+  Object.entries(clientConfigPathInputs).forEach(([client, input]) => {
+    if (input) input.value = programSettings.clientConfigPaths[client] || "";
+  });
+  Object.entries(clientProgramPathInputs).forEach(([client, input]) => {
+    if (input) input.value = programSettings.clientProgramPaths[client] || "";
+  });
+  Object.entries(clientAutoRestartInputs).forEach(([client, input]) => {
+    if (input) input.checked = programSettings.clientAutoRestart[client] !== false;
+  });
+  Object.entries(clientAutoStartInputs).forEach(([client, input]) => {
+    if (input) input.checked = programSettings.clientAutoStart[client] === true;
+  });
+  if (clientPathDetectionState) {
+    clientPathDetectionState.textContent = programSettings.clientPathsDetected ? "\u5df2\u5b8c\u6210\u68c0\u6d4b" : "\u5c1a\u672a\u68c0\u6d4b";
+  }
+}
+
+function collectClientPaths(inputs) {
+  return Object.fromEntries(Object.entries(inputs).map(([client, input]) => [client, input?.value.trim() || ""]));
+}
+
+function collectClientBehavior(inputs) {
+  return Object.fromEntries(Object.entries(inputs).map(([client, input]) => [client, input?.checked === true]));
+}
+
 async function loadConfig() {
   const res = await fetch("/api/config");
   if (!res.ok) throw new Error(`config ${res.status}`);
   const cfg = await res.json();
   currentConfig = cfg;
+  programSettings = {
+    addr: cfg.addr || "127.0.0.1:8787",
+    localAPIEnabled: cfg.local_api_enabled !== false,
+    openWindow: cfg.open_window !== false,
+    openBrowser: cfg.open_browser === true,
+    clientConfigPaths: normalizeClientPaths(cfg.client_config_paths),
+    clientProgramPaths: normalizeClientPaths(cfg.client_program_paths),
+    clientAutoRestart: normalizeClientBehavior(cfg.client_auto_restart, true),
+    clientAutoStart: normalizeClientBehavior(cfg.client_auto_start, false),
+    clientPathsDetected: cfg.client_paths_detected === true
+  };
+  syncProgramSettingsInputs();
+  clientRouteEnabled = normalizeClientRoutes(cfg.client_route_enabled);
+  syncClientRouteInputs();
   visionCapabilityEnabled = cfg.vision_enabled !== false;
   if (visionEnabledInput) {
     visionEnabledInput.checked = visionCapabilityEnabled;
@@ -424,15 +564,22 @@ profileModalForm.addEventListener("submit", (event) => {
 
 async function persistConfig(successMessage = "配置已自动保存") {
   const data = {};
-  data.addr = currentConfig.addr || "";
-  data.open_window = true;
-  data.open_browser = false;
+  data.addr = programSettings.addr;
+  data.local_api_enabled = programSettings.localAPIEnabled;
+  data.client_config_paths = normalizeClientPaths(programSettings.clientConfigPaths);
+  data.client_program_paths = normalizeClientPaths(programSettings.clientProgramPaths);
+  data.client_auto_restart = normalizeClientBehavior(programSettings.clientAutoRestart, true);
+  data.client_auto_start = normalizeClientBehavior(programSettings.clientAutoStart, false);
+  data.client_paths_detected = programSettings.clientPathsDetected;
+  data.open_window = programSettings.openWindow;
+  data.open_browser = programSettings.openBrowser;
   data.vision_prompt = currentConfig.vision_prompt || "";
   data.vision_enabled = visionCapabilityEnabled;
   data.preserve_codex_official_auth_on_switch = preserveCodexOfficialAuth?.checked !== false;
   data.unify_codex_session_history = unifyCodexSessionHistory?.checked === true;
   syncClientKeyNames();
   data.client_api_key_entries = normalizeClientKeys(clientKeys);
+  data.client_route_enabled = normalizeClientRoutes(clientRouteEnabled);
   data.text_model_profiles = normalizeTextProfiles(textProfiles);
   data.active_text_profile_id = activeTextProfileId;
   data.vision_model_profiles = normalizeVisionProfiles(visionProfiles);
@@ -458,11 +605,65 @@ async function persistConfig(successMessage = "配置已自动保存") {
   }
   const payload = await res.json();
   currentConfig = payload?.config || {...currentConfig, ...data};
+  setServiceOnline(true);
   setStatus("已保存");
   if (successMessage) {
     showToast(successMessage, "success");
   }
 }
+
+saveProgramSettings?.addEventListener("click", async () => {
+  const port = Number(settingsAPIPort?.value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    showToast("API \u7aef\u53e3\u5fc5\u987b\u662f 1 \u5230 65535 \u4e4b\u95f4\u7684\u6574\u6570", "error");
+    settingsAPIPort?.focus();
+    return;
+  }
+  const previousAddress = programSettings.addr;
+  programSettings = {
+    ...programSettings,
+    addr: joinListenAddress(settingsAPIHost?.value, port),
+    localAPIEnabled: settingsLocalAPIEnabled?.checked !== false,
+    clientConfigPaths: collectClientPaths(clientConfigPathInputs),
+    clientProgramPaths: collectClientPaths(clientProgramPathInputs),
+    clientAutoRestart: collectClientBehavior(clientAutoRestartInputs),
+    clientAutoStart: collectClientBehavior(clientAutoStartInputs),
+    clientPathsDetected: true
+  };
+  saveProgramSettings.disabled = true;
+  try {
+    await persistConfig("");
+    syncProgramSettingsInputs();
+    const restartRequired = previousAddress !== programSettings.addr;
+    showToast(restartRequired
+      ? "\u8bbe\u7f6e\u5df2\u4fdd\u5b58\uff1bAPI \u5730\u5740\u6216\u7aef\u53e3\u5c06\u5728\u91cd\u542f Vision Relay \u540e\u751f\u6548"
+      : "\u7a0b\u5e8f\u8bbe\u7f6e\u5df2\u4fdd\u5b58", "success");
+    setStatus(restartRequired ? "\u8bbe\u7f6e\u5df2\u4fdd\u5b58\uff0c\u7b49\u5f85\u91cd\u542f\u751f\u6548" : "\u7a0b\u5e8f\u8bbe\u7f6e\u5df2\u4fdd\u5b58");
+  } catch (err) {
+    console.error(err);
+    showToast(`\u4fdd\u5b58\u7a0b\u5e8f\u8bbe\u7f6e\u5931\u8d25\uff1a${err.message || err}`, "error");
+  } finally {
+    saveProgramSettings.disabled = false;
+  }
+});
+
+detectClientPaths?.addEventListener("click", async () => {
+  detectClientPaths.disabled = true;
+  if (clientPathDetectionState) clientPathDetectionState.textContent = "\u6b63\u5728\u68c0\u6d4b";
+  try {
+    const res = await fetch("/api/settings/detect-clients", {method: "POST"});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    await loadConfig();
+    showToast("\u5ba2\u6237\u7aef\u914d\u7f6e\u6587\u4ef6\u548c\u7a0b\u5e8f\u4f4d\u7f6e\u5df2\u91cd\u65b0\u68c0\u6d4b", "success");
+    setStatus("\u5ba2\u6237\u7aef\u4f4d\u7f6e\u68c0\u6d4b\u5b8c\u6210");
+  } catch (err) {
+    console.error(err);
+    if (clientPathDetectionState) clientPathDetectionState.textContent = "\u68c0\u6d4b\u5931\u8d25";
+    showToast(`\u91cd\u65b0\u68c0\u6d4b\u5ba2\u6237\u7aef\u5931\u8d25\uff1a${err.message || err}`, "error");
+  } finally {
+    detectClientPaths.disabled = false;
+  }
+});
 
 generateKey.addEventListener("click", async () => {
   generateKey.disabled = true;
@@ -503,6 +704,17 @@ clientConfigureActions.forEach(({button, client, name}) => {
   });
 });
 
+clientConfigureActions.forEach(({client, name}) => {
+  clientRouteInputs[client]?.addEventListener("change", () => {
+    updateClientRouteSetting(client, name).catch((err) => {
+      console.error(err);
+      clientRouteEnabled[client] = !clientRouteInputs[client].checked;
+      syncClientRouteInputs();
+      showToast(`保存 ${name} 路由开关失败：${err.message || err}`, "error");
+    });
+  });
+});
+
 restoreCodex?.addEventListener("click", () => {
   restoreCodexOfficialMode().catch((err) => {
     console.error(err);
@@ -520,15 +732,78 @@ async function configureClient({button, client, name}) {
     });
     if (!res.ok) throw new Error(await readErrorMessage(res));
     const payload = await res.json();
-    if (payload?.key_created) await loadConfig();
+    clientRouteEnabled[client] = payload?.route_enabled !== false;
+    await loadConfig();
     const path = payload?.path ? `：${payload.path}` : "";
-    const launchText = payload?.stopped && payload?.started
-      ? `并已重启 ${name}`
-      : (payload?.started ? `并已启动 ${name}` : "");
-    showToast(`已一键配置 ${name}${launchText}${path}`, "success");
-    setStatus(`${name} 已配置${launchText}`);
+    let behaviorMessage = "配置已写入";
+    if (payload?.restarted === true) {
+      behaviorMessage = "客户端已自动重启";
+    } else if (payload?.started === true && payload?.was_running !== true) {
+      behaviorMessage = "客户端已自动启动";
+    } else if (payload?.was_running === true && payload?.restart_required === true) {
+      behaviorMessage = "请手动重启客户端程序";
+    } else if (payload?.was_running !== true && payload?.started !== true) {
+      behaviorMessage = "客户端当前未运行，未自动启动";
+    }
+    const warning = payload?.program_warning ? `；${payload.program_warning}` : "";
+    showToast(`已一键配置 ${name}${path}；${behaviorMessage}${warning}`, warning ? "error" : "success");
+    setStatus(`${name} 已配置；${behaviorMessage}`);
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+async function updateClientRouteSetting(client, name) {
+  clientRouteEnabled[client] = clientRouteInputs[client]?.checked === true;
+  const enabled = clientRouteEnabled[client];
+  await persistConfig(enabled
+    ? `已启用 ${name} 路由`
+    : `已关闭 ${name} 路由`);
+}
+
+function normalizeClientRoutes(routes) {
+  return {
+    codex: routes?.codex === true,
+    opencode: routes?.opencode === true,
+    "claude-code": routes?.["claude-code"] === true,
+    openclaw: routes?.openclaw === true
+  };
+}
+
+function syncClientRouteInputs() {
+  Object.entries(clientRouteInputs).forEach(([client, input]) => {
+    if (input) input.checked = clientRouteEnabled[client] === true;
+  });
+}
+
+async function switchTextProvider(profile) {
+  let providerSwitched = false;
+  try {
+    applyTextProfile(profile.id);
+    renderTextProfiles();
+    await persistConfig("");
+    providerSwitched = true;
+    const res = await fetch("/api/client/routes/apply", {method: "POST"});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const payload = await res.json();
+    const updatedClients = Array.isArray(payload?.clients) ? payload.clients : [];
+    if (updatedClients.some((client) => client.key_created)) {
+      await loadConfig();
+    }
+    const errors = Array.isArray(payload?.errors) ? payload.errors.filter(Boolean) : [];
+    if (errors.length) throw new Error(errors.join("；"));
+    const providerName = profile.name || profile.provider || "未命名";
+    if (updatedClients.length === 0) {
+      showToast(`已切换供应商：${providerName}；当前未启用客户端路由`, "success");
+      setStatus(`已切换供应商：${providerName}`);
+      return;
+    }
+    const clientNames = updatedClients.map((client) => client.name || client.client).join("、");
+    showToast(`供应商切换成功，已更新 ${clientNames}；请重启客户端程序`, "success");
+    setStatus(`供应商切换成功，请重启 ${clientNames}`);
+  } catch (err) {
+    err.providerSwitched = providerSwitched;
+    throw err;
   }
 }
 
@@ -541,7 +816,9 @@ async function restoreCodexOfficialMode() {
       body: JSON.stringify({client: "codex"})
     });
     if (!res.ok) throw new Error(await readErrorMessage(res));
-    showToast("已恢复 Codex 官方模式；请重新启动 Codex", "success");
+    clientRouteEnabled.codex = false;
+    await loadConfig();
+    showToast("已恢复 Codex 官方模式并关闭路由；请重新启动 Codex", "success");
     setStatus("Codex 官方模式已恢复");
   } finally {
     restoreCodex.disabled = false;
@@ -807,27 +1084,33 @@ function renderProfileList(container, profiles, activeId, kind) {
   profiles.forEach((profile) => {
     const row = document.createElement("div");
     row.className = `profile-row${profile.id === activeId ? " active" : ""}`;
+    row.dataset.profileId = profile.id;
     row.innerHTML = `
-      <button class="profile-main" type="button">
+      <span class="profile-drag-handle" role="button" tabindex="0" aria-label="拖动 ${escapeHTML(profile.name || "未命名")} 排序" title="按住拖动排序">
+        <span aria-hidden="true"></span>
+      </span>
+      <div class="profile-main">
         <div>
           <strong>${escapeHTML(profile.name || "未命名")}</strong>
           <span>${escapeHTML(profileSummary(profile, kind))}</span>
         </div>
-      </button>
+      </div>
       <div class="profile-actions">
-        ${profile.id === activeId ? '<em class="profile-badge">当前</em>' : ""}
+        <button class="secondary small-action profile-switch" type="button" data-action="switch"${profile.id === activeId ? " disabled" : ""}>使用</button>
         <button class="secondary small-action" type="button" data-action="edit">编辑</button>
         <button class="danger small-action" type="button" data-action="delete">删除</button>
       </div>
     `;
-    row.querySelector(".profile-main").addEventListener("click", () => {
+    row.querySelector('[data-action="switch"]').addEventListener("click", (event) => {
       if (profile.id === activeId) return;
+      event.currentTarget.disabled = true;
       if (kind === "text") {
-        applyTextProfile(profile.id);
-        renderTextProfiles();
-        persistConfig(`已切换并保存文本模型：${profile.name || "未命名"}`).catch((err) => {
+        switchTextProvider(profile).catch((err) => {
           console.error(err);
-          showToast(`保存失败：${err.message || err}`, "error");
+          const prefix = err.providerSwitched
+            ? "供应商已切换，但客户端路由更新失败"
+            : "切换供应商失败";
+          showToast(`${prefix}：${err.message || err}`, "error");
         });
       } else {
         applyVisionProfile(profile.id);
@@ -847,7 +1130,79 @@ function renderProfileList(container, profiles, activeId, kind) {
         showToast(`保存失败：${err.message || err}`, "error");
       });
     });
+    const dragHandle = row.querySelector(".profile-drag-handle");
+    dragHandle.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      profileDragState = {kind, id: profile.id, targetId: "", insertAfter: false, container, row};
+      row.classList.add("dragging");
+    });
     container.appendChild(row);
+  });
+}
+
+function setProfileDropIndicator(container, targetRow, insertAfter) {
+  container.querySelectorAll(".profile-row").forEach((row) => {
+    row.classList.remove("drop-before", "drop-after");
+  });
+  targetRow.classList.add(insertAfter ? "drop-after" : "drop-before");
+}
+
+function clearProfileDragState(container) {
+  profileDragState = null;
+  container.querySelectorAll(".profile-row").forEach((row) => {
+    row.classList.remove("dragging", "drop-before", "drop-after");
+  });
+}
+
+function updateProfileDrag(event) {
+  if (!profileDragState) return;
+  event.preventDefault();
+  const {container, id} = profileDragState;
+  const targetRow = document.elementFromPoint(event.clientX, event.clientY)?.closest(".profile-row");
+  if (!targetRow || !container.contains(targetRow) || targetRow.dataset.profileId === id) {
+    profileDragState.targetId = "";
+    container.querySelectorAll(".profile-row").forEach((item) => item.classList.remove("drop-before", "drop-after"));
+    return;
+  }
+  const targetRect = targetRow.getBoundingClientRect();
+  const insertAfter = event.clientY >= targetRect.top + targetRect.height / 2;
+  profileDragState.targetId = targetRow.dataset.profileId;
+  profileDragState.insertAfter = insertAfter;
+  setProfileDropIndicator(container, targetRow, insertAfter);
+}
+
+function finishProfileDrag() {
+  if (!profileDragState) return;
+  const {kind, id: draggedId, targetId, insertAfter, container} = profileDragState;
+  clearProfileDragState(container);
+  if (targetId) reorderProfiles(kind, draggedId, targetId, insertAfter);
+}
+
+document.addEventListener("mousemove", updateProfileDrag);
+document.addEventListener("mouseup", finishProfileDrag);
+
+function reorderProfiles(kind, draggedId, targetId, insertAfter) {
+  const profiles = kind === "text" ? textProfiles : visionProfiles;
+  const sourceIndex = profiles.findIndex((profile) => profile.id === draggedId);
+  if (sourceIndex < 0 || draggedId === targetId) return;
+  const previousOrder = profiles.map((profile) => profile.id).join("\n");
+  const [draggedProfile] = profiles.splice(sourceIndex, 1);
+  const targetIndex = profiles.findIndex((profile) => profile.id === targetId);
+  if (targetIndex < 0) {
+    profiles.splice(sourceIndex, 0, draggedProfile);
+    return;
+  }
+  profiles.splice(targetIndex + (insertAfter ? 1 : 0), 0, draggedProfile);
+  if (profiles.map((profile) => profile.id).join("\n") === previousOrder) return;
+  if (kind === "text") {
+    renderTextProfiles();
+  } else {
+    renderVisionProfiles();
+  }
+  persistConfig(kind === "text" ? "文本模型顺序已保存" : "视觉模型顺序已保存").catch((err) => {
+    console.error(err);
+    showToast(`排序保存失败：${err.message || err}`, "error");
   });
 }
 

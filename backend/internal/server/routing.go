@@ -17,6 +17,10 @@ func (a *app) handleRoute(w http.ResponseWriter, r *http.Request) {
 		a.handleWeb(w, r)
 		return
 	}
+	if !localAPIEnabled(a.currentConfig()) {
+		writeError(w, http.StatusServiceUnavailable, errors.New("local API interface is disabled"))
+		return
+	}
 	if !a.authorized(r) {
 		writeError(w, http.StatusUnauthorized, errors.New("invalid client api key"))
 		a.logCompletedRequest(r, nil, []byte(`{"error":{"message":"invalid client api key"}}`), http.StatusUnauthorized, time.Now())
