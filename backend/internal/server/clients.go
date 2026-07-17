@@ -21,7 +21,6 @@ const (
 	clientOpenClaw            = "openclaw"
 	relayProviderID           = "vision-relay"
 	codexProviderID           = "custom"
-	codexManagedBearerToken   = "PROXY_MANAGED"
 	codexBaseInstructions     = "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals."
 	codexUnifiedHistoryMarker = "# Added by Vision Relay for unified Codex history."
 )
@@ -32,6 +31,9 @@ type clientConfigContext struct {
 	ConfigPath           string
 	Origin               string
 	Key                  string
+	Provider             string
+	WireAPI              string
+	DirectUpstream       bool
 	Model                string
 	ModelMappings        []textModelMapping
 	VisionEnabled        bool
@@ -43,39 +45,25 @@ type clientConfigRequest struct {
 	WorkDir string `json:"work_dir"`
 }
 
-func (a *app) ensureClientKey(client string) (string, string, bool, error) {
-	name := clientKeyName(client)
-	if name == "" {
-		return "", "", false, errors.New("unsupported client")
-	}
-	cfg := a.currentConfig()
-	entries := normalizeClientAPIKeyEntries(cfg.ClientAPIKeyEntries)
-	for _, entry := range entries {
-		if strings.EqualFold(entry.Name, name) {
-			return entry.Key, name, false, nil
-		}
-	}
-	key, err := generateClientAPIKey()
-	if err != nil {
-		return "", "", false, err
-	}
-	cfg.ClientAPIKeyEntries = append(entries, clientAPIKeyEntry{
-		Name: name,
-		Key:  key,
-	})
-	if err := a.setConfig(cfg); err != nil {
-		return "", "", false, err
-	}
-	return key, name, true, nil
+type clientRouteResult struct {
+	Client         string `json:"client"`
+	Name           string `json:"name"`
+	Path           string `json:"path"`
+	ProjectDir     string `json:"project_dir,omitempty"`
+	DirectUpstream bool   `json:"direct_upstream"`
+	Provider       string `json:"provider,omitempty"`
 }
 
-type clientRouteResult struct {
-	Client     string `json:"client"`
-	Name       string `json:"name"`
-	Path       string `json:"path"`
-	ProjectDir string `json:"project_dir,omitempty"`
-	KeyCreated bool   `json:"key_created"`
-	KeyName    string `json:"key_name"`
+type clientRouteValidationError struct {
+	message string
+}
+
+func (e *clientRouteValidationError) Error() string {
+	return e.message
+}
+
+func newClientRouteValidationError(message string) error {
+	return &clientRouteValidationError{message: message}
 }
 
 var clientRouteOrder = []string{clientCodex, clientOpenCode, clientClaudeCode, clientOpenClaw}
@@ -100,7 +88,12 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := a.configureClientRoute(client, req.WorkDir, requestOrigin(r, a.currentConfig()), home)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		status := http.StatusInternalServerError
+		var validationErr *clientRouteValidationError
+		if errors.As(err, &validationErr) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err)
 		return
 	}
 	if err := a.setClientRouteEnabled(client, true); err != nil {
@@ -123,8 +116,8 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		"client":           result.Client,
 		"path":             result.Path,
 		"project_dir":      result.ProjectDir,
-		"key_created":      result.KeyCreated,
-		"key_name":         result.KeyName,
+		"direct_upstream":  result.DirectUpstream,
+		"provider":         result.Provider,
 		"route_enabled":    true,
 		"restart_required": programResult.RestartRequired,
 		"builtin":          true,
@@ -175,11 +168,27 @@ func (a *app) handleClientRoutesApply(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) configureClientRoute(client, workDir, origin, home string) (clientRouteResult, error) {
-	key, keyName, created, err := a.ensureClientKey(client)
-	if err != nil {
-		return clientRouteResult{}, err
-	}
 	cfg := a.currentConfig()
+	directUpstream := !localAPIEnabled(cfg)
+	key := ""
+	modelMappings := textModelMappings(cfg)
+	model := relayModelName(cfg)
+	visionAvailable := false
+	if !directUpstream {
+		origin = strings.TrimSpace(origin)
+		visionAvailable = visionEnabled(cfg)
+	} else {
+		key = strings.TrimSpace(cfg.TextAPIKey)
+		modelMappings = directClientTextModelMappings(cfg)
+		if err := validateDirectClientRoute(client, cfg, modelMappings); err != nil {
+			return clientRouteResult{}, err
+		}
+		model = strings.TrimSpace(modelMappings[0].Model)
+		origin = strings.TrimSpace(cfg.TextBaseURL)
+		if origin == "" {
+			origin = defaultBaseURL(cfg.TextProvider)
+		}
+	}
 	projectDir := clientProjectDir(client, workDir, home)
 	ctx := clientConfigContext{
 		HomeDir:              home,
@@ -187,9 +196,12 @@ func (a *app) configureClientRoute(client, workDir, origin, home string) (client
 		ConfigPath:           configuredClientConfigPath(cfg, client, home),
 		Origin:               origin,
 		Key:                  key,
-		Model:                relayModelName(cfg),
-		ModelMappings:        textModelMappings(cfg),
-		VisionEnabled:        visionEnabled(cfg),
+		Provider:             strings.TrimSpace(cfg.TextProvider),
+		WireAPI:              strings.TrimSpace(cfg.TextWireAPI),
+		DirectUpstream:       directUpstream,
+		Model:                model,
+		ModelMappings:        modelMappings,
+		VisionEnabled:        visionAvailable,
 		PreserveOfficialAuth: boolPtr(preserveCodexOfficialAuth(cfg)),
 	}
 	path, err := writeClientConfig(client, ctx)
@@ -197,13 +209,54 @@ func (a *app) configureClientRoute(client, workDir, origin, home string) (client
 		return clientRouteResult{}, err
 	}
 	return clientRouteResult{
-		Client:     client,
-		Name:       clientKeyName(client),
-		Path:       path,
-		ProjectDir: projectDir,
-		KeyCreated: created,
-		KeyName:    keyName,
+		Client:         client,
+		Name:           clientKeyName(client),
+		Path:           path,
+		ProjectDir:     projectDir,
+		DirectUpstream: directUpstream,
+		Provider:       strings.TrimSpace(cfg.TextProvider),
 	}, nil
+}
+
+func validateDirectClientRoute(client string, cfg config, mappings []textModelMapping) error {
+	if len(mappings) == 0 {
+		return newClientRouteValidationError("关闭本地 API 后，请先为当前文本供应商添加至少一个模型")
+	}
+	provider := normalizeProvider(cfg.TextProvider)
+	switch client {
+	case clientCodex:
+		if provider != "openai" || normalizeWireAPI(cfg.TextWireAPI) != "responses" {
+			return newClientRouteValidationError("关闭本地 API 后，Codex 仅支持直连使用 Responses 协议的 OpenAI 兼容供应商")
+		}
+	case clientClaudeCode:
+		if provider != "anthropic" {
+			return newClientRouteValidationError("关闭本地 API 后，Claude Code 仅支持直连 Anthropic 协议供应商")
+		}
+	}
+	return nil
+}
+
+// directClientTextModelMappings removes relay-only aliases. Without the local
+// API there is no model-mapping layer, so clients must send the upstream model
+// ID exactly as configured by the active supplier.
+func directClientTextModelMappings(cfg config) []textModelMapping {
+	mappings := textModelMappings(cfg)
+	out := make([]textModelMapping, 0, len(mappings))
+	seen := map[string]bool{}
+	for _, mapping := range mappings {
+		model := strings.TrimSpace(mapping.Model)
+		if model == "" {
+			model = strings.TrimSpace(mapping.Name)
+		}
+		if model == "" || seen[model] {
+			continue
+		}
+		seen[model] = true
+		mapping.Name = model
+		mapping.Model = model
+		out = append(out, mapping)
+	}
+	return out
 }
 
 func (a *app) setClientRouteEnabled(client string, enabled bool) error {
@@ -353,6 +406,69 @@ func codexConfigDir(homeDir string) string {
 	return filepath.Clean(dir)
 }
 
+func clientVersionedBaseURL(ctx clientConfigContext) string {
+	baseURL := strings.TrimRight(strings.TrimSpace(ctx.Origin), "/")
+	if baseURL == "" {
+		return ""
+	}
+	if strings.HasSuffix(baseURL, "/v1") || strings.HasSuffix(baseURL, "/v1beta") {
+		return baseURL
+	}
+	if ctx.DirectUpstream && strings.EqualFold(strings.TrimSpace(ctx.Provider), "gemini") {
+		return baseURL + "/v1beta"
+	}
+	return baseURL + "/v1"
+}
+
+func clientProviderDisplayName(ctx clientConfigContext) string {
+	if ctx.DirectUpstream {
+		if provider := strings.TrimSpace(ctx.Provider); provider != "" {
+			return provider + " (direct)"
+		}
+		return "Upstream supplier (direct)"
+	}
+	return "Vision Relay"
+}
+
+func openCodeProviderNPM(ctx clientConfigContext) string {
+	if !ctx.DirectUpstream {
+		return "@ai-sdk/openai-compatible"
+	}
+	switch strings.ToLower(strings.TrimSpace(ctx.Provider)) {
+	case "anthropic":
+		return "@ai-sdk/anthropic"
+	case "gemini":
+		return "@ai-sdk/google"
+	default:
+		return "@ai-sdk/openai-compatible"
+	}
+}
+
+func openClawProviderAPI(ctx clientConfigContext) string {
+	if !ctx.DirectUpstream {
+		return "openai-completions"
+	}
+	switch strings.ToLower(strings.TrimSpace(ctx.Provider)) {
+	case "anthropic":
+		return "anthropic-messages"
+	case "gemini":
+		return "google-generative-ai"
+	default:
+		if strings.EqualFold(strings.TrimSpace(ctx.WireAPI), "responses") {
+			return "openai-responses"
+		}
+		return "openai-completions"
+	}
+}
+
+func openClawProviderBaseURL(ctx clientConfigContext) string {
+	provider := strings.ToLower(strings.TrimSpace(ctx.Provider))
+	if ctx.DirectUpstream && (provider == "anthropic" || provider == "gemini") {
+		return strings.TrimRight(strings.TrimSpace(ctx.Origin), "/")
+	}
+	return clientVersionedBaseURL(ctx)
+}
+
 func writeClientConfig(client string, ctx clientConfigContext) (string, error) {
 	switch client {
 	case clientCodex:
@@ -429,12 +545,12 @@ func codexRelayConfigBlock(ctx clientConfigContext, model string) []string {
 		`web_search = "disabled"`,
 		"",
 		"[model_providers."+codexProviderID+"]",
-		`name = "Vision Relay"`,
+		fmt.Sprintf("name = %q", clientProviderDisplayName(ctx)),
 		`wire_api = "responses"`,
-		`requires_openai_auth = true`,
-		fmt.Sprintf("base_url = %q", strings.TrimRight(ctx.Origin, "/")+"/v1"),
+		fmt.Sprintf("requires_openai_auth = %t", ctx.DirectUpstream),
+		fmt.Sprintf("base_url = %q", clientVersionedBaseURL(ctx)),
 	)
-	if preserveCodexOfficialAuthForContext(ctx) {
+	if ctx.DirectUpstream && preserveCodexOfficialAuthForContext(ctx) {
 		block = append(block, fmt.Sprintf("experimental_bearer_token = %q", ctx.Key))
 	}
 	return block
@@ -812,6 +928,18 @@ func configureCodexAuth(ctx clientConfigContext) error {
 		return err
 	}
 	managed := err == nil && codexAuthIsRelayManaged(raw)
+	if !ctx.DirectUpstream {
+		if !managed {
+			return nil
+		}
+		if err := restoreCodexAuth(ctx.HomeDir); err != nil {
+			return err
+		}
+		if _, err := os.Stat(codexAuthBackupPath(ctx.HomeDir)); errors.Is(err, os.ErrNotExist) {
+			return os.Remove(authPath)
+		}
+		return nil
+	}
 	if preserveCodexOfficialAuthForContext(ctx) {
 		if !managed {
 			return nil
@@ -830,9 +958,6 @@ func configureCodexAuth(ctx clientConfigContext) error {
 		}
 	}
 	key := strings.TrimSpace(ctx.Key)
-	if key == "" {
-		key = "sk-local"
-	}
 	managedAuth, err := json.MarshalIndent(map[string]any{
 		"OPENAI_API_KEY":       key,
 		"vision_relay_managed": true,
@@ -1208,7 +1333,7 @@ func codexModelCatalogEntry(ctx clientConfigContext, template map[string]any, ma
 	model["visibility"] = "list"
 	model["supported_in_api"] = true
 	model["priority"] = priority
-	imageEnabled := ctx.VisionEnabled
+	imageEnabled := clientMappingSupportsImages(ctx, mapping)
 	model["input_modalities"] = relayInputModalities(imageEnabled)
 	model["context_window"] = contextWindow
 	model["max_context_window"] = contextWindow
@@ -1287,7 +1412,7 @@ func writeOpenCodeConfig(ctx clientConfigContext) (string, error) {
 	configuredModels := make(map[string]any, len(mappings))
 	for _, mapping := range mappings {
 		modelID := clientTextModelID(mapping)
-		imageEnabled := ctx.VisionEnabled
+		imageEnabled := clientMappingSupportsImages(ctx, mapping)
 		model := map[string]any{
 			"name":              modelID,
 			"reasoning":         textModelSupportsReasoning(mapping),
@@ -1309,17 +1434,27 @@ func writeOpenCodeConfig(ctx clientConfigContext) (string, error) {
 	// The Vision Relay provider is fully regenerated on every one-click setup.
 	// Preserving its previous model map leaves stale models selectable after the
 	// active upstream profile changes, so only unrelated providers are retained.
+	options := map[string]any{
+		"baseURL": clientVersionedBaseURL(ctx),
+	}
+	if ctx.DirectUpstream {
+		options["apiKey"] = ctx.Key
+	}
 	providers[relayProviderID] = map[string]any{
-		"npm":  "@ai-sdk/openai-compatible",
-		"name": "Vision Relay",
-		"options": map[string]any{
-			"baseURL": strings.TrimRight(ctx.Origin, "/") + "/v1",
-			"apiKey":  ctx.Key,
-		},
-		"models": configuredModels,
+		"npm":     openCodeProviderNPM(ctx),
+		"name":    clientProviderDisplayName(ctx),
+		"options": options,
+		"models":  configuredModels,
 	}
 	cfg["model"] = relayProviderID + "/" + clientTextModelID(mappings[0])
 	return path, writeJSONFile(path, cfg)
+}
+
+func clientMappingSupportsImages(ctx clientConfigContext, mapping textModelMapping) bool {
+	if ctx.DirectUpstream {
+		return mapping.SupportsImages
+	}
+	return mapping.SupportsImages || ctx.VisionEnabled
 }
 
 func relayInputModalities(enabled bool) []string {
@@ -1351,7 +1486,11 @@ func writeClaudeCodeConfig(ctx clientConfigContext) (string, error) {
 	cfg["availableModels"] = modelIDs
 	env := ensureJSONMap(cfg, "env")
 	env["ANTHROPIC_BASE_URL"] = strings.TrimRight(ctx.Origin, "/")
-	env["ANTHROPIC_AUTH_TOKEN"] = ctx.Key
+	if ctx.DirectUpstream {
+		env["ANTHROPIC_AUTH_TOKEN"] = ctx.Key
+	} else {
+		delete(env, "ANTHROPIC_AUTH_TOKEN")
+	}
 	configureClaudeCodeModelSlots(env, modelIDs)
 	return path, writeJSONFile(path, cfg)
 }
@@ -1413,6 +1552,11 @@ func writeOpenClawConfig(ctx clientConfigContext) (string, error) {
 	modelSelection := ensureJSONMap(defaults, "model")
 	modelSelection["primary"] = relayProviderID + "/" + primaryModel
 	if allowedModels, ok := defaults["models"].(map[string]any); ok {
+		for ref := range allowedModels {
+			if strings.HasPrefix(ref, relayProviderID+"/") {
+				delete(allowedModels, ref)
+			}
+		}
 		for _, mapping := range mappings {
 			modelID := strings.TrimSpace(mapping.Name)
 			if modelID == "" {
@@ -1431,10 +1575,12 @@ func writeOpenClawConfig(ctx clientConfigContext) (string, error) {
 	}
 	providers := ensureJSONMap(models, "providers")
 	provider := map[string]any{
-		"baseUrl": strings.TrimRight(ctx.Origin, "/") + "/v1",
-		"apiKey":  ctx.Key,
-		"api":     "openai-completions",
+		"baseUrl": openClawProviderBaseURL(ctx),
+		"api":     openClawProviderAPI(ctx),
 		"models":  openClawModels(ctx, mappings),
+	}
+	if ctx.DirectUpstream {
+		provider["apiKey"] = ctx.Key
 	}
 	providers[relayProviderID] = provider
 	return path, writeJSONFile(path, cfg)
@@ -1454,7 +1600,7 @@ func openClawModels(ctx clientConfigContext, mappings []textModelMapping) []any 
 		items = append(items, map[string]any{
 			"id":            modelID,
 			"name":          modelID,
-			"input":         relayInputModalities(ctx.VisionEnabled),
+			"input":         relayInputModalities(clientMappingSupportsImages(ctx, mapping)),
 			"cost":          map[string]any{"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
 			"contextWindow": contextWindow,
 			"maxTokens":     8192,

@@ -25,7 +25,9 @@ func TestManagementAccessControl(t *testing.T) {
 		{name: "non-loopback host is rejected", path: "/api/config", remoteAddr: "127.0.0.1:5000", host: "relay.example:8787", wantStatus: http.StatusForbidden},
 		{name: "cross-origin management request is rejected", path: "/api/config", remoteAddr: "127.0.0.1:5000", host: "127.0.0.1:8787", origin: "https://attacker.example", wantStatus: http.StatusForbidden},
 		{name: "local same-origin management request is allowed", path: "/api/config", remoteAddr: "127.0.0.1:5000", host: "127.0.0.1:8787", origin: "http://127.0.0.1:8787", wantStatus: http.StatusOK},
-		{name: "proxy API remains remotely accessible", path: "/api/chat", remoteAddr: "192.0.2.10:5000", host: "relay.example:8787", origin: "https://client.example", wantStatus: http.StatusOK, wantCORS: "*"},
+		{name: "native proxy API remains remotely accessible", path: "/api/chat", remoteAddr: "192.0.2.10:5000", host: "relay.example:8787", wantStatus: http.StatusOK},
+		{name: "same-origin browser proxy API is allowed", path: "/api/chat", remoteAddr: "127.0.0.1:5000", host: "127.0.0.1:8787", origin: "http://127.0.0.1:8787", wantStatus: http.StatusOK, wantCORS: "http://127.0.0.1:8787"},
+		{name: "cross-origin browser proxy API is rejected", path: "/api/chat", remoteAddr: "127.0.0.1:5000", host: "127.0.0.1:8787", origin: "https://attacker.example", wantStatus: http.StatusForbidden},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

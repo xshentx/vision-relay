@@ -103,7 +103,6 @@ func Run() {
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/update", a.handleUpdate)
 	mux.HandleFunc("/api/debug/vision", a.handleVisionDebug)
-	mux.HandleFunc("/api/key", a.handleGenerateKey)
 	mux.HandleFunc("/api/client/configure", a.handleClientConfigure)
 	mux.HandleFunc("/api/client/routes/apply", a.handleClientRoutesApply)
 	mux.HandleFunc("/api/client/restore", a.handleClientRestore)

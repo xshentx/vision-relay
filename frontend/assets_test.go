@@ -31,13 +31,10 @@ func TestClientConfigureActionsAreEmbedded(t *testing.T) {
 	if !strings.Contains(script, `fetch("/api/client/configure"`) || !strings.Contains(script, `body: JSON.stringify({client})`) {
 		t.Fatal("client configure actions are not wired to the shared API request")
 	}
-	for _, clientName := range []string{`clientNamedKey("Codex")`, `clientNamedKey("OpenCode")`, `clientNamedKey("Claude Code")`, `clientNamedKey("OpenClaw")`} {
-		if !strings.Contains(script, clientName) {
-			t.Fatalf("client-specific key preview %q is missing", clientName)
+	for _, forbidden := range []string{"sk-local", "localPlaceholderKey"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("client configuration preview must not contain placeholder authentication %q", forbidden)
 		}
-	}
-	if strings.Contains(script, `const key = normalizeClientKeys(clientKeys)[0]`) {
-		t.Fatal("client configuration preview must not silently use the first token")
 	}
 	for _, multiModelConfig := range []string{
 		`models: Object.fromEntries(snippetMappings.map((mapping) => {`,
@@ -47,6 +44,33 @@ func TestClientConfigureActionsAreEmbedded(t *testing.T) {
 		if !strings.Contains(script, multiModelConfig) {
 			t.Fatalf("multi-model client preview %q is missing", multiModelConfig)
 		}
+	}
+}
+
+func TestLocalAPIHasNoTokenManagement(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	for _, forbidden := range []string{`data-page="tokens"`, `id="generateKey"`, `id="clientKeyList"`} {
+		if strings.Contains(index, forbidden) {
+			t.Fatalf("obsolete token UI %q remains", forbidden)
+		}
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, forbidden := range []string{`/api/key`, `client_api_key_entries`, `client_name || "-"`} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("obsolete token behavior %q remains", forbidden)
+		}
+	}
+	if !strings.Contains(script, `<span>供应商：${escapeHTML(formatUpstream(log))}</span>`) {
+		t.Fatal("request logs must display the supplier instead of a client token")
 	}
 }
 
@@ -289,6 +313,8 @@ func TestTopbarRemovedAndServiceStatusMovedToSidebar(t *testing.T) {
 	script := string(scriptRaw)
 	for _, expected := range []string{
 		`const localAPIEnabled = programSettings.localAPIEnabled !== false;`,
+		`function renderTextProfiles() {`,
+		`function renderVisionProfiles() {`,
 		`"本地 API 服务运行正常"`,
 		`"本地 API 服务连接失败"`,
 		`"本地 API 服务已关闭"`,
@@ -347,7 +373,6 @@ func TestBusinessPagesUseCommonLayout(t *testing.T) {
 	expectedOpenings := map[string]string{
 		"text":       `<section class="page panel standard-page span-12" id="text"`,
 		"vision":     `<section class="page panel standard-page span-12" id="vision"`,
-		"tokens":     `<section class="page panel standard-page token-page span-12" id="tokens"`,
 		"access":     `<section class="page panel standard-page access-page span-12" id="access"`,
 		"settings":   `<section class="page panel standard-page settings-page span-12" id="settings"`,
 		"logs":       `<section class="page panel standard-page span-12" id="logs"`,
@@ -362,7 +387,7 @@ func TestBusinessPagesUseCommonLayout(t *testing.T) {
 	if strings.Contains(index, `class="page panel span-7"`) || strings.Contains(index, `class="page-heading`) {
 		t.Fatal("legacy narrow or standalone page layout remains")
 	}
-	for _, heading := range []string{`class="panel-head token-page-heading"`, `class="panel-head access-page-heading"`, `class="panel-head settings-page-heading"`} {
+	for _, heading := range []string{`class="panel-head access-page-heading"`, `class="panel-head settings-page-heading"`} {
 		if !strings.Contains(index, heading) {
 			t.Errorf("common page heading %q is missing", heading)
 		}
@@ -457,6 +482,10 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 	script := string(scriptRaw)
 	for _, expected := range []string{
 		`data.local_api_enabled = programSettings.localAPIEnabled;`,
+		`const previousLocalAPIEnabled = programSettings.localAPIEnabled;`,
+		`const updatedClients = localAPIModeChanged ? await applyEnabledClientRoutes() : [];`,
+		`async function applyEnabledClientRoutes()`,
+		`fetch("/api/client/routes/apply", {method: "POST"})`,
 		`data.client_config_paths = normalizeClientPaths(programSettings.clientConfigPaths);`,
 		`data.client_program_paths = normalizeClientPaths(programSettings.clientProgramPaths);`,
 		`data.client_auto_restart = normalizeClientBehavior(programSettings.clientAutoRestart, true);`,
@@ -489,9 +518,50 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 		t.Fatal(err)
 	}
 	style := string(styleRaw)
-	for _, expected := range []string{`.layout > .settings-page.active`, `row-gap: 18px`, `.token-page .component-card`, `.access-page .component-card`, `.settings-page > .component-card`, `.client-path-row`, `.client-path-fields`, `.client-behavior-list`, `.client-behavior-row`, `.client-behavior-option`} {
+	for _, expected := range []string{`.layout > .settings-page.active`, `row-gap: 18px`, `.access-page .component-card`, `.settings-page > .component-card`, `.client-path-row`, `.client-path-fields`, `.client-behavior-list`, `.client-behavior-row`, `.client-behavior-option`} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("program settings style %q is missing", expected)
+		}
+	}
+}
+
+func TestDisabledLocalAPIDirectSupplierUIIsEmbedded(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	for _, expected := range []string{
+		`id="localAPIWarning"`,
+		"关闭本地服务后视觉模型将不可用",
+		"只有勾选“支持多模态”的文本模型仍可识别图片",
+	} {
+		if !strings.Contains(index, expected) {
+			t.Fatalf("disabled local API warning %q is missing", expected)
+		}
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		`payload?.direct_upstream`,
+		`directClientMappings(sourceMappings)`,
+		`return mapping?.supports_images === true;`,
+		`return mapping?.supports_images === true || visionCapabilityEnabled;`,
+		`directUpstream ? clientVersionedBaseURL(profile)`,
+		`...(directUpstream ? {apiKey: upstreamKey} : {})`,
+		`requires_openai_auth = ${directUpstream}`,
+		`...(directUpstream ? {ANTHROPIC_AUTH_TOKEN: upstreamKey} : {})`,
+		`directUpstream && mappings.length === 0`,
+		`directClientCompatibilityMessage("codex", profile)`,
+		`directClientCompatibilityMessage("claude-code", profile)`,
+		"未勾选多模态的文本模型将无法实现图片识别",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("direct supplier UI behavior %q is missing", expected)
 		}
 	}
 }

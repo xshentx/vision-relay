@@ -33,7 +33,6 @@ func isManagementAPIPath(path string) bool {
 	case "/api/config",
 		"/api/update",
 		"/api/debug/vision",
-		"/api/key",
 		"/api/client/configure",
 		"/api/client/routes/apply",
 		"/api/client/restore",

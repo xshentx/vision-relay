@@ -39,7 +39,6 @@ func defaultConfig() config {
 		VisionPrompt:                      defaultVisionPrompt,
 		VisionEnabled:                     boolPtr(env("VISION_ENABLED", "true") != "false"),
 		PreserveCodexOfficialAuthOnSwitch: boolPtr(true),
-		ClientAPIKeyEntries:               keysToEntries(splitKeys(env("CLIENT_API_KEYS", ""))),
 		ClientRouteEnabled:                defaultClientRouteEnabled(),
 		LocalAPIEnabled:                   boolPtr(env("LOCAL_API_ENABLED", "true") != "false"),
 		ClientConfigPaths:                 map[string]string{},
@@ -174,11 +173,6 @@ func mergeConfig(base, loaded config) config {
 		base.PreserveCodexOfficialAuthOnSwitch = loaded.PreserveCodexOfficialAuthOnSwitch
 	}
 	base.UnifyCodexSessionHistory = loaded.UnifyCodexSessionHistory
-	if len(loaded.ClientAPIKeyEntries) > 0 {
-		base.ClientAPIKeyEntries = loaded.ClientAPIKeyEntries
-	} else if len(loaded.ClientAPIKeys) > 0 {
-		base.ClientAPIKeyEntries = keysToEntries(loaded.ClientAPIKeys)
-	}
 	if loaded.ClientRouteEnabled != nil {
 		base.ClientRouteEnabled = normalizeClientRouteEnabled(loaded.ClientRouteEnabled)
 	}
@@ -276,8 +270,6 @@ func (a *app) setConfig(cfg config) error {
 	}
 	cfg.VisionPrompt = defaultVisionPrompt
 	cfg.ProxyURL = strings.TrimSpace(cfg.ProxyURL)
-	cfg.ClientAPIKeyEntries = normalizeClientAPIKeyEntries(cfg.ClientAPIKeyEntries)
-	cfg.ClientAPIKeys = nil
 	cfg.ClientRouteEnabled = normalizeClientRouteEnabled(cfg.ClientRouteEnabled)
 	if cfg.LocalAPIEnabled == nil {
 		cfg.LocalAPIEnabled = boolPtr(true)
@@ -438,8 +430,8 @@ func inferTextModelReasoningSupport(values ...string) bool {
 	return false
 }
 
-func relayImageInputEnabled(cfg config) bool {
-	return visionEnabled(cfg)
+func relayImageInputEnabled(cfg config, requested string) bool {
+	return textSupportsImages(cfg, requested) || visionEnabled(cfg)
 }
 
 func shouldAugmentImages(cfg config, requested string) bool {
@@ -786,39 +778,6 @@ func applyProfileToConfig(cfg config, profile modelProfile) config {
 	cfg.VisionAPIKey = profile.VisionAPIKey
 	cfg.VisionModel = profile.VisionModel
 	return cfg
-}
-
-func keysToEntries(keys []string) []clientAPIKeyEntry {
-	entries := make([]clientAPIKeyEntry, 0, len(keys))
-	for i, key := range keys {
-		key = strings.TrimSpace(key)
-		if key == "" {
-			continue
-		}
-		entries = append(entries, clientAPIKeyEntry{
-			Name: "旧令牌 " + strconv.Itoa(i+1),
-			Key:  key,
-		})
-	}
-	return entries
-}
-
-func normalizeClientAPIKeyEntries(entries []clientAPIKeyEntry) []clientAPIKeyEntry {
-	seen := map[string]bool{}
-	out := make([]clientAPIKeyEntry, 0, len(entries))
-	for _, entry := range entries {
-		name := strings.TrimSpace(entry.Name)
-		key := strings.TrimSpace(entry.Key)
-		if key == "" || seen[key] {
-			continue
-		}
-		if name == "" {
-			name = "未命名客户端"
-		}
-		seen[key] = true
-		out = append(out, clientAPIKeyEntry{Name: name, Key: key})
-	}
-	return out
 }
 
 func defaultBaseURL(provider string) string {

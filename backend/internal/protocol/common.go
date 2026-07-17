@@ -19,6 +19,8 @@ func firstString(values ...any) string {
 
 func contentToText(content any) string {
 	switch value := content.(type) {
+	case nil:
+		return ""
 	case string:
 		return value
 	case []any:

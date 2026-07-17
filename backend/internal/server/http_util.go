@@ -1,8 +1,8 @@
 package server
 
 import (
-	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -25,6 +25,8 @@ func readBody(r *http.Request) ([]byte, error) {
 
 func contentToText(content any) string {
 	switch v := content.(type) {
+	case nil:
+		return ""
 	case string:
 		return v
 	case []any:
@@ -74,39 +76,6 @@ func contentToText(content any) string {
 	}
 }
 
-func (a *app) authorized(r *http.Request) bool {
-	cfg := a.currentConfig()
-	keys := make([]string, 0, len(cfg.ClientAPIKeyEntries))
-	for _, entry := range cfg.ClientAPIKeyEntries {
-		if key := strings.TrimSpace(entry.Key); key != "" {
-			keys = append(keys, key)
-		}
-	}
-	if len(keys) == 0 {
-		return true
-	}
-	if isCodexAccountBearer(r.Header) {
-		return true
-	}
-	candidates := audienceKeys(r.Header)
-	if key := strings.TrimSpace(r.URL.Query().Get("key")); key != "" {
-		candidates = append(candidates, key)
-	}
-	for _, got := range candidates {
-		for _, want := range keys {
-			if subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1 {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func isCodexAccountBearer(header http.Header) bool {
-	token := strings.TrimSpace(bearer(header))
-	return token != "" && !strings.HasPrefix(token, "sk-")
-}
-
 func bearer(h http.Header) string {
 	value := h.Get("Authorization")
 	if value == "" {
@@ -121,7 +90,14 @@ func bearer(h http.Header) string {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !isManagementRequest(r) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
+			if !browserAPIRequestAllowed(r) {
+				writeError(w, http.StatusForbidden, errCrossOriginLocalAPI)
+				return
+			}
+			if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Add("Vary", "Origin")
+			}
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Key, X-Local-Token, HTTP-Referer, X-Title, Anthropic-Version, Anthropic-Beta")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		}
@@ -131,6 +107,20 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+var errCrossOriginLocalAPI = errors.New("cross-origin local API access is not allowed")
+
+func browserAPIRequestAllowed(r *http.Request) bool {
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	requestHost, requestPort, ok := splitHostPort(r.Host)
+	return ok && sameRequestOrigin(r, requestHost, requestPort, origin)
 }
 
 func copyHeader(dst, src http.Header) {

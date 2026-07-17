@@ -34,8 +34,6 @@ type config struct {
 	VisionEnabled                     *bool                `json:"vision_enabled"`
 	PreserveCodexOfficialAuthOnSwitch *bool                `json:"preserve_codex_official_auth_on_switch"`
 	UnifyCodexSessionHistory          bool                 `json:"unify_codex_session_history"`
-	ClientAPIKeys                     []string             `json:"client_api_keys,omitempty"`
-	ClientAPIKeyEntries               []clientAPIKeyEntry  `json:"client_api_key_entries"`
 	ClientRouteEnabled                map[string]bool      `json:"client_route_enabled"`
 	LocalAPIEnabled                   *bool                `json:"local_api_enabled"`
 	ClientConfigPaths                 map[string]string    `json:"client_config_paths"`
@@ -122,11 +120,6 @@ func (v *flexInt) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type clientAPIKeyEntry struct {
-	Name string `json:"name"`
-	Key  string `json:"key"`
-}
-
 type endpoint struct {
 	Provider      string
 	BaseURL       string
@@ -160,8 +153,8 @@ type requestLog struct {
 	Model            string    `json:"model"`
 	UpstreamName     string    `json:"upstream_name"`
 	UpstreamProvider string    `json:"upstream_provider"`
-	ClientName       string    `json:"client_name"`
-	ClientKeyPreview string    `json:"client_key_preview"`
+	ClientName       string    `json:"-"`
+	ClientKeyPreview string    `json:"-"`
 	Status           int       `json:"status"`
 	DurationMS       int64     `json:"duration_ms"`
 	FirstTokenMS     int64     `json:"first_token_ms"`

@@ -105,7 +105,7 @@ func augmentModelListPayload(payload map[string]any, cfg config) map[string]any 
 		if !ok {
 			continue
 		}
-		if relayImageInputEnabled(cfg) {
+		if relayImageInputEnabled(cfg, firstString(model["id"], model["name"])) {
 			markModelImageCapable(model)
 		}
 	}

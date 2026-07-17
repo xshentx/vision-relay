@@ -17,9 +17,6 @@ const prevLogPage = document.querySelector("#prevLogPage");
 const nextLogPage = document.querySelector("#nextLogPage");
 const fileName = document.querySelector("#fileName");
 const segments = [...document.querySelectorAll(".segment")];
-const generateKey = document.querySelector("#generateKey");
-const clientKeyName = document.querySelector("#clientKeyName");
-const clientKeyList = document.querySelector("#clientKeyList");
 const opencodeConfig = document.querySelector("#opencodeConfig");
 const configureOpenCode = document.querySelector("#configureOpenCode");
 const codexConfig = document.querySelector("#codexConfig");
@@ -39,6 +36,7 @@ const clientRouteInputs = {
   openclaw: document.querySelector("#routeOpenClaw")
 };
 const settingsLocalAPIEnabled = document.querySelector("#settingsLocalAPIEnabled");
+const localAPIWarning = document.querySelector("#localAPIWarning");
 const settingsAPIHost = document.querySelector("#settingsAPIHost");
 const settingsAPIPort = document.querySelector("#settingsAPIPort");
 const saveProgramSettings = document.querySelector("#saveProgramSettings");
@@ -109,8 +107,6 @@ const homeTextModel = document.querySelector("#homeTextModel");
 const homeTextProvider = document.querySelector("#homeTextProvider");
 const homeVisionModel = document.querySelector("#homeVisionModel");
 const homeVisionProvider = document.querySelector("#homeVisionProvider");
-const homeKeyCount = document.querySelector("#homeKeyCount");
-const tokenPageKeyCount = document.querySelector("#tokenPageKeyCount");
 const homeTextProfile = document.querySelector("#homeTextProfile");
 const homeVisionProfile = document.querySelector("#homeVisionProfile");
 const homeProxyState = document.querySelector("#homeProxyState");
@@ -128,7 +124,6 @@ const clientTabPanels = [...document.querySelectorAll("[data-client-panel]")];
 
 let imageDataUrl = "";
 let testMode = "chat";
-let clientKeys = [];
 let textProfiles = [];
 let activeTextProfileId = "";
 let visionProfiles = [];
@@ -302,9 +297,15 @@ function joinListenAddress(host, port) {
     : `${normalizedHost}:${port}`;
 }
 
+function syncLocalAPIWarning() {
+  const disabled = settingsLocalAPIEnabled?.checked === false;
+  if (localAPIWarning) localAPIWarning.hidden = !disabled;
+}
+
 function syncProgramSettingsInputs() {
   const address = splitListenAddress(programSettings.addr);
   if (settingsLocalAPIEnabled) settingsLocalAPIEnabled.checked = programSettings.localAPIEnabled;
+  syncLocalAPIWarning();
   if (settingsAPIHost) settingsAPIHost.value = address.host;
   if (settingsAPIPort) settingsAPIPort.value = address.port || "8787";
   Object.entries(clientConfigPathInputs).forEach(([client, input]) => {
@@ -385,8 +386,6 @@ async function loadConfig() {
   applyTextProfile(activeTextProfileId);
   renderVisionProfiles();
   applyVisionProfile(activeVisionProfileId);
-  clientKeys = normalizeClientKeys(cfg.client_api_key_entries || keysToEntries(cfg.client_api_keys || []));
-  renderClientKeys();
   setServiceOnline(true);
   renderOverview();
   setStatus("已加载");
@@ -577,8 +576,6 @@ async function persistConfig(successMessage = "配置已自动保存") {
   data.vision_enabled = visionCapabilityEnabled;
   data.preserve_codex_official_auth_on_switch = preserveCodexOfficialAuth?.checked !== false;
   data.unify_codex_session_history = unifyCodexSessionHistory?.checked === true;
-  syncClientKeyNames();
-  data.client_api_key_entries = normalizeClientKeys(clientKeys);
   data.client_route_enabled = normalizeClientRoutes(clientRouteEnabled);
   data.text_model_profiles = normalizeTextProfiles(textProfiles);
   data.active_text_profile_id = activeTextProfileId;
@@ -612,6 +609,13 @@ async function persistConfig(successMessage = "配置已自动保存") {
   }
 }
 
+settingsLocalAPIEnabled?.addEventListener("change", () => {
+  syncLocalAPIWarning();
+  if (!settingsLocalAPIEnabled.checked) {
+    showToast("关闭本地服务后视觉模型将不可用；未勾选多模态的文本模型将无法实现图片识别。", "warning");
+  }
+});
+
 saveProgramSettings?.addEventListener("click", async () => {
   const port = Number(settingsAPIPort?.value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -620,6 +624,7 @@ saveProgramSettings?.addEventListener("click", async () => {
     return;
   }
   const previousAddress = programSettings.addr;
+  const previousLocalAPIEnabled = programSettings.localAPIEnabled;
   programSettings = {
     ...programSettings,
     addr: joinListenAddress(settingsAPIHost?.value, port),
@@ -631,17 +636,34 @@ saveProgramSettings?.addEventListener("click", async () => {
     clientPathsDetected: true
   };
   saveProgramSettings.disabled = true;
+  let settingsSaved = false;
+  const localAPIModeChanged = previousLocalAPIEnabled !== programSettings.localAPIEnabled;
   try {
     await persistConfig("");
+    settingsSaved = true;
+    const updatedClients = localAPIModeChanged ? await applyEnabledClientRoutes() : [];
     syncProgramSettingsInputs();
+    renderOpenCodeSnippet();
     const restartRequired = previousAddress !== programSettings.addr;
-    showToast(restartRequired
-      ? "\u8bbe\u7f6e\u5df2\u4fdd\u5b58\uff1bAPI \u5730\u5740\u6216\u7aef\u53e3\u5c06\u5728\u91cd\u542f Vision Relay \u540e\u751f\u6548"
-      : "\u7a0b\u5e8f\u8bbe\u7f6e\u5df2\u4fdd\u5b58", "success");
+    const clientNames = updatedClients.map((client) => client.name || client.client).filter(Boolean).join("、");
+    if (!programSettings.localAPIEnabled) {
+      const routeMessage = clientNames ? `已将 ${clientNames} 改为直连供应商，请重启客户端程序。` : "";
+      showToast(`设置已保存。${routeMessage}关闭本地服务后视觉模型将不可用；未勾选多模态的文本模型将无法实现图片识别。`, "warning");
+    } else if (localAPIModeChanged && clientNames) {
+      const restartMessage = restartRequired ? "API 地址或端口将在重启 Vision Relay 后生效；" : "";
+      showToast(`设置已保存；${restartMessage}已将 ${clientNames} 接入本地 API，请重启客户端程序`, "success");
+    } else {
+      showToast(restartRequired
+        ? "\u8bbe\u7f6e\u5df2\u4fdd\u5b58\uff1bAPI \u5730\u5740\u6216\u7aef\u53e3\u5c06\u5728\u91cd\u542f Vision Relay \u540e\u751f\u6548"
+        : "\u7a0b\u5e8f\u8bbe\u7f6e\u5df2\u4fdd\u5b58", "success");
+    }
     setStatus(restartRequired ? "\u8bbe\u7f6e\u5df2\u4fdd\u5b58\uff0c\u7b49\u5f85\u91cd\u542f\u751f\u6548" : "\u7a0b\u5e8f\u8bbe\u7f6e\u5df2\u4fdd\u5b58");
   } catch (err) {
     console.error(err);
-    showToast(`\u4fdd\u5b58\u7a0b\u5e8f\u8bbe\u7f6e\u5931\u8d25\uff1a${err.message || err}`, "error");
+    const prefix = settingsSaved && localAPIModeChanged
+      ? "设置已保存，但同步客户端路由失败"
+      : "保存程序设置失败";
+    showToast(`${prefix}：${err.message || err}`, "error");
   } finally {
     saveProgramSettings.disabled = false;
   }
@@ -662,29 +684,6 @@ detectClientPaths?.addEventListener("click", async () => {
     showToast(`\u91cd\u65b0\u68c0\u6d4b\u5ba2\u6237\u7aef\u5931\u8d25\uff1a${err.message || err}`, "error");
   } finally {
     detectClientPaths.disabled = false;
-  }
-});
-
-generateKey.addEventListener("click", async () => {
-  generateKey.disabled = true;
-  try {
-    const res = await fetch("/api/key", {method: "POST"});
-    if (!res.ok) throw new Error(`key ${res.status}`);
-    const data = await res.json();
-    clientKeys.push({
-      name: clientKeyName.value.trim() || `客户端 ${clientKeys.length + 1}`,
-      key: data.key
-    });
-    clientKeyName.value = "";
-    renderClientKeys();
-    setStatus("已生成");
-    await persistConfig("已生成并保存客户端 Key");
-  } catch (err) {
-    console.error(err);
-    setStatus("生成失败");
-    showToast(`生成失败：${err.message || err}`, "error");
-  } finally {
-    generateKey.disabled = false;
   }
 });
 
@@ -746,7 +745,10 @@ async function configureClient({button, client, name}) {
       behaviorMessage = "客户端当前未运行，未自动启动";
     }
     const warning = payload?.program_warning ? `；${payload.program_warning}` : "";
-    showToast(`已一键配置 ${name}${path}；${behaviorMessage}${warning}`, warning ? "error" : "success");
+    const routeMessage = payload?.direct_upstream
+      ? `已直连 ${payload.provider || "当前供应商"}`
+      : "已接入本地 API";
+    showToast(`已一键配置 ${name}${path}；${routeMessage}；${behaviorMessage}${warning}`, warning ? "error" : "success");
     setStatus(`${name} 已配置；${behaviorMessage}`);
   } finally {
     if (button) button.disabled = false;
@@ -776,6 +778,15 @@ function syncClientRouteInputs() {
   });
 }
 
+async function applyEnabledClientRoutes() {
+  const res = await fetch("/api/client/routes/apply", {method: "POST"});
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  const payload = await res.json();
+  const errors = Array.isArray(payload?.errors) ? payload.errors.filter(Boolean) : [];
+  if (errors.length) throw new Error(errors.join("；"));
+  return Array.isArray(payload?.clients) ? payload.clients : [];
+}
+
 async function switchTextProvider(profile) {
   let providerSwitched = false;
   try {
@@ -783,23 +794,18 @@ async function switchTextProvider(profile) {
     renderTextProfiles();
     await persistConfig("");
     providerSwitched = true;
-    const res = await fetch("/api/client/routes/apply", {method: "POST"});
-    if (!res.ok) throw new Error(await readErrorMessage(res));
-    const payload = await res.json();
-    const updatedClients = Array.isArray(payload?.clients) ? payload.clients : [];
-    if (updatedClients.some((client) => client.key_created)) {
-      await loadConfig();
-    }
-    const errors = Array.isArray(payload?.errors) ? payload.errors.filter(Boolean) : [];
-    if (errors.length) throw new Error(errors.join("；"));
+    const updatedClients = await applyEnabledClientRoutes();
     const providerName = profile.name || profile.provider || "未命名";
+    const directUpstream = programSettings.localAPIEnabled === false;
     if (updatedClients.length === 0) {
       showToast(`已切换供应商：${providerName}；当前未启用客户端路由`, "success");
       setStatus(`已切换供应商：${providerName}`);
       return;
     }
     const clientNames = updatedClients.map((client) => client.name || client.client).join("、");
-    showToast(`供应商切换成功，已更新 ${clientNames}；请重启客户端程序`, "success");
+    showToast(directUpstream
+      ? `供应商切换成功，已将 ${clientNames} 更新为直连 ${profile.provider || providerName}；请重启客户端程序`
+      : `供应商切换成功，已更新 ${clientNames}；请重启客户端程序`, "success");
     setStatus(`供应商切换成功，请重启 ${clientNames}`);
   } catch (err) {
     err.providerSwitched = providerSwitched;
@@ -892,56 +898,6 @@ async function runCodexHistoryAction(action) {
   return await res.json();
 }
 
-function renderClientKeys() {
-  clientKeyList.innerHTML = "";
-  if (clientKeys.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "key-empty";
-    empty.textContent = "还没有客户端 Key。输入名称后点击“生成 Key”。";
-    clientKeyList.appendChild(empty);
-    renderOpenCodeSnippet();
-    renderOverview();
-    return;
-  }
-  clientKeys.forEach((entry, index) => {
-    const row = document.createElement("div");
-    row.className = "key-item";
-    row.innerHTML = `
-      <input class="key-name" value="${escapeAttr(entry.name)}" aria-label="客户端名称">
-      <code class="key-value" title="${escapeAttr(entry.key)}">${escapeHTML(entry.key)}</code>
-      <button class="secondary small-action" type="button" data-action="copy">复制</button>
-      <button class="danger" type="button">删除</button>
-    `;
-    row.querySelector(".key-name").addEventListener("input", (event) => {
-      clientKeys[index].name = event.target.value;
-    });
-    row.querySelector(".key-name").addEventListener("change", () => {
-      persistConfig("客户端名称已保存").catch((err) => {
-        console.error(err);
-        showToast(`保存失败：${err.message || err}`, "error");
-      });
-    });
-    row.querySelector('[data-action="copy"]').addEventListener("click", () => {
-      copyClientKey(entry.key).catch((err) => {
-        console.error(err);
-        showToast(`复制失败：${err.message || err}`, "error");
-      });
-    });
-    row.querySelector(".danger").addEventListener("click", () => {
-      clientKeys.splice(index, 1);
-      renderClientKeys();
-      setStatus("已删除");
-      persistConfig("已删除并保存客户端 Key").catch((err) => {
-        console.error(err);
-        showToast(`保存失败：${err.message || err}`, "error");
-      });
-    });
-    clientKeyList.appendChild(row);
-  });
-  renderOpenCodeSnippet();
-  renderOverview();
-}
-
 async function loadLogs(page = currentLogPage) {
   const pageSize = Number(logPageSize.value || 20);
   const res = await fetch(`/api/logs?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}`);
@@ -974,8 +930,7 @@ function renderLogs(logs) {
         <em class="${Number(log.status) >= 400 ? "log-status error" : "log-status"}">${escapeHTML(String(log.status || "-"))}</em>
       </div>
       <div class="log-metrics">
-        <span>令牌：${escapeHTML(log.client_name || "-")}</span>
-        <span>上游：${escapeHTML(formatUpstream(log))}</span>
+        <span>供应商：${escapeHTML(formatUpstream(log))}</span>
         <span>模型：${escapeHTML(log.model || "-")}</span>
         <span>输入：${formatNumber(log.input_tokens)} tok</span>
         <span>输出：${formatNumber(log.output_tokens)} tok</span>
@@ -1016,23 +971,6 @@ function formatNumber(value) {
   return Number(value || 0).toLocaleString();
 }
 
-async function copyClientKey(key) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(key);
-  } else {
-    const input = document.createElement("textarea");
-    input.value = key;
-    input.setAttribute("readonly", "");
-    input.style.position = "fixed";
-    input.style.opacity = "0";
-    document.body.appendChild(input);
-    input.select();
-    document.execCommand("copy");
-    input.remove();
-  }
-  showToast("客户端 Key 已复制", "success");
-}
-
 function renderTextProfiles() {
   renderProfileList(textProfileList, textProfiles, activeTextProfileId, "text");
   renderOpenCodeSnippet();
@@ -1047,14 +985,11 @@ function renderVisionProfiles() {
 function renderOverview() {
   const textProfile = activeTextProfile();
   const visionProfile = activeVisionProfile();
-  const keys = normalizeClientKeys(clientKeys);
   if (homeBaseURL) homeBaseURL.textContent = location.host;
   if (homeTextModel) homeTextModel.textContent = formatTextModelList(textProfile, "使用请求模型名");
   if (homeTextProvider) homeTextProvider.textContent = profileHeadline(textProfile, "text");
   if (homeVisionModel) homeVisionModel.textContent = visionProfile?.model || "未设置模型";
   if (homeVisionProvider) homeVisionProvider.textContent = profileHeadline(visionProfile, "vision");
-  if (homeKeyCount) homeKeyCount.textContent = `${keys.length} 个`;
-  if (tokenPageKeyCount) tokenPageKeyCount.textContent = `${keys.length} 个`;
   if (homeTextProfile) homeTextProfile.textContent = profileDetail(textProfile, "text");
   if (homeVisionProfile) homeVisionProfile.textContent = profileDetail(visionProfile, "vision");
   if (!visionCapabilityEnabled) {
@@ -1691,33 +1626,101 @@ function visionInputModalities(imageEnabled) {
   return imageEnabled ? ["text", "image"] : ["text"];
 }
 
-function clientImageInputEnabled() {
-  return visionCapabilityEnabled;
+function clientImageInputEnabled(mapping) {
+  if (programSettings.localAPIEnabled === false) {
+    return mapping?.supports_images === true;
+  }
+  return mapping?.supports_images === true || visionCapabilityEnabled;
+}
+
+function clientVersionedBaseURL(profile) {
+  const baseURL = String(profile?.base_url || defaultBaseURL(profile?.provider)).trim().replace(/\/+$/, "");
+  if (/\/(?:v1|v1beta)$/i.test(baseURL)) return baseURL;
+  return `${baseURL}/${String(profile?.provider || "").toLowerCase() === "gemini" ? "v1beta" : "v1"}`;
+}
+
+function directClientMappings(mappings) {
+  const seen = new Set();
+  return mappings.map((mapping) => {
+    const model = String(mapping.model || mapping.name || "").trim();
+    return {...mapping, name: model, model};
+  }).filter((mapping) => mapping.model && !seen.has(mapping.model) && seen.add(mapping.model));
+}
+
+function normalizedDirectProvider(profile) {
+  const provider = String(profile?.provider || "").trim().toLowerCase();
+  if (!provider || ["openai-compatible", "openai_compatible"].includes(provider)) return "openai";
+  if (provider === "claude") return "anthropic";
+  if (provider === "google") return "gemini";
+  return provider;
+}
+
+function directClientCompatibilityMessage(client, profile) {
+  const provider = normalizedDirectProvider(profile);
+  if (client === "codex" && (provider !== "openai" || normalizeWireAPI(profile?.wire_api) !== "responses")) {
+    return "关闭本地 API 后，Codex 仅支持直连使用 Responses 协议的 OpenAI 兼容供应商。";
+  }
+  if (client === "claude-code" && provider !== "anthropic") {
+    return "关闭本地 API 后，Claude Code 仅支持直连 Anthropic 协议供应商。";
+  }
+  return "";
+}
+
+function openCodeProviderNPM(profile, directUpstream) {
+  if (!directUpstream) return "@ai-sdk/openai-compatible";
+  switch (String(profile?.provider || "").toLowerCase()) {
+    case "anthropic": return "@ai-sdk/anthropic";
+    case "gemini": return "@ai-sdk/google";
+    default: return "@ai-sdk/openai-compatible";
+  }
+}
+
+function openClawDirectAPI(profile) {
+  switch (String(profile?.provider || "").toLowerCase()) {
+    case "anthropic": return "anthropic-messages";
+    case "gemini": return "google-generative-ai";
+    default: return normalizeWireAPI(profile?.wire_api) === "responses" ? "openai-responses" : "openai-completions";
+  }
+}
+
+function openClawDirectBaseURL(profile) {
+  const provider = String(profile?.provider || "").toLowerCase();
+  if (["anthropic", "gemini"].includes(provider)) {
+    return String(profile?.base_url || defaultBaseURL(provider)).trim().replace(/\/+$/, "");
+  }
+  return clientVersionedBaseURL(profile);
 }
 
 function renderOpenCodeSnippet() {
   const profile = activeTextProfile();
-  const mappings = textProfileMappings(profile);
+  const directUpstream = programSettings.localAPIEnabled === false;
+  const sourceMappings = textProfileMappings(profile);
+  const mappings = directUpstream ? directClientMappings(sourceMappings) : sourceMappings;
+  const providerDisplayName = directUpstream ? `${profile?.provider || "供应商"}（直连）` : "Vision Relay";
+  const upstreamKey = directUpstream ? String(profile?.api_key || "").trim() : "";
+  if (directUpstream && mappings.length === 0) {
+    const message = "关闭本地 API 后，请先为当前文本供应商添加至少一个模型。";
+    [opencodeConfig, openclawConfig, codexConfig, claudeCodeConfig].forEach((element) => {
+      if (element) element.textContent = message;
+    });
+    return;
+  }
   const snippetMappings = mappings.length ? mappings : [normalizeModelMapping({name: "z-ai/glm-5.2", model: "z-ai/glm-5.2"})];
   const defaultClientModel = (snippetMappings[0].name || snippetMappings[0].model || "z-ai/glm-5.2").trim();
-  const codexKey = clientNamedKey("Codex");
-  const openCodeKey = clientNamedKey("OpenCode");
-  const openClawKey = clientNamedKey("OpenClaw");
-  const claudeCodeKey = clientNamedKey("Claude Code");
   if (opencodeConfig) {
     opencodeConfig.textContent = JSON.stringify({
       "$schema": "https://opencode.ai/config.json",
       provider: {
         "vision-relay": {
-          npm: "@ai-sdk/openai-compatible",
-          name: "Vision Relay",
+          npm: openCodeProviderNPM(profile, directUpstream),
+          name: providerDisplayName,
           options: {
-            baseURL: `${location.origin}/v1`,
-            apiKey: openCodeKey
+            baseURL: directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`,
+            ...(directUpstream ? {apiKey: upstreamKey} : {})
           },
           models: Object.fromEntries(snippetMappings.map((mapping) => {
             const modelName = mapping.name || mapping.model;
-            const imageEnabled = clientImageInputEnabled();
+            const imageEnabled = clientImageInputEnabled(mapping);
             const inputModalities = visionInputModalities(imageEnabled);
             return [modelName, {
               name: modelName,
@@ -1745,7 +1748,7 @@ function renderOpenCodeSnippet() {
       return {
         id: modelName,
         name: modelName,
-        input: visionInputModalities(clientImageInputEnabled()),
+        input: visionInputModalities(clientImageInputEnabled(mapping)),
         cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0},
         contextWindow: mapping.context_window || 128000,
         maxTokens: 8192
@@ -1761,16 +1764,17 @@ function renderOpenCodeSnippet() {
         mode: "merge",
         providers: {
           "vision-relay": {
-            baseUrl: `${location.origin}/v1`,
-            apiKey: openClawKey,
-            api: "openai-completions",
+            baseUrl: directUpstream ? openClawDirectBaseURL(profile) : `${location.origin}/v1`,
+            ...(directUpstream ? {apiKey: upstreamKey} : {}),
+            api: directUpstream ? openClawDirectAPI(profile) : "openai-completions",
             models: openclawModels
           }
         }
       }
     }, null, 2);
   }
-  if (codexConfig) {
+  const codexDirectError = directUpstream ? directClientCompatibilityMessage("codex", profile) : "";
+  if (codexConfig && !codexDirectError) {
     const catalogMappings = snippetMappings;
     const codexDefaultModel = catalogMappings[0].name || catalogMappings[0].model;
     const codexDefaultReasoningEffort = catalogMappings[0].reasoning_effort;
@@ -1778,7 +1782,7 @@ function renderOpenCodeSnippet() {
     const codexCatalog = {
       models: catalogMappings.map((mapping, index) => {
         const slug = mapping.name || mapping.model;
-        const imageEnabled = clientImageInputEnabled();
+        const imageEnabled = clientImageInputEnabled(mapping);
         const inputModalities = visionInputModalities(imageEnabled);
         const reasoningEffort = mapping.reasoning_effort;
         const supportsReasoning = reasoningEffort !== "none";
@@ -1828,11 +1832,11 @@ function renderOpenCodeSnippet() {
       `web_search = "disabled"`,
       ``,
       `[model_providers.custom]`,
-      `name = "Vision Relay"`,
+      `name = "${providerDisplayName}"`,
       `wire_api = "responses"`,
-      `requires_openai_auth = true`,
-      `base_url = "${location.origin}/v1"`,
-      `experimental_bearer_token = "${codexKey}"`,
+      `requires_openai_auth = ${directUpstream}`,
+      `base_url = "${directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`}"`,
+      ...(directUpstream ? [`experimental_bearer_token = "${upstreamKey}"`] : []),
       ``,
       `[windows]`,
       `sandbox = "unelevated"`,
@@ -1849,21 +1853,24 @@ function renderOpenCodeSnippet() {
       `web_search = "disabled"`,
       ``,
       `[model_providers.custom]`,
-      `name = "Vision Relay"`,
+      `name = "${providerDisplayName}"`,
       `wire_api = "responses"`,
-      `requires_openai_auth = true`,
-      `base_url = "${location.origin}/v1"`,
-      `experimental_bearer_token = "${codexKey}"`,
+      `requires_openai_auth = ${directUpstream}`,
+      `base_url = "${directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`}"`,
+      ...(directUpstream ? [`experimental_bearer_token = "${upstreamKey}"`] : []),
       ``,
       `[windows]`,
       `sandbox = "unelevated"`
     ].join("\n");
+  } else if (codexConfig) {
+    codexConfig.textContent = `# ${codexDirectError}`;
   }
-  if (claudeCodeConfig) {
+  const claudeDirectError = directUpstream ? directClientCompatibilityMessage("claude-code", profile) : "";
+  if (claudeCodeConfig && !claudeDirectError) {
     const claudeModelIDs = snippetMappings.map((mapping) => mapping.name || mapping.model);
     const claudeEnv = {
-      ANTHROPIC_BASE_URL: location.origin,
-      ANTHROPIC_AUTH_TOKEN: claudeCodeKey
+      ANTHROPIC_BASE_URL: directUpstream ? String(profile?.base_url || defaultBaseURL(profile?.provider)).replace(/\/+$/, "") : location.origin,
+      ...(directUpstream ? {ANTHROPIC_AUTH_TOKEN: upstreamKey} : {})
     };
     [
       ["ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
@@ -1881,6 +1888,8 @@ function renderOpenCodeSnippet() {
       availableModels: claudeModelIDs,
       env: claudeEnv
     }, null, 2);
+  } else if (claudeCodeConfig) {
+    claudeCodeConfig.textContent = claudeDirectError;
   }
 }
 
@@ -2068,39 +2077,6 @@ function defaultBaseURL(provider) {
   }
 }
 
-function syncClientKeyNames() {
-  [...clientKeyList.querySelectorAll(".key-item")].forEach((row, index) => {
-    const input = row.querySelector(".key-name");
-    if (clientKeys[index] && input) {
-      clientKeys[index].name = input.value;
-    }
-  });
-}
-
-function normalizeClientKeys(entries) {
-  const seen = new Set();
-  return entries
-    .map((entry, index) => ({
-      name: String(entry.name || `客户端 ${index + 1}`).trim() || `客户端 ${index + 1}`,
-      key: String(entry.key || "").trim()
-    }))
-    .filter((entry) => {
-      if (!entry.key || seen.has(entry.key)) return false;
-      seen.add(entry.key);
-      return true;
-    });
-}
-
-function clientNamedKey(name) {
-  const normalizedName = String(name || "").trim().toLowerCase();
-  return normalizeClientKeys(clientKeys).find((entry) => entry.name.toLowerCase() === normalizedName)?.key
-    || `Auto-created when configuring ${name}`;
-}
-
-function keysToEntries(keys) {
-  return keys.map((key, index) => ({name: `旧令牌 ${index + 1}`, key}));
-}
-
 segments.forEach((button) => {
   button.addEventListener("click", () => {
     testMode = button.dataset.mode;
@@ -2125,10 +2101,6 @@ send.addEventListener("click", async () => {
   const prompt = document.querySelector("#prompt").value.trim() || "请描述这张图片。";
   const model = textProfileDisplayModels(activeTextProfile())[0] || "local-text-model";
   const headers = {"Content-Type": "application/json"};
-  const localKey = firstLocalKey();
-  if (localKey) {
-    headers.Authorization = `Bearer ${localKey}`;
-  }
 
   const request = testMode === "responses"
     ? buildResponsesRequest(model, prompt)
@@ -2216,11 +2188,6 @@ function buildResponsesRequest(model, prompt) {
       temperature: 0.2
     }
   };
-}
-
-function firstLocalKey() {
-  syncClientKeyNames();
-  return normalizeClientKeys(clientKeys)[0]?.key || "";
 }
 
 function escapeAttr(value) {

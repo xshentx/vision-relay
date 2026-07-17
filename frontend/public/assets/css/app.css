@@ -2703,11 +2703,6 @@ body:has(.el-message) > .toast {
   background: #f0f9eb;
 }
 
-.metric-token .metric-heading b {
-  color: #b88230;
-  background: #fdf6ec;
-}
-
 .overview-metrics .metric strong {
   margin: 8px 0 4px;
   font-size: 16px;
@@ -2886,154 +2881,6 @@ body:has(.el-message) > .toast {
   font-size: 11px;
 }
 
-.token-page {
-  display: none;
-}
-
-.layout > .token-page.active {
-  display: grid;
-  gap: 18px;
-}
-
-.token-page-heading,
-.access-page-heading,
-.settings-page-heading {
-  margin-bottom: 4px;
-}
-
-.token-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.token-summary-card {
-  min-width: 0;
-  padding: 16px 17px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: #fff;
-  box-shadow: 0 6px 20px rgba(35, 59, 91, 0.04);
-}
-
-.token-summary-card.primary {
-  border-color: #b3d8ff;
-  background: linear-gradient(135deg, #f5faff, #ecf5ff);
-}
-
-.token-summary-card span,
-.token-summary-card strong,
-.token-summary-card small {
-  display: block;
-}
-
-.token-summary-card span {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.token-summary-card strong {
-  margin: 7px 0 5px;
-  color: #27364b;
-  font-size: 17px;
-  overflow-wrap: anywhere;
-}
-
-.token-summary-card.primary strong {
-  color: #337ecc;
-  font-size: 22px;
-}
-
-.token-summary-card small {
-  color: #8a97a8;
-  font-size: 10px;
-  line-height: 1.45;
-}
-
-.token-content-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(330px, 0.85fr);
-  gap: 18px;
-}
-
-.token-create-form {
-  grid-template-columns: minmax(0, 1fr) 120px;
-  align-items: end;
-  padding: 15px;
-}
-
-.token-create-form .primary-action {
-  min-height: 40px;
-}
-
-.component-alert.warning {
-  border-color: #f3d19e;
-  color: #b88230;
-  background: #fdf6ec;
-}
-
-.token-auth-list {
-  display: grid;
-  gap: 9px;
-}
-
-.token-auth-list > div {
-  display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  padding: 10px 11px;
-  border: 1px solid #ebeef5;
-  border-radius: 10px;
-  background: #fbfcfd;
-}
-
-.token-auth-list > div > span {
-  display: grid;
-  place-items: center;
-  min-height: 25px;
-  border-radius: 7px;
-  color: #337ecc;
-  background: #ecf5ff;
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.token-auth-list p {
-  min-width: 0;
-  margin: 0;
-}
-
-.token-auth-list strong,
-.token-auth-list code {
-  display: block;
-}
-
-.token-auth-list strong {
-  color: #526176;
-  font-size: 11px;
-}
-
-.token-auth-list code {
-  margin-top: 2px;
-  color: #263f67;
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-
-.token-list-card .component-card-head {
-  margin-bottom: 4px;
-}
-
-.token-key-list {
-  margin-bottom: 0;
-}
-
-.token-key-list .key-item {
-  border-radius: 11px;
-  background: #fbfcfe;
-}
-
 .access-endpoint-card .endpoint-collapse {
   margin-top: 0;
 }
@@ -3048,15 +2895,13 @@ body:has(.el-message) > .toast {
     grid-template-columns: 1fr;
   }
 
-  .overview-workspace,
-  .token-content-grid {
+  .overview-workspace {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 900px) {
-  .overview-metrics,
-  .token-summary-grid {
+  .overview-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -3072,7 +2917,6 @@ body:has(.el-message) > .toast {
 
   .overview-hero .relay-stack,
   .overview-metrics,
-  .token-summary-grid,
   .overview-quick-actions {
     grid-template-columns: 1fr;
   }
@@ -3089,14 +2933,6 @@ body:has(.el-message) > .toast {
     grid-column: 2;
   }
 
-  .token-create-form,
-  .token-key-list .key-item {
-    grid-template-columns: 1fr;
-  }
-
-  .token-create-form .primary-action {
-    width: 100%;
-  }
 }
 
 
@@ -3111,7 +2947,6 @@ body:has(.el-message) > .toast {
   flex: none;
 }
 
-.token-page .component-card,
 .access-page .component-card,
 .settings-page > .component-card {
   border-radius: 12px;
@@ -3119,9 +2954,6 @@ body:has(.el-message) > .toast {
   box-shadow: none;
 }
 
-.token-page .token-summary-card {
-  box-shadow: none;
-}
 
 .settings-grid {
   display: grid;
@@ -3377,4 +3209,8 @@ body:has(.el-message) > .toast {
   .settings-card-actions .secondary {
     width: 100%;
   }
+}
+
+.settings-api-warning {
+  margin-top: 16px;
 }

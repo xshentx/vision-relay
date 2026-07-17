@@ -126,7 +126,7 @@ func (a *app) currentLogsPage(page, pageSize int) ([]requestLog, int) {
 		total, countErr := countRequestLogsDB(a.db)
 		logs, listErr := listRequestLogsPageDB(a.db, pageSize, offset)
 		if countErr == nil && listErr == nil {
-			return a.resolveManagedCodexClientLogs(logs), total
+			return logs, total
 		}
 		if countErr != nil {
 			stdlog.Printf("database logs count warning: %v", countErr)
@@ -151,7 +151,7 @@ func (a *app) currentLogs() []requestLog {
 	if a.db != nil {
 		logs, err := listRequestLogsDB(a.db, maxLogs)
 		if err == nil {
-			return a.resolveManagedCodexClientLogs(logs)
+			return logs
 		}
 		stdlog.Printf("database logs read warning: %v", err)
 	}
@@ -161,7 +161,7 @@ func (a *app) currentLogs() []requestLog {
 		out[len(a.logs)-1-i] = a.logs[i]
 	}
 	a.logMu.Unlock()
-	return a.resolveManagedCodexClientLogs(out)
+	return out
 }
 
 func (a *app) clearLogs() {
@@ -207,7 +207,6 @@ func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, st
 		FirstTokenMS: firstTokenMS,
 	}
 	log.UpstreamName, log.UpstreamProvider = a.upstreamLogIdentity()
-	log.ClientName, log.ClientKeyPreview = a.clientLogIdentity(r)
 	if payload := decodeJSONMap(body); payload != nil {
 		log.Model = a.effectiveRequestLogModel(r, payload)
 	}
@@ -260,64 +259,6 @@ func captureRequestBody(r *http.Request) ([]byte, error) {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	return body, nil
-}
-
-func (a *app) clientLogIdentity(r *http.Request) (string, string) {
-	candidates := audienceKeys(r.Header)
-	if key := strings.TrimSpace(r.URL.Query().Get("key")); key != "" {
-		candidates = append(candidates, key)
-	}
-	cfg := a.currentConfig()
-	entries := normalizeClientAPIKeyEntries(cfg.ClientAPIKeyEntries)
-	for _, got := range candidates {
-		for _, entry := range entries {
-			if got == entry.Key {
-				return firstString(entry.Name, "未命名客户端"), keyPreview(got)
-			}
-		}
-	}
-	for _, got := range candidates {
-		if got == codexManagedBearerToken {
-			return managedCodexClientLogIdentity(entries)
-		}
-	}
-	if len(candidates) > 0 {
-		return "未匹配密钥", keyPreview(candidates[0])
-	}
-	if len(entries) == 0 {
-		return "未启用鉴权", ""
-	}
-	return "未提供密钥", ""
-}
-
-func managedCodexClientLogIdentity(entries []clientAPIKeyEntry) (string, string) {
-	if len(entries) == 0 {
-		return "Codex 托管登录", keyPreview(codexManagedBearerToken)
-	}
-	return firstString(entries[0].Name, "未命名客户端"), keyPreview(entries[0].Key)
-}
-
-func (a *app) resolveManagedCodexClientLogs(logs []requestLog) []requestLog {
-	entries := normalizeClientAPIKeyEntries(a.currentConfig().ClientAPIKeyEntries)
-	managedPreview := keyPreview(codexManagedBearerToken)
-	for i := range logs {
-		if logs[i].ClientName != "未匹配密钥" || logs[i].ClientKeyPreview != managedPreview {
-			continue
-		}
-		logs[i].ClientName, logs[i].ClientKeyPreview = managedCodexClientLogIdentity(entries)
-	}
-	return logs
-}
-
-func keyPreview(key string) string {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return ""
-	}
-	if len(key) <= 10 {
-		return key
-	}
-	return key[:3] + "..." + key[len(key)-6:]
 }
 
 func protocolName(path string) string {

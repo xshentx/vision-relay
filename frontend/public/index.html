@@ -27,7 +27,6 @@
         <span class="nav-group-label">模型与接入</span>
         <button class="nav-item" type="button" data-page="text"><span class="nav-icon">T</span><span>文本模型</span></button>
         <button class="nav-item" type="button" data-page="vision"><span class="nav-icon">V</span><span>视觉模型</span></button>
-        <button class="nav-item" type="button" data-page="tokens"><span class="nav-icon">K</span><span>访问令牌</span></button>
         <button class="nav-item" type="button" data-page="access"><span class="nav-icon">↗</span><span>客户端接入</span></button>
         <span class="nav-group-label">观测与调试</span>
         <button class="nav-item" type="button" data-page="logs"><span class="nav-icon">≡</span><span>使用日志</span></button>
@@ -86,12 +85,6 @@
             <small id="homeVisionProvider">-</small>
             <button class="metric-link home-jump" type="button" data-target-page="vision">管理视觉模型 <span>→</span></button>
           </div>
-          <div class="metric metric-token">
-            <div class="metric-heading"><span>访问令牌</span><b>K</b></div>
-            <strong id="homeKeyCount">0 个</strong>
-            <small>本机鉴权与客户端隔离</small>
-            <button class="metric-link home-jump" type="button" data-target-page="tokens">管理访问令牌 <span>→</span></button>
-          </div>
         </section>
 
         <section class="overview-grid overview-workspace">
@@ -121,7 +114,7 @@
             <div class="quick-actions overview-quick-actions">
               <button class="secondary home-jump" type="button" data-target-page="text">文本模型</button>
               <button class="secondary home-jump" type="button" data-target-page="vision">视觉模型</button>
-              <button class="secondary home-jump" type="button" data-target-page="tokens">访问令牌</button>
+              <button class="secondary home-jump" type="button" data-target-page="access">客户端接入</button>
               <button class="secondary home-jump" type="button" data-target-page="playground">测试台</button>
             </div>
           </article>
@@ -159,41 +152,6 @@
           <div class="hint" id="visionModelHint">视觉模型需要能描述图片内容。不要使用 llama-guard、safety、moderation 这类安全分类模型，否则只会返回 safe/unsafe。</div>
         </section>
 
-        <section class="page panel standard-page token-page span-12" id="tokens" data-page-panel="tokens">
-          <div class="panel-head token-page-heading">
-            <div><h3>访问令牌</h3><p>为不同客户端创建独立令牌，便于识别调用来源并随时撤销访问。</p></div>
-            <span class="configuration-status"><i></i>仅保存在本机</span>
-          </div>
-
-          <div class="token-summary-grid">
-            <article class="token-summary-card primary"><span>有效令牌</span><strong id="tokenPageKeyCount">0 个</strong><small>删除后对应客户端立即失效</small></article>
-            <article class="token-summary-card"><span>鉴权方式</span><strong>Bearer / X-API-Key</strong><small>兼容常见桌面与移动客户端</small></article>
-            <article class="token-summary-card"><span>适用范围</span><strong>全部兼容入口</strong><small>Responses、Chat、Anthropic 等</small></article>
-          </div>
-
-          <div class="token-content-grid">
-            <article class="component-card token-create-card">
-              <div class="component-card-head"><div><h4>创建访问令牌</h4><p>使用清晰的客户端名称，后续可在日志中快速定位调用来源。</p></div><span class="component-tag">本地鉴权</span></div>
-              <div class="key-head token-create-form"><label>客户端名称<input id="clientKeyName" placeholder="例如 Cherry Studio、Open WebUI、手机端"></label><button class="primary-action" id="generateKey" type="button">生成令牌</button></div>
-              <div class="component-alert warning"><strong>安全提示</strong><span>令牌生成后请妥善保存，不要发送到公开聊天、截图或代码仓库。</span></div>
-            </article>
-
-            <article class="component-card token-help-card">
-              <div class="component-card-head"><div><h4>接入方式</h4><p>客户端任选一种支持的鉴权头即可。</p></div><span class="component-tag success">通用</span></div>
-              <div class="token-auth-list">
-                <div><span>推荐</span><p><strong>Authorization</strong><code>Bearer &lt;TOKEN&gt;</code></p></div>
-                <div><span>兼容</span><p><strong>X-API-Key</strong><code>&lt;TOKEN&gt;</code></p></div>
-                <div><span>临时</span><p><strong>Query 参数</strong><code>?key=&lt;TOKEN&gt;</code></p></div>
-              </div>
-            </article>
-          </div>
-
-          <article class="component-card token-list-card">
-            <div class="component-card-head"><div><h4>已创建令牌</h4><p>可复制、重命名或删除令牌；名称修改后会自动保存。</p></div><span class="component-tag">客户端隔离</span></div>
-            <div class="key-list token-key-list" id="clientKeyList"></div>
-          </article>
-        </section>
-
         <section class="page panel standard-page access-page span-12" id="access" data-page-panel="access">
           <div class="panel-head access-page-heading">
             <div><h3>客户端接入</h3><p>统一管理 Codex、OpenCode、Claude Code、OpenClaw 与兼容 API 的连接配置。</p></div>
@@ -212,7 +170,7 @@
             </article>
             <article class="component-card access-guide-card">
               <div class="component-card-head"><div><h4>快速配置</h4><p>推荐按以下流程完成客户端接入。</p></div><span class="component-tag success">3 步</span></div>
-              <div class="access-guide-list"><div><span>1</span><p><strong>创建独立访问令牌</strong><small>在“访问令牌”菜单中为客户端生成专属令牌。</small></p></div><div><span>2</span><p><strong>选择并配置客户端</strong><small>在下方标签中选择 Codex、OpenCode、Claude Code 或 OpenClaw。</small></p></div><div><span>3</span><p><strong>重启并发送测试消息</strong><small>模型列表与多模态能力会自动同步。</small></p></div></div>
+              <div class="access-guide-list"><div><span>1</span><p><strong>确认本地 API 已开启</strong><small>本地接口无需访问令牌，客户端可直接调用。</small></p></div><div><span>2</span><p><strong>选择并配置客户端</strong><small>在下方标签中选择 Codex、OpenCode、Claude Code 或 OpenClaw。</small></p></div><div><span>3</span><p><strong>重启并发送测试消息</strong><small>模型列表与多模态能力会自动同步。</small></p></div></div>
               <div class="component-alert info"><strong>配置提示</strong><span>切换文本供应商后，已启用路由的客户端配置会自动同步；成功后请重启客户端程序。</span></div>
             </article>
           </div>
@@ -242,11 +200,12 @@
           </div>
 
           <article class="component-card settings-api-card">
-            <div class="component-card-head"><div><h4>本地 API 接口</h4><p>设置客户端访问 Vision Relay 的监听地址；关闭接口不会影响管理页面。</p></div><label class="client-route-control"><span>启用接口</span><span class="switch-control"><input id="settingsLocalAPIEnabled" type="checkbox"><span aria-hidden="true"></span></span></label></div>
+            <div class="component-card-head"><div><h4>本地 API 接口</h4><p>设置客户端访问 Vision Relay 的监听地址；关闭后，一键配置与供应商切换会把客户端改为直连当前文本供应商。</p></div><label class="client-route-control"><span>启用接口</span><span class="switch-control"><input id="settingsLocalAPIEnabled" type="checkbox"><span aria-hidden="true"></span></span></label></div>
             <div class="settings-grid api-settings-grid">
               <label><span>监听地址</span><input id="settingsAPIHost" type="text" autocomplete="off" placeholder="127.0.0.1"><small>127.0.0.1 仅允许本机访问；0.0.0.0 允许局域网设备访问。</small></label>
               <label><span>监听端口</span><input id="settingsAPIPort" type="number" min="1" max="65535" step="1" placeholder="8787"><small>地址或端口修改后，重启 Vision Relay 生效。</small></label>
             </div>
+            <div class="component-alert warning settings-api-warning" id="localAPIWarning" hidden><strong>功能提示</strong><span>关闭本地服务后视觉模型将不可用；客户端会直连当前文本供应商，只有勾选“支持多模态”的文本模型仍可识别图片。</span></div>
           </article>
 
           <article class="component-card settings-behavior-card">
@@ -326,7 +285,7 @@
           <div class="panel-head">
             <div>
               <h3>使用日志</h3>
-              <p>记录客户端请求、使用的密钥、模型、Token 用量、缓存命中、首 token 和耗时。</p>
+              <p>记录客户端请求、使用的供应商、模型、Token 用量、缓存命中、首 token 和耗时。</p>
             </div>
             <div class="panel-actions">
               <button class="secondary" id="refreshLogs" type="button">刷新</button>

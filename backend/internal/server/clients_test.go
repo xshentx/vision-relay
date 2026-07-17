@@ -44,75 +44,6 @@ func TestNormalizeClientRouteEnabled(t *testing.T) {
 	}
 }
 
-func TestEnsureClientKeyUsesClientNamedToken(t *testing.T) {
-	a := &app{cfg: config{ClientAPIKeyEntries: []clientAPIKeyEntry{
-		{Name: "First token", Key: "sk-first"},
-		{Name: "openclaw", Key: "sk-openclaw"},
-		{Name: "Codex", Key: "sk-codex"},
-	}}}
-
-	key, name, created, err := a.ensureClientKey(clientOpenClaw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key != "sk-openclaw" || name != "OpenClaw" || created {
-		t.Fatalf("wrong named token selection: key=%q name=%q created=%v", key, name, created)
-	}
-	if got := len(a.currentConfig().ClientAPIKeyEntries); got != 3 {
-		t.Fatalf("existing named token should be reused without adding entries: got %d", got)
-	}
-}
-
-func TestEnsureClientKeyCreatesAndReusesClientNamedTokens(t *testing.T) {
-	a := &app{
-		cfg:        config{ClientAPIKeyEntries: []clientAPIKeyEntry{{Name: "Other", Key: "sk-other"}}},
-		configPath: filepath.Join(t.TempDir(), "config.json"),
-	}
-	tests := []struct {
-		client string
-		name   string
-	}{
-		{client: clientCodex, name: "Codex"},
-		{client: clientOpenCode, name: "OpenCode"},
-		{client: clientClaudeCode, name: "Claude Code"},
-		{client: clientOpenClaw, name: "OpenClaw"},
-	}
-	createdKeys := map[string]string{}
-	for _, tt := range tests {
-		key, name, created, err := a.ensureClientKey(tt.client)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !created || name != tt.name || !strings.HasPrefix(key, "sk-") {
-			t.Fatalf("wrong token created for %s: key=%q name=%q created=%v", tt.client, key, name, created)
-		}
-		createdKeys[tt.client] = key
-	}
-	entries := a.currentConfig().ClientAPIKeyEntries
-	if len(entries) != len(tests)+1 {
-		t.Fatalf("client-named tokens were not all saved: %#v", entries)
-	}
-	for i, tt := range tests {
-		entry := entries[i+1]
-		if entry.Name != tt.name || entry.Key != createdKeys[tt.client] {
-			t.Fatalf("wrong saved token for %s: %#v", tt.client, entry)
-		}
-	}
-
-	for _, tt := range tests {
-		key, name, created, err := a.ensureClientKey(tt.client)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if key != createdKeys[tt.client] || name != tt.name || created {
-			t.Fatalf("created token was not reused for %s: key=%q name=%q created=%v", tt.client, key, name, created)
-		}
-	}
-	if got := len(a.currentConfig().ClientAPIKeyEntries); got != len(tests)+1 {
-		t.Fatalf("reusing tokens should not add entries: got %d", got)
-	}
-}
-
 func TestWriteClientConfigs(t *testing.T) {
 	home := t.TempDir()
 	projectDir := filepath.Join(home, "project")
@@ -120,7 +51,6 @@ func TestWriteClientConfigs(t *testing.T) {
 		HomeDir:       home,
 		ProjectDir:    projectDir,
 		Origin:        "http://127.0.0.1:8787",
-		Key:           "sk-local",
 		Model:         "z-ai/glm-5.2",
 		VisionEnabled: true,
 		ModelMappings: []textModelMapping{
@@ -144,12 +74,14 @@ func TestWriteClientConfigs(t *testing.T) {
 		!strings.Contains(codexUser, `disable_response_storage = true`) ||
 		!strings.Contains(codexUser, `web_search = "disabled"`) ||
 		!strings.Contains(codexUser, `[model_providers.custom]`) ||
-		!strings.Contains(codexUser, `requires_openai_auth = true`) ||
+		!strings.Contains(codexUser, `requires_openai_auth = false`) ||
 		!strings.Contains(codexUser, `[windows]`) ||
 		!strings.Contains(codexUser, `sandbox = "unelevated"`) ||
-		!strings.Contains(codexUser, `base_url = "http://127.0.0.1:8787/v1"`) ||
-		!strings.Contains(codexUser, `experimental_bearer_token = "sk-local"`) {
+		!strings.Contains(codexUser, `base_url = "http://127.0.0.1:8787/v1"`) {
 		t.Fatalf("bad codex user config:\n%s", codexUser)
+	}
+	if strings.Contains(codexUser, "experimental_bearer_token") {
+		t.Fatalf("local Codex config should not contain a bearer token:\n%s", codexUser)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "auth.json")); !os.IsNotExist(err) {
 		t.Fatalf("codex account auth should not be replaced, stat err: %v", err)
@@ -169,7 +101,7 @@ func TestWriteClientConfigs(t *testing.T) {
 		!strings.Contains(codexProject, `model_catalog_json = "vision-relay-model.json"`) ||
 		!strings.Contains(codexProject, `model_provider = "custom"`) ||
 		!strings.Contains(codexProject, `[model_providers.custom]`) ||
-		!strings.Contains(codexProject, `requires_openai_auth = true`) ||
+		!strings.Contains(codexProject, `requires_openai_auth = false`) ||
 		!strings.Contains(codexProject, `sandbox = "unelevated"`) ||
 		!strings.Contains(codexProject, `base_url = "http://127.0.0.1:8787/v1"`) {
 		t.Fatalf("bad codex project config:\n%s", codexProject)
@@ -198,8 +130,11 @@ func TestWriteClientConfigs(t *testing.T) {
 	}
 	provider := openCode["provider"].(map[string]any)["vision-relay"].(map[string]any)
 	options := provider["options"].(map[string]any)
-	if options["baseURL"] != "http://127.0.0.1:8787/v1" || options["apiKey"] != "sk-local" {
+	if options["baseURL"] != "http://127.0.0.1:8787/v1" {
 		t.Fatalf("bad opencode options: %#v", options)
+	}
+	if _, exists := options["apiKey"]; exists {
+		t.Fatalf("local OpenCode config should not contain an API key: %#v", options)
 	}
 	models := provider["models"].(map[string]any)
 	if len(models) != 2 {
@@ -225,8 +160,11 @@ func TestWriteClientConfigs(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := claude["env"].(map[string]any)
-	if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8787" || env["ANTHROPIC_AUTH_TOKEN"] != "sk-local" {
+	if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8787" {
 		t.Fatalf("bad claude env: %#v", env)
+	}
+	if _, exists := env["ANTHROPIC_AUTH_TOKEN"]; exists {
+		t.Fatalf("local Claude Code config should not contain an auth token: %#v", env)
 	}
 	availableModels := claude["availableModels"].([]any)
 	if len(availableModels) != 2 || availableModels[0] != "z-ai/glm-5.2" || availableModels[1] != "deepseek-ai/deepseek-v4-pro" {
@@ -251,7 +189,7 @@ func TestWriteOpenClawConfigPreservesExistingJSON5AndAddsModels(t *testing.T) {
 	existing := `{
 		// Existing settings must survive a one-click configuration.
 		gateway: { mode: 'local', },
-		agents: { defaults: { models: { 'anthropic/claude-sonnet-4-6': { alias: 'sonnet' }, }, }, },
+		agents: { defaults: { models: { 'anthropic/claude-sonnet-4-6': { alias: 'sonnet' }, 'vision-relay/stale-model': {}, }, }, },
 		models: { providers: { existing: { baseUrl: 'https://example.com/v1', apiKey: 'keep-me', }, }, },
 	}`
 	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
@@ -261,7 +199,6 @@ func TestWriteOpenClawConfigPreservesExistingJSON5AndAddsModels(t *testing.T) {
 	ctx := clientConfigContext{
 		HomeDir:       home,
 		Origin:        "http://127.0.0.1:8787",
-		Key:           "sk-local",
 		Model:         "upstream-model",
 		VisionEnabled: true,
 		ModelMappings: []textModelMapping{
@@ -293,6 +230,9 @@ func TestWriteOpenClawConfigPreservesExistingJSON5AndAddsModels(t *testing.T) {
 	if _, ok := allowed["anthropic/claude-sonnet-4-6"]; !ok {
 		t.Fatalf("existing model allowlist entry was removed: %#v", allowed)
 	}
+	if _, ok := allowed["vision-relay/stale-model"]; ok {
+		t.Fatalf("stale Vision Relay model was not removed from the allowlist: %#v", allowed)
+	}
 	if _, ok := allowed["vision-relay/relay-default"]; !ok {
 		t.Fatalf("Vision Relay model was not added to existing allowlist: %#v", allowed)
 	}
@@ -309,8 +249,11 @@ func TestWriteOpenClawConfigPreservesExistingJSON5AndAddsModels(t *testing.T) {
 		t.Fatalf("existing provider was removed: %#v", providers)
 	}
 	provider := providers["vision-relay"].(map[string]any)
-	if provider["baseUrl"] != "http://127.0.0.1:8787/v1" || provider["apiKey"] != "sk-local" || provider["api"] != "openai-completions" {
+	if provider["baseUrl"] != "http://127.0.0.1:8787/v1" || provider["api"] != "openai-completions" {
 		t.Fatalf("bad OpenClaw provider: %#v", provider)
+	}
+	if _, exists := provider["apiKey"]; exists {
+		t.Fatalf("local OpenClaw config should not contain an API key: %#v", provider)
 	}
 	models := provider["models"].([]any)
 	if len(models) != 2 {
@@ -369,7 +312,6 @@ func TestWriteOpenCodeConfigSynchronizesModelCatalog(t *testing.T) {
 	ctx := clientConfigContext{
 		HomeDir:       home,
 		Origin:        "http://127.0.0.1:8787",
-		Key:           "sk-local",
 		Model:         "z-ai/glm-5.2",
 		VisionEnabled: true,
 		ModelMappings: []textModelMapping{{Name: "z-ai/glm-5.2", Model: "z-ai/glm-5.2"}},
@@ -424,7 +366,6 @@ func TestWriteClaudeCodeConfigExposesAllModelsAndLegacyPickerSlots(t *testing.T)
 	ctx := clientConfigContext{
 		HomeDir:       home,
 		Origin:        "http://127.0.0.1:8787",
-		Key:           "sk-local",
 		Model:         "upstream-1",
 		ModelMappings: mappings,
 	}
@@ -459,7 +400,6 @@ func TestWriteOpenCodeConfigCanDisableImageSupport(t *testing.T) {
 	ctx := clientConfigContext{
 		HomeDir:       home,
 		Origin:        "http://127.0.0.1:8787",
-		Key:           "sk-local",
 		Model:         "z-ai/glm-5.2",
 		VisionEnabled: false,
 	}
@@ -496,13 +436,17 @@ func TestClientCatalogUsesVisionCapabilitySetting(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("expected two catalog entries, got %#v", entries)
 	}
-	for _, entry := range entries {
-		if got := entry["input_modalities"].([]string); len(got) != 1 || got[0] != "text" {
-			t.Fatalf("vision-disabled model should advertise text input only: %#v", entry)
-		}
-		if entry["supports_image_detail_original"] != false {
-			t.Fatalf("vision-disabled model should not support original image detail: %#v", entry)
-		}
+	if got := entries[0]["input_modalities"].([]string); len(got) != 2 || got[0] != "text" || got[1] != "image" {
+		t.Fatalf("native multimodal model should retain image input when vision relay is disabled: %#v", entries[0])
+	}
+	if entries[0]["supports_image_detail_original"] != true {
+		t.Fatalf("native multimodal model should retain original image detail: %#v", entries[0])
+	}
+	if got := entries[1]["input_modalities"].([]string); len(got) != 1 || got[0] != "text" {
+		t.Fatalf("text-only model should advertise text input only when vision relay is disabled: %#v", entries[1])
+	}
+	if entries[1]["supports_image_detail_original"] != false {
+		t.Fatalf("text-only model should not support original image detail when vision relay is disabled: %#v", entries[1])
 	}
 
 	ctx.VisionEnabled = true
@@ -514,6 +458,22 @@ func TestClientCatalogUsesVisionCapabilitySetting(t *testing.T) {
 		if entry["supports_image_detail_original"] != true {
 			t.Fatalf("vision-enabled model should support original image detail: %#v", entry)
 		}
+	}
+
+	ctx.DirectUpstream = true
+	ctx.VisionEnabled = false
+	entries = codexModelCatalogEntries(ctx, nil)
+	if got := entries[0]["input_modalities"].([]string); len(got) != 2 || got[0] != "text" || got[1] != "image" {
+		t.Fatalf("direct multimodal model should retain image input: %#v", entries[0])
+	}
+	if entries[0]["supports_image_detail_original"] != true {
+		t.Fatalf("direct multimodal model should support original image detail: %#v", entries[0])
+	}
+	if got := entries[1]["input_modalities"].([]string); len(got) != 1 || got[0] != "text" {
+		t.Fatalf("direct text-only model should advertise text input only: %#v", entries[1])
+	}
+	if entries[1]["supports_image_detail_original"] != false {
+		t.Fatalf("direct text-only model should not support original image detail: %#v", entries[1])
 	}
 }
 
@@ -606,8 +566,7 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 				{Name: "gpt-5.5", Model: "gpt-5.5"},
 				{Name: "gpt-5.4", Model: "gpt-5.4"},
 			},
-			ClientAPIKeyEntries: []clientAPIKeyEntry{{Name: "Other", Key: "sk-local"}},
-			VisionEnabled:       boolPtr(true),
+			VisionEnabled: boolPtr(true),
 		}),
 		clientProgramController: &recordingClientProgramController{running: false},
 		configPath:              filepath.Join(home, "vision-relay-config.json"),
@@ -621,8 +580,6 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
 	}
 	var result struct {
-		KeyCreated      bool   `json:"key_created"`
-		KeyName         string `json:"key_name"`
 		RouteEnabled    bool   `json:"route_enabled"`
 		RestartRequired bool   `json:"restart_required"`
 		Builtin         bool   `json:"builtin"`
@@ -634,20 +591,11 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if !result.KeyCreated || result.KeyName != "Codex" || !result.RouteEnabled || result.RestartRequired || !result.Builtin || result.WasRunning || !result.AutoRestart || result.AutoStart || result.ProgramAction != "not-running" {
-		t.Fatalf("Codex one-click config should be built in, enable routing, create its named token, and keep a stopped client closed by default: %#v", result)
+	if !result.RouteEnabled || result.RestartRequired || !result.Builtin || result.WasRunning || !result.AutoRestart || result.AutoStart || result.ProgramAction != "not-running" {
+		t.Fatalf("Codex one-click config should be built in, enable routing, and keep a stopped client closed by default: %#v", result)
 	}
 	if !a.currentConfig().ClientRouteEnabled[clientCodex] {
 		t.Fatalf("Codex route was not persisted: %#v", a.currentConfig().ClientRouteEnabled)
-	}
-	var codexKey string
-	for _, entry := range a.currentConfig().ClientAPIKeyEntries {
-		if entry.Name == "Codex" {
-			codexKey = entry.Key
-		}
-	}
-	if !strings.HasPrefix(codexKey, "sk-") {
-		t.Fatalf("Codex token was not saved: %#v", a.currentConfig().ClientAPIKeyEntries)
 	}
 	raw, err := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
 	if err != nil {
@@ -655,11 +603,13 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	}
 	config := string(raw)
 	if !strings.Contains(config, `model_provider = "custom"`) ||
-		!strings.Contains(config, `requires_openai_auth = true`) ||
+		!strings.Contains(config, `requires_openai_auth = false`) ||
 		!strings.Contains(config, `model_catalog_json = "vision-relay-model.json"`) ||
-		!strings.Contains(config, `web_search = "disabled"`) ||
-		!strings.Contains(config, `experimental_bearer_token = "`+codexKey+`"`) {
+		!strings.Contains(config, `web_search = "disabled"`) {
 		t.Fatalf("codex config was not written:\n%s", config)
+	}
+	if strings.Contains(config, "experimental_bearer_token") {
+		t.Fatalf("local Codex config should not contain a bearer token:\n%s", config)
 	}
 	catalogRaw, err := os.ReadFile(filepath.Join(home, ".codex", "vision-relay-model.json"))
 	if err != nil {
@@ -671,17 +621,160 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	}
 }
 
-func TestHandleClientRoutesApplyOnlyUpdatesEnabledClients(t *testing.T) {
+func TestHandleClientConfigureUsesDirectSupplierWhenLocalAPIDisabled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
+	localAPIEnabled := false
 	a := &app{
 		cfg: normalizeSeparateModelProfiles(config{
-			Addr:                "127.0.0.1:8787",
-			TextModelMappings:   []textModelMapping{{Name: "route-model", Model: "upstream-model"}},
-			ClientAPIKeyEntries: []clientAPIKeyEntry{{Name: "OpenCode", Key: "sk-opencode"}},
-			ClientRouteEnabled:  map[string]bool{clientOpenCode: true},
-			VisionEnabled:       boolPtr(true),
+			TextProvider:    "openai",
+			TextBaseURL:     "https://supplier.example/v1",
+			TextAPIKey:      "sk-upstream",
+			TextWireAPI:     "chat_completions",
+			LocalAPIEnabled: &localAPIEnabled,
+			TextModelMappings: []textModelMapping{
+				{Name: "vision-alias", Model: "upstream-vision", SupportsImages: true},
+				{Name: "text-alias", Model: "upstream-text", SupportsImages: false},
+			},
+			VisionEnabled: boolPtr(true),
+		}),
+		clientProgramController: &recordingClientProgramController{running: false},
+		configPath:              filepath.Join(home, "vision-relay-config.json"),
+	}
+	body := bytes.NewBufferString(`{"client":"opencode"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/client/configure", body)
+	req.Host = "127.0.0.1:8787"
+	rec := httptest.NewRecorder()
+	a.handleClientConfigure(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	var result struct {
+		DirectUpstream bool   `json:"direct_upstream"`
+		Provider       string `json:"provider"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.DirectUpstream || result.Provider != "openai" {
+		t.Fatalf("one-click config did not select direct supplier mode: %#v", result)
+	}
+	raw, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var openCode map[string]any
+	if err := json.Unmarshal(raw, &openCode); err != nil {
+		t.Fatal(err)
+	}
+	providers := openCode["provider"].(map[string]any)
+	provider := providers[relayProviderID].(map[string]any)
+	options := provider["options"].(map[string]any)
+	if options["baseURL"] != "https://supplier.example/v1" || options["apiKey"] != "sk-upstream" {
+		t.Fatalf("direct supplier credentials were not written: %#v", options)
+	}
+	models := provider["models"].(map[string]any)
+	if len(models) != 2 {
+		t.Fatalf("direct mode should include only the two configured models: %#v", models)
+	}
+	if _, exists := models["vision-alias"]; exists {
+		t.Fatalf("relay alias should not be written in direct mode: %#v", models)
+	}
+	visionModel := models["upstream-vision"].(map[string]any)
+	textModel := models["upstream-text"].(map[string]any)
+	if visionModel["attachment"] != true || visionModel["vision"] != true {
+		t.Fatalf("multimodal upstream model should retain image capability: %#v", visionModel)
+	}
+	if textModel["attachment"] != false || textModel["vision"] != false {
+		t.Fatalf("text-only upstream model should not advertise image capability: %#v", textModel)
+	}
+	if openCode["model"] != "vision-relay/upstream-vision" {
+		t.Fatalf("direct config did not select the real upstream model: %#v", openCode["model"])
+	}
+}
+
+func TestValidateDirectClientRouteCompatibility(t *testing.T) {
+	mappings := []textModelMapping{{Name: "model", Model: "model"}}
+	tests := []struct {
+		name     string
+		client   string
+		provider string
+		wireAPI  string
+		wantErr  string
+	}{
+		{name: "codex responses", client: clientCodex, provider: "openai", wireAPI: "responses"},
+		{name: "codex chat completions", client: clientCodex, provider: "openai", wireAPI: "chat_completions", wantErr: "Responses"},
+		{name: "codex anthropic", client: clientCodex, provider: "anthropic", wireAPI: "responses", wantErr: "Responses"},
+		{name: "claude anthropic", client: clientClaudeCode, provider: "anthropic", wireAPI: "chat_completions"},
+		{name: "claude openai", client: clientClaudeCode, provider: "openai", wireAPI: "responses", wantErr: "Anthropic"},
+		{name: "opencode gemini", client: clientOpenCode, provider: "gemini", wireAPI: "chat_completions"},
+		{name: "openclaw ollama", client: clientOpenClaw, provider: "ollama", wireAPI: "chat_completions"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDirectClientRoute(tt.client, config{TextProvider: tt.provider, TextWireAPI: tt.wireAPI}, mappings)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected compatibility error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("compatibility error = %v, want substring %q", err, tt.wantErr)
+			}
+			var validationErr *clientRouteValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("compatibility error should be a clientRouteValidationError: %T", err)
+			}
+		})
+	}
+}
+
+func TestHandleClientConfigureRejectsEmptyDirectModelList(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	localAPIEnabled := false
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			TextProvider:    "openai",
+			TextBaseURL:     "https://supplier.example",
+			TextAPIKey:      "sk-upstream",
+			TextWireAPI:     "responses",
+			LocalAPIEnabled: &localAPIEnabled,
+		}),
+		configPath: filepath.Join(home, "vision-relay-config.json"),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/client/configure", bytes.NewBufferString(`{"client":"opencode"}`))
+	rec := httptest.NewRecorder()
+	a.handleClientConfigure(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty direct model list status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "至少一个模型") {
+		t.Fatalf("empty direct model error is not actionable: %s", rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".config", "opencode", "opencode.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid direct configuration should not write OpenCode config: %v", err)
+	}
+}
+
+func TestHandleClientRoutesApplyOnlyUpdatesEnabledClientsInDirectMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	localAPIEnabled := false
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			Addr:               "127.0.0.1:8787",
+			TextProvider:       "openai",
+			TextBaseURL:        "https://switched.example/v1",
+			TextAPIKey:         "sk-switched-upstream",
+			TextModelMappings:  []textModelMapping{{Name: "route-model", Model: "upstream-model", SupportsImages: true}},
+			LocalAPIEnabled:    &localAPIEnabled,
+			ClientRouteEnabled: map[string]bool{clientOpenCode: true},
+			VisionEnabled:      boolPtr(true),
 		}),
 		configPath: filepath.Join(home, "vision-relay-config.json"),
 	}
@@ -703,12 +796,23 @@ func TestHandleClientRoutesApplyOnlyUpdatesEnabledClients(t *testing.T) {
 	if !result.OK || len(result.Errors) != 0 || len(result.Clients) != 1 || result.Clients[0].Client != clientOpenCode {
 		t.Fatalf("wrong route apply result: %#v", result)
 	}
+	if !result.Clients[0].DirectUpstream || result.Clients[0].Provider != "openai" {
+		t.Fatalf("supplier switch should update the enabled route in direct mode: %#v", result.Clients[0])
+	}
 	openCodeRaw, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(openCodeRaw), `"route-model"`) {
-		t.Fatalf("enabled OpenCode route was not updated:\n%s", openCodeRaw)
+	openCodeText := string(openCodeRaw)
+	for _, want := range []string{`"upstream-model"`, `"https://switched.example/v1"`, `"sk-switched-upstream"`} {
+		if !strings.Contains(openCodeText, want) {
+			t.Fatalf("enabled OpenCode route is missing direct upstream value %s:\n%s", want, openCodeRaw)
+		}
+	}
+	for _, forbidden := range []string{`"route-model"`, `"sk-opencode"`} {
+		if strings.Contains(openCodeText, forbidden) {
+			t.Fatalf("enabled OpenCode route retained relay-only value %s:\n%s", forbidden, openCodeRaw)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "config.toml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("disabled Codex route should not be updated: %v", err)
@@ -760,7 +864,7 @@ func TestWriteCodexConfigReplacesPreviousRelayBlock(t *testing.T) {
 	}
 	if !strings.Contains(after, `model_provider = "custom"`) ||
 		!strings.Contains(after, `[model_providers.custom]`) ||
-		!strings.Contains(after, `requires_openai_auth = true`) ||
+		!strings.Contains(after, `requires_openai_auth = false`) ||
 		!strings.Contains(after, `base_url = "http://new/v1"`) {
 		t.Fatalf("global codex config should route the custom provider through Vision Relay:\n%s", after)
 	}
@@ -784,7 +888,7 @@ func TestWriteCodexConfigReplacesPreviousRelayBlock(t *testing.T) {
 	if !strings.Contains(project, `model = "new-model"`) ||
 		!strings.Contains(project, `model_catalog_json = "vision-relay-model.json"`) ||
 		!strings.Contains(project, `model_provider = "custom"`) ||
-		!strings.Contains(project, `requires_openai_auth = true`) ||
+		!strings.Contains(project, `requires_openai_auth = false`) ||
 		!strings.Contains(project, `sandbox = "unelevated"`) ||
 		!strings.Contains(project, `base_url = "http://new/v1"`) {
 		t.Fatalf("project codex model was not updated:\n%s", project)
@@ -1071,7 +1175,7 @@ func TestWriteCodexConfigKeepsAccountAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := clientConfigContext{HomeDir: home, ProjectDir: filepath.Join(home, "project"), Origin: "http://127.0.0.1:8787", Key: "sk-local", Model: "deepseek-ai/deepseek-v4-pro"}
+	ctx := clientConfigContext{HomeDir: home, ProjectDir: filepath.Join(home, "project"), Origin: "http://127.0.0.1:8787", Model: "deepseek-ai/deepseek-v4-pro"}
 	if _, err := writeCodexConfig(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -1100,7 +1204,7 @@ func TestWriteCodexConfigDoesNotBackUpRelayModeAsAccount(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte(account), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ctx := clientConfigContext{HomeDir: home, ProjectDir: filepath.Join(home, "project"), Origin: "http://127.0.0.1:8787", Key: "sk-local", Model: "deepseek-ai/deepseek-v4-pro"}
+	ctx := clientConfigContext{HomeDir: home, ProjectDir: filepath.Join(home, "project"), Origin: "http://127.0.0.1:8787", Model: "deepseek-ai/deepseek-v4-pro"}
 	if _, err := writeCodexConfig(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -1240,7 +1344,6 @@ func TestWriteCodexConfigUsesCODEXHomeWithoutProjectConfig(t *testing.T) {
 	ctx := clientConfigContext{
 		HomeDir: home,
 		Origin:  "http://127.0.0.1:8787",
-		Key:     "sk-local",
 		Model:   "gpt-5.5",
 	}
 	path, err := writeCodexConfig(ctx)
@@ -1286,7 +1389,6 @@ func TestWriteOpenCodeConfigAdvertisesReasoningModels(t *testing.T) {
 	ctx := clientConfigContext{
 		HomeDir: home,
 		Origin:  "http://127.0.0.1:8787",
-		Key:     "sk-local",
 		ModelMappings: []textModelMapping{
 			{Name: "deepseek-ai/deepseek-v4-pro", Model: "deepseek-ai/deepseek-v4-pro"},
 			{Name: "z-ai/glm-5.2", Model: "z-ai/glm-5.2"},

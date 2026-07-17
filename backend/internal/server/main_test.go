@@ -987,8 +987,16 @@ func TestOpenAIModelsAdvertisesImageSupportFromVisionCapability(t *testing.T) {
 	data := payload["data"].([]any)
 	for _, item := range data {
 		model := item.(map[string]any)
-		if model["attachment"] == true || model["supports_images"] == true || model["vision"] == true {
-			t.Fatalf("vision-disabled model should not advertise image support: %#v", model)
+		imageCapable := model["attachment"] == true && model["supports_images"] == true && model["vision"] == true
+		switch model["id"] {
+		case "native-vision-text":
+			if !imageCapable {
+				t.Fatalf("native multimodal model should advertise image support without the vision relay: %#v", model)
+			}
+		case "plain-text":
+			if imageCapable {
+				t.Fatalf("plain text model should not advertise image support while the vision relay is disabled: %#v", model)
+			}
 		}
 	}
 
@@ -1049,6 +1057,10 @@ func TestShouldAugmentImagesUsesSelectedModelCapability(t *testing.T) {
 	}
 	if !shouldAugmentImages(cfg, "text-model") {
 		t.Fatal("text-only model should use the configured vision relay")
+	}
+	cfg.VisionEnabled = boolPtr(false)
+	if shouldAugmentImages(cfg, "vision-model") || shouldAugmentImages(cfg, "text-model") {
+		t.Fatal("no model should use the vision relay while it is disabled")
 	}
 }
 
@@ -1260,7 +1272,6 @@ func TestRouteLogsActualForwardedModelAfterProfileSwitch(t *testing.T) {
 			TextModelMappings: []textModelMapping{
 				{Name: "grok-4.5", Model: "grok-4.5"},
 			},
-			ClientAPIKeyEntries: []clientAPIKeyEntry{{Name: "OpenCode", Key: "sk-opencode"}},
 		}),
 		httpClient: upstream.Client(),
 	}
@@ -1376,9 +1387,6 @@ func TestRouteAppendsConversationLog(t *testing.T) {
 		cfg: config{
 			TextProvider: "openai",
 			TextBaseURL:  upstream.URL,
-			ClientAPIKeyEntries: []clientAPIKeyEntry{
-				{Name: "Test Client", Key: "sk-test-client"},
-			},
 		},
 		httpClient: upstream.Client(),
 	}
@@ -1395,7 +1403,7 @@ func TestRouteAppendsConversationLog(t *testing.T) {
 		t.Fatalf("expected one log, got %d", len(logs))
 	}
 	log := logs[0]
-	if log.ClientName != "Test Client" || log.InputTokens != 11 || log.OutputTokens != 7 || log.CacheHitTokens != 5 {
+	if log.UpstreamName != "当前文本上游" || log.UpstreamProvider != "openai" || log.InputTokens != 11 || log.OutputTokens != 7 || log.CacheHitTokens != 5 {
 		t.Fatalf("bad log: %#v", log)
 	}
 	if log.RequestText != "" || log.ResponseText != "" {
@@ -1407,77 +1415,31 @@ func TestRouteAppendsConversationLog(t *testing.T) {
 	}
 }
 
-func TestAuthorizedAcceptsCodexAccountBearer(t *testing.T) {
+func TestRouteDoesNotRequireClientToken(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":      "chatcmpl-no-auth",
+			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "ok"}}},
+		})
+	}))
+	defer upstream.Close()
 	a := &app{
 		cfg: config{
-			ClientAPIKeyEntries: []clientAPIKeyEntry{
-				{Name: "Local Client", Key: "sk-local-client"},
-			},
+			TextProvider: "openai",
+			TextBaseURL:  upstream.URL,
 		},
+		httpClient: upstream.Client(),
 	}
-	accountReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	accountReq.Header.Set("Authorization", "Bearer account-token")
-	if !a.authorized(accountReq) {
-		t.Fatal("codex account bearer should be accepted")
-	}
-	wrongAPIReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	wrongAPIReq.Header.Set("Authorization", "Bearer sk-wrong")
-	if a.authorized(wrongAPIReq) {
-		t.Fatal("wrong sk client key should not be accepted")
-	}
-	localReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	localReq.Header.Set("Authorization", "Bearer sk-local-client")
-	if !a.authorized(localReq) {
-		t.Fatal("configured local client key should be accepted")
-	}
-}
-
-func TestClientLogIdentityMapsCodexManagedBearer(t *testing.T) {
-	a := &app{
-		cfg: config{
-			ClientAPIKeyEntries: []clientAPIKeyEntry{
-				{Name: "Codex Client", Key: "sk-codex-client"},
-			},
-		},
-	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	req.Header.Set("Authorization", "Bearer "+codexManagedBearerToken)
-	name, preview := a.clientLogIdentity(req)
-	if name != "Codex Client" || preview != keyPreview("sk-codex-client") {
-		t.Fatalf("managed bearer was not mapped to the configured client: %q %q", name, preview)
-	}
-}
-
-func TestCurrentLogsPageRepairsLegacyCodexManagedIdentity(t *testing.T) {
-	db, err := openAppDB(filepath.Join(t.TempDir(), appSlug+".db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := insertRequestLogDB(db, requestLog{
-		At:               time.Now(),
-		Method:           http.MethodPost,
-		Path:             "/v1/responses",
-		ClientName:       "未匹配密钥",
-		ClientKeyPreview: keyPreview(codexManagedBearerToken),
-		Status:           http.StatusOK,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	a := &app{
-		db: db,
-		cfg: config{
-			ClientAPIKeyEntries: []clientAPIKeyEntry{
-				{Name: "Codex Client", Key: "sk-codex-client"},
-			},
-		},
-	}
-	logs, total := a.currentLogsPage(1, 20)
-	if total != 1 || len(logs) != 1 {
-		t.Fatalf("expected one log, total=%d logs=%d", total, len(logs))
-	}
-	if logs[0].ClientName != "Codex Client" || logs[0].ClientKeyPreview != keyPreview("sk-codex-client") {
-		t.Fatalf("legacy managed log was not repaired: %#v", logs[0])
+	for _, authorization := range []string{"", "Bearer arbitrary-client-value"} {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"hello"}]}`))
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
+		}
+		rec := httptest.NewRecorder()
+		a.handleRoute(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("local API rejected authorization %q with status %d: %s", authorization, rec.Code, rec.Body.String())
+		}
 	}
 }
 
@@ -1525,9 +1487,6 @@ func TestRouteLogsOnlyStatusForHTMLUpstreamErrors(t *testing.T) {
 		cfg: normalizeSeparateModelProfiles(config{
 			TextProvider: "openai",
 			TextBaseURL:  upstream.URL,
-			ClientAPIKeyEntries: []clientAPIKeyEntry{
-				{Name: "Test Client", Key: "sk-test-client"},
-			},
 		}),
 		httpClient: upstream.Client(),
 	}

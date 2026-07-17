@@ -26,6 +26,7 @@ func TestWriteCodexConfigCanReplaceAndRestoreOfficialAuth(t *testing.T) {
 		HomeDir:              homeDir,
 		Origin:               "http://127.0.0.1:8787",
 		Key:                  "sk-client-key",
+		DirectUpstream:       true,
 		Model:                "glm-5",
 		PreserveOfficialAuth: &preserve,
 	}
@@ -58,11 +59,31 @@ func TestWriteCodexConfigCanReplaceAndRestoreOfficialAuth(t *testing.T) {
 		t.Fatalf("managed auth mode should read the key from auth.json:\n%s", configRaw)
 	}
 
-	preserve = true
+	ctx.DirectUpstream = false
 	if _, err := writeCodexConfig(ctx); err != nil {
 		t.Fatal(err)
 	}
 	restored, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != officialAuth {
+		t.Fatalf("official auth was not restored for local no-auth mode: %s", restored)
+	}
+	configRaw, err = os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(configRaw), "requires_openai_auth = false") || strings.Contains(string(configRaw), "experimental_bearer_token") {
+		t.Fatalf("local Codex config should disable authentication:\n%s", configRaw)
+	}
+
+	ctx.DirectUpstream = true
+	preserve = true
+	if _, err := writeCodexConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	restored, err = os.ReadFile(authPath)
 	if err != nil {
 		t.Fatal(err)
 	}
