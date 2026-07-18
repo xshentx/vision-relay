@@ -94,8 +94,25 @@ func TestWriteCodexConfigCanReplaceAndRestoreOfficialAuth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(configRaw), `experimental_bearer_token = "sk-client-key"`) {
-		t.Fatalf("preserved auth mode should use the client-named token:\n%s", configRaw)
+	if !strings.Contains(string(configRaw), `requires_openai_auth = true`) ||
+		!strings.Contains(string(configRaw), `experimental_bearer_token = "sk-client-key"`) {
+		t.Fatalf("preserved direct auth mode should keep the official identity and use the upstream token:\n%s", configRaw)
+	}
+
+	ctx.DirectUpstream = false
+	if _, err := writeCodexConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	configRaw, err = os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(configRaw), `requires_openai_auth = true`) ||
+		!strings.Contains(string(configRaw), `experimental_bearer_token = "`+codexLocalBearerToken+`"`) {
+		t.Fatalf("preserved local auth mode should keep the official identity and isolate relay requests:\n%s", configRaw)
+	}
+	if strings.Contains(string(configRaw), "official-token") {
+		t.Fatalf("official access token must not be copied into the Codex provider config:\n%s", configRaw)
 	}
 }
 

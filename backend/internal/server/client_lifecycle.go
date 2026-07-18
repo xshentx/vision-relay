@@ -27,6 +27,8 @@ func (systemClientProgramController) Start(client, programPath, workDir string) 
 }
 
 type clientProgramActionResult struct {
+	Client          string `json:"client"`
+	Name            string `json:"name"`
 	ProgramPath     string `json:"program_path,omitempty"`
 	WasRunning      bool   `json:"was_running"`
 	AutoRestart     bool   `json:"auto_restart"`
@@ -47,8 +49,11 @@ func (a *app) configuredProgramController() clientProgramController {
 }
 
 func configuredClientProgramPath(cfg config, client, homeDir string) string {
-	client = normalizeClientID(client)
+	client = normalizeClientProgramID(client)
 	configuredPath := strings.TrimSpace(cfg.ClientProgramPaths[client])
+	if client == clientClaudeCode && isClaudeCLIProgramPath(configuredPath) {
+		configuredPath = ""
+	}
 	if configuredPath != "" {
 		configuredPath = resolveClientPath(configuredPath, homeDir)
 	}
@@ -63,6 +68,8 @@ func configuredClientProgramPath(cfg config, client, homeDir string) string {
 
 func applyClientProgramBehavior(controller clientProgramController, client, programPath, workDir string, autoRestart, autoStart bool) clientProgramActionResult {
 	result := clientProgramActionResult{
+		Client:      normalizeClientProgramID(client),
+		Name:        clientKeyName(normalizeClientProgramID(client)),
 		ProgramPath: strings.TrimSpace(programPath),
 		AutoRestart: autoRestart,
 		AutoStart:   autoStart,

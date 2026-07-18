@@ -31,14 +31,15 @@ func TestClientConfigureActionsAreEmbedded(t *testing.T) {
 	if !strings.Contains(script, `fetch("/api/client/configure"`) || !strings.Contains(script, `body: JSON.stringify({client})`) {
 		t.Fatal("client configure actions are not wired to the shared API request")
 	}
-	for _, forbidden := range []string{"sk-local", "localPlaceholderKey"} {
+	for _, forbidden := range []string{"sk-local", "localPlaceholderKey", "PROXY_MANAGED"} {
 		if strings.Contains(script, forbidden) {
 			t.Fatalf("client configuration preview must not contain placeholder authentication %q", forbidden)
 		}
 	}
 	for _, multiModelConfig := range []string{
 		`models: Object.fromEntries(snippetMappings.map((mapping) => {`,
-		`availableModels: claudeModelIDs`,
+		`inferenceModels: claudeModels`,
+		`disableDeploymentModeChooser: true`,
 		`models: openclawModels`,
 	} {
 		if !strings.Contains(script, multiModelConfig) {
@@ -461,10 +462,14 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 		`id="programPathOpenClaw"`,
 		`id="autoRestartCodex"`,
 		`id="autoStartCodex"`,
+		`id="autoRestartCodexCLI"`,
+		`id="autoStartCodexCLI"`,
 		`id="autoRestartOpenCode"`,
 		`id="autoStartOpenCode"`,
 		`id="autoRestartClaudeCode"`,
 		`id="autoStartClaudeCode"`,
+		`id="autoRestartClaudeCLI"`,
+		`id="autoStartClaudeCLI"`,
 		`id="autoRestartOpenClaw"`,
 		`id="autoStartOpenClaw"`,
 		`id="detectClientPaths"`,
@@ -486,16 +491,16 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 		`const updatedClients = localAPIModeChanged ? await applyEnabledClientRoutes() : [];`,
 		`async function applyEnabledClientRoutes()`,
 		`fetch("/api/client/routes/apply", {method: "POST"})`,
-		`data.client_config_paths = normalizeClientPaths(programSettings.clientConfigPaths);`,
-		`data.client_program_paths = normalizeClientPaths(programSettings.clientProgramPaths);`,
+		`data.client_config_paths = normalizeClientConfigPaths(programSettings.clientConfigPaths);`,
+		`data.client_program_paths = normalizeClientProgramPaths(programSettings.clientProgramPaths);`,
 		`data.client_auto_restart = normalizeClientBehavior(programSettings.clientAutoRestart, true);`,
 		`data.client_auto_start = normalizeClientBehavior(programSettings.clientAutoStart, false);`,
 		`clientAutoRestart: normalizeClientBehavior(cfg.client_auto_restart, true)`,
 		`clientAutoStart: normalizeClientBehavior(cfg.client_auto_start, false)`,
-		`behaviorMessage = "客户端已自动重启"`,
-		`behaviorMessage = "客户端已自动启动"`,
-		`behaviorMessage = "客户端当前未运行，未自动启动"`,
-		`payload?.program_warning`,
+		`const programResults = Array.isArray(payload?.programs) ? payload.programs : [];`,
+		`const programRestarted = programResults.some`,
+		`const warnings = programResults.map`,
+		`if (programResults.length === 0 && payload?.program_warning) warnings.push(payload.program_warning);`,
 		`fetch("/api/settings/detect-clients", {method: "POST"})`,
 		`cfg.client_paths_detected === true`,
 	} {
@@ -518,7 +523,7 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 		t.Fatal(err)
 	}
 	style := string(styleRaw)
-	for _, expected := range []string{`.layout > .settings-page.active`, `row-gap: 18px`, `.access-page .component-card`, `.settings-page > .component-card`, `.client-path-row`, `.client-path-fields`, `.client-behavior-list`, `.client-behavior-row`, `.client-behavior-option`} {
+	for _, expected := range []string{`.layout > .settings-page.active`, `row-gap: 18px`, `.access-page .component-card`, `.settings-page > .component-card`, `.client-settings-list`, `.client-settings-list-head`, `.client-path-row`, `.client-path-fields`, `.client-behavior-list`, `.client-behavior-row`, `.client-behavior-options`, `.client-behavior-option`, `grid-column: 2 / -1`, `grid-template-columns: repeat(2, minmax(0, 1fr))`} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("program settings style %q is missing", expected)
 		}
@@ -553,8 +558,11 @@ func TestDisabledLocalAPIDirectSupplierUIIsEmbedded(t *testing.T) {
 		`return mapping?.supports_images === true || visionCapabilityEnabled;`,
 		`directUpstream ? clientVersionedBaseURL(profile)`,
 		`...(directUpstream ? {apiKey: upstreamKey} : {})`,
-		`requires_openai_auth = ${directUpstream}`,
-		`...(directUpstream ? {ANTHROPIC_AUTH_TOKEN: upstreamKey} : {})`,
+		`requires_openai_auth = ${codexRequiresOpenAIAuth}`,
+		`const codexBearerToken = preserveOfficialAuth ? (directUpstream ? upstreamKey : "vision-relay-local") : "";`,
+		`inferenceProvider: "gateway"`,
+		`inferenceModels: claudeModels`,
+		`disableDeploymentModeChooser: true`,
 		`directUpstream && mappings.length === 0`,
 		`directClientCompatibilityMessage("codex", profile)`,
 		`directClientCompatibilityMessage("claude-code", profile)`,
@@ -563,5 +571,28 @@ func TestDisabledLocalAPIDirectSupplierUIIsEmbedded(t *testing.T) {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("direct supplier UI behavior %q is missing", expected)
 		}
+	}
+}
+
+func TestClaudeProgramSettingsUseDesktopClient(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(indexRaw)
+	for _, want := range []string{
+		`<strong>Claude</strong>`,
+		`id="programPathClaudeCode"`,
+		`id="autoRestartClaudeCode"`,
+		`<strong>Claude CLI</strong>`,
+		`id="programPathClaudeCLI"`,
+		`id="autoRestartClaudeCLI"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("Claude desktop/CLI label %q is missing", want)
+		}
+	}
+	if strings.Contains(html, `<strong>Claude Code</strong><small>`) {
+		t.Fatal("Claude desktop row must not be labeled as Claude Code CLI")
 	}
 }

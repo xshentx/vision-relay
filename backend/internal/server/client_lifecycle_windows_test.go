@@ -115,3 +115,98 @@ func TestClientProcessImageNamesForWrappers(t *testing.T) {
 		t.Fatal("native Codex process should match by its dedicated image name")
 	}
 }
+
+func TestDetectClaudeProgramPathUsesDesktopInsteadOfCLI(t *testing.T) {
+	localAppData := t.TempDir()
+	desktopPath := filepath.Join(localAppData, "AnthropicClaude", "claude.exe")
+	if err := os.MkdirAll(filepath.Dir(desktopPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(desktopPath, []byte("desktop"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cliDir := t.TempDir()
+	cliPath := filepath.Join(cliDir, "claude.cmd")
+	if err := os.WriteFile(cliPath, []byte("@echo off"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOCALAPPDATA", localAppData)
+	t.Setenv("PATH", cliDir)
+
+	if got := detectClientProgramPath(clientClaudeCode, t.TempDir()); got != desktopPath {
+		t.Fatalf("detected Claude program = %q, want desktop %q", got, desktopPath)
+	}
+	if got := detectClientProgramPath(clientClaudeCLI, t.TempDir()); got != cliPath {
+		t.Fatalf("detected Claude CLI = %q, want %q", got, cliPath)
+	}
+	if err := os.Remove(desktopPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := detectClientProgramPath(clientClaudeCode, t.TempDir()); got != "" {
+		t.Fatalf("Claude CLI must not be used as the desktop program, got %q", got)
+	}
+}
+
+func TestClaudePathDetectionRevisionReplacesLegacyCLI(t *testing.T) {
+	localAppData := t.TempDir()
+	desktopPath := filepath.Join(localAppData, "AnthropicClaude", "claude.exe")
+	if err := os.MkdirAll(filepath.Dir(desktopPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(desktopPath, []byte("desktop"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cliPath := filepath.Join(t.TempDir(), "custom-claude.exe")
+	if err := os.WriteFile(cliPath, []byte("native cli"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOCALAPPDATA", localAppData)
+
+	cfg := defaultConfig()
+	cfg.ClientPathsDetected = true
+	cfg.ClientPathDetectionVersion = claudeDesktopCLISplitPathDetectionVersion - 1
+	cfg.ClientProgramPaths = map[string]string{clientClaudeCode: cliPath}
+	cfg = detectClientPaths(cfg, t.TempDir(), false)
+
+	if got := cfg.ClientProgramPaths[clientClaudeCode]; got != desktopPath {
+		t.Fatalf("migrated Claude program = %q, want desktop %q", got, desktopPath)
+	}
+	if got := cfg.ClientProgramPaths[clientClaudeCLI]; got != cliPath {
+		t.Fatalf("migrated Claude CLI = %q, want preserved %q", got, cliPath)
+	}
+}
+
+func TestClientProcessPathMatchesClaudeSquirrelLauncher(t *testing.T) {
+	launcher := filepath.Join(`C:\Users\test\AppData\Local\AnthropicClaude`, "claude.exe")
+	versioned := filepath.Join(`C:\Users\test\AppData\Local\AnthropicClaude`, "app-1.2.3", "claude.exe")
+	if !clientProcessPathMatches(clientClaudeCode, launcher, versioned) {
+		t.Fatal("Claude Squirrel launcher should match its versioned desktop process")
+	}
+	if clientProcessPathMatches(clientClaudeCode, launcher, `C:\Tools\claude.exe`) {
+		t.Fatal("unrelated Claude CLI executable must not match Claude Desktop")
+	}
+	if clientProcessPathMatches(clientOpenCode, launcher, versioned) {
+		t.Fatal("Claude path equivalence must not apply to another client")
+	}
+}
+
+func TestDetectCodexCLIProgramPathFromPATH(t *testing.T) {
+	dir := t.TempDir()
+	cliPath := filepath.Join(dir, "codex.cmd")
+	if err := os.WriteFile(cliPath, []byte("@echo off"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	if got := detectClientProgramPath(clientCodexCLI, t.TempDir()); got != cliPath {
+		t.Fatalf("detected Codex CLI = %q, want %q", got, cliPath)
+	}
+}
+
+func TestCLIWrapperProcessNamesExcludeDesktopClients(t *testing.T) {
+	if got := clientProcessImageNames(clientCodexCLI, `C:\npm\codex.cmd`); !reflect.DeepEqual(got, []string{"cmd.exe", "node.exe"}) {
+		t.Fatalf("Codex CLI process names = %#v", got)
+	}
+	if got := clientProcessImageNames(clientClaudeCLI, `C:\npm\claude.cmd`); !reflect.DeepEqual(got, []string{"cmd.exe", "node.exe"}) {
+		t.Fatalf("Claude CLI process names = %#v", got)
+	}
+}

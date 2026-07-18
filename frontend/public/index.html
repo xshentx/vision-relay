@@ -96,7 +96,7 @@
             <div class="route-overview-list">
               <div class="route-overview-row"><span class="route-badge blue">R</span><div><strong>Responses</strong><small>Codex / OpenAI Responses</small></div><code>/v1/responses</code></div>
               <div class="route-overview-row"><span class="route-badge cyan">C</span><div><strong>Chat Completions</strong><small>OpenAI compatible</small></div><code>/v1/chat/completions</code></div>
-              <div class="route-overview-row"><span class="route-badge purple">A</span><div><strong>Anthropic Messages</strong><small>Claude Code compatible</small></div><code>/v1/messages</code></div>
+              <div class="route-overview-row"><span class="route-badge purple">A</span><div><strong>Anthropic Messages</strong><small>Claude compatible</small></div><code>/v1/messages</code></div>
               <div class="route-overview-row"><span class="route-badge green">O</span><div><strong>Ollama Chat</strong><small>images 字段自动解析</small></div><code>/api/chat</code></div>
             </div>
           </article>
@@ -154,7 +154,7 @@
 
         <section class="page panel standard-page access-page span-12" id="access" data-page-panel="access">
           <div class="panel-head access-page-heading">
-            <div><h3>客户端接入</h3><p>统一管理 Codex、OpenCode、Claude Code、OpenClaw 与兼容 API 的连接配置。</p></div>
+            <div><h3>客户端接入</h3><p>统一管理 Codex、OpenCode、Claude、OpenClaw 与兼容 API 的连接配置。</p></div>
             <span class="configuration-status"><i></i>配置已同步</span>
           </div>
 
@@ -170,7 +170,7 @@
             </article>
             <article class="component-card access-guide-card">
               <div class="component-card-head"><div><h4>快速配置</h4><p>推荐按以下流程完成客户端接入。</p></div><span class="component-tag success">3 步</span></div>
-              <div class="access-guide-list"><div><span>1</span><p><strong>确认本地 API 已开启</strong><small>本地接口无需访问令牌，客户端可直接调用。</small></p></div><div><span>2</span><p><strong>选择并配置客户端</strong><small>在下方标签中选择 Codex、OpenCode、Claude Code 或 OpenClaw。</small></p></div><div><span>3</span><p><strong>重启并发送测试消息</strong><small>模型列表与多模态能力会自动同步。</small></p></div></div>
+              <div class="access-guide-list"><div><span>1</span><p><strong>确认本地 API 已开启</strong><small>本地接口无需访问令牌，客户端可直接调用。</small></p></div><div><span>2</span><p><strong>选择并配置客户端</strong><small>在下方标签中选择 Codex、OpenCode、Claude 或 OpenClaw。</small></p></div><div><span>3</span><p><strong>重启并发送测试消息</strong><small>模型列表与多模态能力会自动同步。</small></p></div></div>
               <div class="component-alert info"><strong>配置提示</strong><span>切换文本供应商后，已启用路由的客户端配置会自动同步；成功后请重启客户端程序。</span></div>
             </article>
           </div>
@@ -185,10 +185,10 @@
 
           <article class="component-card client-config-card">
             <div class="component-card-head client-config-heading"><div><h4>客户端配置</h4><p>一键配置由程序直接写入本地文件，不再启动终端；开启路由后，切换供应商会自动同步配置。</p></div><span class="component-tag">程序内置</span></div>
-            <div class="client-tabs" role="tablist" aria-label="客户端类型"><button class="client-tab active" type="button" role="tab" aria-selected="true" data-client-tab="codex">Codex</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="opencode">OpenCode</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="claude-code">Claude Code</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="openclaw">OpenClaw</button></div>
+            <div class="client-tabs" role="tablist" aria-label="客户端类型"><button class="client-tab active" type="button" role="tab" aria-selected="true" data-client-tab="codex">Codex</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="opencode">OpenCode</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="claude-code">Claude</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="openclaw">OpenClaw</button></div>
             <div class="client-tab-panel active" data-client-panel="codex"><div class="client-panel-intro"><div><h4>Codex</h4><p>通过 Responses 接口连接本机中转，并保留工具调用和图片解析结果。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeCodex" type="checkbox"><span aria-hidden="true"></span></span></label><button class="secondary small-action" id="restoreCodex" type="button">恢复官方模式</button><button class="primary-action small-action" id="configureCodex" type="button">一键配置 Codex</button></div></div><pre><code id="codexConfig"></code></pre></div>
             <div class="client-tab-panel" data-client-panel="opencode" hidden><div class="client-panel-intro"><div><h4>OpenCode</h4><p>配置 OpenAI-compatible 模型的图片附件能力，避免客户端在本地拦截图片。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeOpenCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureOpenCode" type="button">一键配置 OpenCode</button></div></div><pre><code id="opencodeConfig"></code></pre></div>
-            <div class="client-tab-panel" data-client-panel="claude-code" hidden><div class="client-panel-intro"><div><h4>Claude Code</h4><p>通过 Anthropic Messages 接口连接，并保留工具调用和视觉识别结果。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureClaudeCode" type="button">一键配置 Claude Code</button></div></div><pre><code id="claudeCodeConfig"></code></pre></div>
+            <div class="client-tab-panel" data-client-panel="claude-code" hidden><div class="client-panel-intro"><div><h4>Claude</h4><p>通过 Anthropic Messages 接口连接，并保留工具调用和视觉识别结果。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureClaudeCode" type="button">一键配置 Claude</button></div></div><pre><code id="claudeCodeConfig"></code></pre></div>
             <div class="client-tab-panel" data-client-panel="openclaw" hidden><div class="client-panel-intro"><div><h4>OpenClaw</h4><p>写入 OpenAI-compatible 自定义供应商、可用模型与图片输入能力，并切换默认模型。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeOpenClaw" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureOpenClaw" type="button">一键配置 OpenClaw</button></div></div><pre><code id="openclawConfig"></code></pre></div>
           </article>
         </section>
@@ -219,6 +219,13 @@
                 </div>
               </div>
               <div class="client-behavior-row">
+                <div class="client-behavior-name"><span class="client-path-mark cli">C</span><span><strong>Codex CLI</strong><small>终端客户端</small></span></div>
+                <div class="client-behavior-options">
+                  <label class="client-behavior-option"><span><strong>自动重启</strong><small>配置前已运行时，自动关闭并重新启动。</small></span><span class="switch-control"><input id="autoRestartCodexCLI" type="checkbox"><span aria-hidden="true"></span></span></label>
+                  <label class="client-behavior-option"><span><strong>未运行时自动启动</strong><small>配置前未运行时，完成后自动启动。</small></span><span class="switch-control"><input id="autoStartCodexCLI" type="checkbox"><span aria-hidden="true"></span></span></label>
+                </div>
+              </div>
+              <div class="client-behavior-row">
                 <div class="client-behavior-name"><span class="client-path-mark">O</span><span><strong>OpenCode</strong><small>桌面客户端 / 命令行程序</small></span></div>
                 <div class="client-behavior-options">
                   <label class="client-behavior-option"><span><strong>自动重启</strong><small>配置前已运行时，自动关闭并重新启动。</small></span><span class="switch-control"><input id="autoRestartOpenCode" type="checkbox"><span aria-hidden="true"></span></span></label>
@@ -226,10 +233,17 @@
                 </div>
               </div>
               <div class="client-behavior-row">
-                <div class="client-behavior-name"><span class="client-path-mark">CL</span><span><strong>Claude Code</strong><small>命令行客户端</small></span></div>
+                <div class="client-behavior-name"><span class="client-path-mark">CL</span><span><strong>Claude</strong><small>桌面客户端</small></span></div>
                 <div class="client-behavior-options">
                   <label class="client-behavior-option"><span><strong>自动重启</strong><small>配置前已运行时，自动关闭并重新启动。</small></span><span class="switch-control"><input id="autoRestartClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label>
                   <label class="client-behavior-option"><span><strong>未运行时自动启动</strong><small>配置前未运行时，完成后自动启动。</small></span><span class="switch-control"><input id="autoStartClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label>
+                </div>
+              </div>
+              <div class="client-behavior-row">
+                <div class="client-behavior-name"><span class="client-path-mark cli">CL</span><span><strong>Claude CLI</strong><small>终端客户端</small></span></div>
+                <div class="client-behavior-options">
+                  <label class="client-behavior-option"><span><strong>自动重启</strong><small>配置前已运行时，自动关闭并重新启动。</small></span><span class="switch-control"><input id="autoRestartClaudeCLI" type="checkbox"><span aria-hidden="true"></span></span></label>
+                  <label class="client-behavior-option"><span><strong>未运行时自动启动</strong><small>配置前未运行时，完成后自动启动。</small></span><span class="switch-control"><input id="autoStartClaudeCLI" type="checkbox"><span aria-hidden="true"></span></span></label>
                 </div>
               </div>
               <div class="client-behavior-row">
@@ -257,6 +271,10 @@
                 </div>
               </div>
               <div class="client-path-row">
+                <div class="client-path-name"><span class="client-path-mark cli">C</span><span><strong>Codex CLI</strong><small>终端客户端</small></span></div>
+                <div class="client-path-fields"><label><span>配置文件</span><span class="client-shared-config">与 Codex 共用配置</span></label><label><span>终端命令</span><input id="programPathCodexCLI" type="text" autocomplete="off" placeholder="未检测到 codex 终端命令"></label></div>
+              </div>
+              <div class="client-path-row">
                 <div class="client-path-name"><span class="client-path-mark">O</span><span><strong>OpenCode</strong><small>配置文件与客户端程序</small></span></div>
                 <div class="client-path-fields">
                   <label><span>配置文件</span><input id="configPathOpenCode" type="text" autocomplete="off" placeholder="未检测到配置文件"></label>
@@ -264,11 +282,15 @@
                 </div>
               </div>
               <div class="client-path-row">
-                <div class="client-path-name"><span class="client-path-mark">CL</span><span><strong>Claude Code</strong><small>配置文件与命令行程序</small></span></div>
+                <div class="client-path-name"><span class="client-path-mark">CL</span><span><strong>Claude</strong><small>桌面客户端配置与程序</small></span></div>
                 <div class="client-path-fields">
                   <label><span>配置文件</span><input id="configPathClaudeCode" type="text" autocomplete="off" placeholder="未检测到配置文件"></label>
                   <label><span>客户端程序</span><input id="programPathClaudeCode" type="text" autocomplete="off" placeholder="未检测到客户端程序"></label>
                 </div>
+              </div>
+              <div class="client-path-row">
+                <div class="client-path-name"><span class="client-path-mark cli">CL</span><span><strong>Claude CLI</strong><small>终端客户端</small></span></div>
+                <div class="client-path-fields"><label><span>配置文件</span><input id="configPathClaudeCLI" type="text" autocomplete="off" placeholder="未检测到配置文件"></label><label><span>终端命令</span><input id="programPathClaudeCLI" type="text" autocomplete="off" placeholder="未检测到 claude 终端命令"></label></div>
               </div>
               <div class="client-path-row">
                 <div class="client-path-name"><span class="client-path-mark">OC</span><span><strong>OpenClaw</strong><small>配置文件与客户端程序</small></span></div>

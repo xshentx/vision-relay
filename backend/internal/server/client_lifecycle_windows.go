@@ -210,7 +210,7 @@ func matchingClientProcesses(client, programPath string) ([]clientProcess, error
 			matched := targetPath == "" && !clientProcessRequiresCommandLine(imageName, programPath)
 			if targetPath != "" {
 				path, pathErr := windowsProcessPath(entry.ProcessID)
-				matched = pathErr == nil && strings.EqualFold(filepath.Clean(path), targetPath)
+				matched = pathErr == nil && clientProcessPathMatches(client, targetPath, path)
 			} else if clientProcessRequiresCommandLine(imageName, programPath) {
 				commandLine, commandLineErr := windowsProcessCommandLine(entry.ProcessID)
 				matched = commandLineErr == nil && commandLineContainsMarker(commandLine, commandLineMarkers)
@@ -227,6 +227,29 @@ func matchingClientProcesses(client, programPath string) ([]clientProcess, error
 		}
 	}
 	return matches, nil
+}
+
+func clientProcessPathMatches(client, targetPath, processPath string) bool {
+	targetPath = filepath.Clean(strings.TrimSpace(targetPath))
+	processPath = filepath.Clean(strings.TrimSpace(processPath))
+	if strings.EqualFold(targetPath, processPath) {
+		return true
+	}
+	if normalizeClientProgramID(client) != clientClaudeCode ||
+		!strings.EqualFold(filepath.Base(targetPath), "claude.exe") ||
+		!strings.EqualFold(filepath.Base(processPath), "claude.exe") {
+		return false
+	}
+
+	// Squirrel installs a stable AnthropicClaude\claude.exe launcher but runs
+	// the actual desktop process from AnthropicClaude\app-<version>\claude.exe.
+	// Treat both paths as the same application so status detection and restart
+	// control target Claude Desktop rather than an unrelated Claude CLI process.
+	targetDir := filepath.Dir(targetPath)
+	processDir := filepath.Dir(processPath)
+	return strings.EqualFold(filepath.Base(targetDir), "AnthropicClaude") &&
+		strings.EqualFold(filepath.Dir(processDir), targetDir) &&
+		strings.HasPrefix(strings.ToLower(filepath.Base(processDir)), "app-")
 }
 
 func windowsProcessPath(pid uint32) (string, error) {
@@ -389,7 +412,7 @@ func clientProcessImageNames(client, programPath string) []string {
 	if base := filepath.Base(strings.TrimSpace(programPath)); ext == ".exe" {
 		names = append(names, base)
 	}
-	switch normalizeClientID(client) {
+	switch normalizeClientProgramID(client) {
 	case clientCodex:
 		names = append(names, "ChatGPT.exe", "Codex.exe")
 	case clientOpenCode:

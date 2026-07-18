@@ -85,7 +85,7 @@ func TestApplyClientProgramBehaviorReportsRestartFailure(t *testing.T) {
 
 func TestClientBehaviorDefaultsAndLegacyMerge(t *testing.T) {
 	cfg := defaultConfig()
-	for _, client := range clientRouteOrder {
+	for _, client := range clientProgramOrder {
 		if !cfg.ClientAutoRestart[client] {
 			t.Fatalf("%s should auto restart by default: %#v", client, cfg.ClientAutoRestart)
 		}
@@ -94,9 +94,29 @@ func TestClientBehaviorDefaultsAndLegacyMerge(t *testing.T) {
 		}
 	}
 	merged := mergeConfig(defaultConfig(), config{Addr: "127.0.0.1:8787"})
-	for _, client := range clientRouteOrder {
+	for _, client := range clientProgramOrder {
 		if !merged.ClientAutoRestart[client] || merged.ClientAutoStart[client] {
 			t.Fatalf("legacy config defaults were not preserved for %s: restart=%#v start=%#v", client, merged.ClientAutoRestart, merged.ClientAutoStart)
+		}
+	}
+}
+
+func TestClientProgramTargetsIncludeDesktopAndCLI(t *testing.T) {
+	tests := map[string][]string{
+		clientCodex:      {clientCodex, clientCodexCLI},
+		clientClaudeCode: {clientClaudeCode, clientClaudeCLI},
+		clientOpenCode:   {clientOpenCode},
+		clientOpenClaw:   {clientOpenClaw},
+	}
+	for client, want := range tests {
+		got := clientProgramTargets(client)
+		if len(got) != len(want) {
+			t.Fatalf("clientProgramTargets(%q) = %#v, want %#v", client, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("clientProgramTargets(%q) = %#v, want %#v", client, got, want)
+			}
 		}
 	}
 }

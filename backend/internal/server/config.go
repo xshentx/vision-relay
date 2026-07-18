@@ -183,7 +183,7 @@ func mergeConfig(base, loaded config) config {
 		base.ClientConfigPaths = normalizeClientPathMap(loaded.ClientConfigPaths)
 	}
 	if loaded.ClientProgramPaths != nil {
-		base.ClientProgramPaths = normalizeClientPathMap(loaded.ClientProgramPaths)
+		base.ClientProgramPaths = normalizeClientProgramPathMap(loaded.ClientProgramPaths)
 	}
 	if loaded.ClientAutoRestart != nil {
 		base.ClientAutoRestart = normalizeClientBehavior(loaded.ClientAutoRestart, true)
@@ -275,7 +275,7 @@ func (a *app) setConfig(cfg config) error {
 		cfg.LocalAPIEnabled = boolPtr(true)
 	}
 	cfg.ClientConfigPaths = normalizeClientPathMap(cfg.ClientConfigPaths)
-	cfg.ClientProgramPaths = normalizeClientPathMap(cfg.ClientProgramPaths)
+	cfg.ClientProgramPaths = normalizeClientProgramPathMap(cfg.ClientProgramPaths)
 	cfg.ClientAutoRestart = normalizeClientBehavior(cfg.ClientAutoRestart, true)
 	cfg.ClientAutoStart = normalizeClientBehavior(cfg.ClientAutoStart, false)
 	cfg.ClientPathsDetected = true
@@ -348,12 +348,12 @@ func defaultClientAutoStart() map[string]bool {
 }
 
 func normalizeClientBehavior(values map[string]bool, fallback bool) map[string]bool {
-	normalized := make(map[string]bool, len(clientRouteOrder))
-	for _, client := range clientRouteOrder {
+	normalized := make(map[string]bool, len(clientProgramOrder))
+	for _, client := range clientProgramOrder {
 		normalized[client] = fallback
 	}
 	for client, enabled := range values {
-		if id := normalizeClientID(client); id != "" {
+		if id := normalizeClientProgramID(client); id != "" {
 			normalized[id] = enabled
 		}
 	}

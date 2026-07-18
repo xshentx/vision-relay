@@ -16,12 +16,15 @@ import (
 
 const (
 	clientCodex               = "codex"
+	clientCodexCLI            = "codex-cli"
 	clientOpenCode            = "opencode"
 	clientClaudeCode          = "claude-code"
+	clientClaudeCLI           = "claude-cli"
 	clientOpenClaw            = "openclaw"
 	relayProviderID           = "vision-relay"
 	codexProviderID           = "custom"
 	codexBaseInstructions     = "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals."
+	codexLocalBearerToken     = "vision-relay-local"
 	codexUnifiedHistoryMarker = "# Added by Vision Relay for unified Codex history."
 )
 
@@ -68,6 +71,33 @@ func newClientRouteValidationError(message string) error {
 
 var clientRouteOrder = []string{clientCodex, clientOpenCode, clientClaudeCode, clientOpenClaw}
 
+// clientProgramOrder includes both the desktop and terminal targets. Route
+// configuration remains keyed by clientRouteOrder because the desktop and CLI
+// variants share one configuration file per client family.
+var clientProgramOrder = []string{
+	clientCodex,
+	clientCodexCLI,
+	clientOpenCode,
+	clientClaudeCode,
+	clientClaudeCLI,
+	clientOpenClaw,
+}
+
+func clientProgramTargets(client string) []string {
+	switch normalizeClientID(client) {
+	case clientCodex:
+		return []string{clientCodex, clientCodexCLI}
+	case clientClaudeCode:
+		return []string{clientClaudeCode, clientClaudeCLI}
+	case clientOpenCode:
+		return []string{clientOpenCode}
+	case clientOpenClaw:
+		return []string{clientOpenClaw}
+	default:
+		return nil
+	}
+}
+
 func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -101,16 +131,26 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.currentConfig()
-	autoRestart := normalizeClientBehavior(cfg.ClientAutoRestart, true)[client]
-	autoStart := normalizeClientBehavior(cfg.ClientAutoStart, false)[client]
-	programResult := applyClientProgramBehavior(
-		a.configuredProgramController(),
-		client,
-		configuredClientProgramPath(cfg, client, home),
-		result.ProjectDir,
-		autoRestart,
-		autoStart,
-	)
+	autoRestart := normalizeClientBehavior(cfg.ClientAutoRestart, true)
+	autoStart := normalizeClientBehavior(cfg.ClientAutoStart, false)
+	programResults := make([]clientProgramActionResult, 0, len(clientProgramTargets(client)))
+	for _, programClient := range clientProgramTargets(client) {
+		programResults = append(programResults, applyClientProgramBehavior(
+			a.configuredProgramController(),
+			programClient,
+			configuredClientProgramPath(cfg, programClient, home),
+			result.ProjectDir,
+			autoRestart[programClient],
+			autoStart[programClient],
+		))
+	}
+	// Keep the existing top-level program_* fields for API compatibility. The
+	// primary result is the desktop client result; the complete list is exposed
+	// as programs so callers can report separate desktop/terminal outcomes.
+	programResult := clientProgramActionResult{}
+	if len(programResults) > 0 {
+		programResult = programResults[0]
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
 		"client":           result.Client,
@@ -130,6 +170,7 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		"restarted":        programResult.Restarted,
 		"program_action":   programResult.Action,
 		"program_warning":  programResult.Warning,
+		"programs":         programResults,
 	})
 }
 
@@ -208,6 +249,15 @@ func (a *app) configureClientRoute(client, workDir, origin, home string) (client
 	if err != nil {
 		return clientRouteResult{}, err
 	}
+	if client == clientClaudeCode {
+		// Claude Desktop on 3P and Claude Code CLI do not consume the same
+		// settings file. Configure both when the shared Claude route is applied.
+		cliContext := ctx
+		cliContext.ConfigPath = configuredClientConfigPath(cfg, clientClaudeCLI, home)
+		if _, err := writeClaudeCodeConfig(cliContext); err != nil {
+			return clientRouteResult{}, err
+		}
+	}
 	return clientRouteResult{
 		Client:         client,
 		Name:           clientKeyName(client),
@@ -230,7 +280,7 @@ func validateDirectClientRoute(client string, cfg config, mappings []textModelMa
 		}
 	case clientClaudeCode:
 		if provider != "anthropic" {
-			return newClientRouteValidationError("关闭本地 API 后，Claude Code 仅支持直连 Anthropic 协议供应商")
+			return newClientRouteValidationError("关闭本地 API 后，Claude 仅支持直连 Anthropic 协议供应商")
 		}
 	}
 	return nil
@@ -329,14 +379,37 @@ func normalizeClientID(client string) string {
 	}
 }
 
+func normalizeClientProgramID(client string) string {
+	switch strings.ToLower(strings.TrimSpace(client)) {
+	case "codex":
+		return clientCodex
+	case "codex-cli", "codexcli", "codex terminal", "codex-terminal":
+		return clientCodexCLI
+	case "opencode", "open-code":
+		return clientOpenCode
+	case "claude", "claude-code", "claudecode":
+		return clientClaudeCode
+	case "claude-cli", "claudeci", "claudecli", "claude terminal", "claude-terminal":
+		return clientClaudeCLI
+	case "openclaw", "open-claw":
+		return clientOpenClaw
+	default:
+		return ""
+	}
+}
+
 func clientKeyName(client string) string {
 	switch client {
 	case clientCodex:
 		return "Codex"
+	case clientCodexCLI:
+		return "Codex CLI"
 	case clientOpenCode:
 		return "OpenCode"
 	case clientClaudeCode:
-		return "Claude Code"
+		return "Claude"
+	case clientClaudeCLI:
+		return "Claude CLI"
 	case clientOpenClaw:
 		return "OpenClaw"
 	default:
@@ -420,6 +493,17 @@ func clientVersionedBaseURL(ctx clientConfigContext) string {
 	return baseURL + "/v1"
 }
 
+// Claude Desktop's gateway setting is an Anthropic-compatible gateway root,
+// not the versioned REST path. Claude appends /v1/messages itself. Keeping the
+// /v1 suffix here would make the desktop client call /v1/v1/messages.
+func claudeDesktopGatewayBaseURL(ctx clientConfigContext) string {
+	baseURL := strings.TrimRight(strings.TrimSpace(ctx.Origin), "/")
+	if strings.HasSuffix(baseURL, "/v1") || strings.HasSuffix(baseURL, "/v1beta") {
+		return baseURL[:strings.LastIndex(baseURL, "/")]
+	}
+	return baseURL
+}
+
 func clientProviderDisplayName(ctx clientConfigContext) string {
 	if ctx.DirectUpstream {
 		if provider := strings.TrimSpace(ctx.Provider); provider != "" {
@@ -476,12 +560,114 @@ func writeClientConfig(client string, ctx clientConfigContext) (string, error) {
 	case clientOpenCode:
 		return writeOpenCodeConfig(ctx)
 	case clientClaudeCode:
-		return writeClaudeCodeConfig(ctx)
+		return writeClaudeDesktopConfig(ctx)
 	case clientOpenClaw:
 		return writeOpenClawConfig(ctx)
 	default:
 		return "", errors.New("unsupported client")
 	}
+}
+
+func writeClaudeDesktopConfig(ctx clientConfigContext) (string, error) {
+	path := strings.TrimSpace(ctx.ConfigPath)
+	if path == "" {
+		path = defaultClientConfigPath(clientClaudeCode, ctx.HomeDir)
+	}
+	cfg, err := readJSONMap(path)
+	if err != nil {
+		return "", err
+	}
+	// A profile may have been created by an older Vision Relay build when this
+	// path was incorrectly treated as Claude Code's settings.json. Do not leave
+	// CLI-only keys in the Desktop 3P profile: they are not part of the Desktop
+	// schema and can make the app fall back to its normal sign-in flow.
+	delete(cfg, "$schema")
+	delete(cfg, "availableModels")
+	delete(cfg, "env")
+	delete(cfg, "model")
+	mappings := clientTextModelMappings(ctx)
+	models := make([]any, 0, len(mappings))
+	for _, mapping := range mappings {
+		id := clientTextModelID(mapping)
+		if id == "" {
+			continue
+		}
+		model := map[string]any{"name": id}
+		if mapping.ContextWindow >= 1000000 {
+			model["supports1m"] = true
+		}
+		models = append(models, model)
+	}
+	if len(models) == 0 {
+		return "", errors.New("Claude Desktop requires at least one configured model")
+	}
+
+	cfg["inferenceProvider"] = "gateway"
+	cfg["inferenceGatewayBaseUrl"] = claudeDesktopGatewayBaseURL(ctx)
+	if ctx.DirectUpstream && strings.EqualFold(strings.TrimSpace(ctx.Provider), "anthropic") {
+		// Claude Desktop's supported third-party provider schema uses the
+		// gateway provider for Anthropic too; x-api-key selects Anthropic's auth
+		// header. There is no inferenceProvider="anthropic" key in the schema.
+		cfg["inferenceGatewayAuthScheme"] = "x-api-key"
+		cfg["inferenceGatewayApiKey"] = strings.TrimSpace(ctx.Key)
+	} else {
+		cfg["inferenceGatewayAuthScheme"] = "bearer"
+		gatewayKey := strings.TrimSpace(ctx.Key)
+		if gatewayKey == "" {
+			// Vision Relay's local API intentionally accepts requests without a
+			// token. Claude Desktop still requires a non-empty gateway credential
+			// to activate third-party mode, so use a harmless local-only marker.
+			gatewayKey = "vision-relay"
+		}
+		cfg["inferenceGatewayApiKey"] = gatewayKey
+	}
+	delete(cfg, "inferenceAnthropicApiKey")
+	cfg["inferenceModels"] = models
+	// Without this flag Claude Desktop can keep showing the Anthropic login
+	// chooser on first launch even when inferenceProvider is configured.
+	cfg["disableDeploymentModeChooser"] = true
+	if err := writeJSONFile(path, cfg); err != nil {
+		return "", err
+	}
+	if err := activateClaudeDesktopProfile(path, cfg); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func activateClaudeDesktopProfile(path string, cfg map[string]any) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	id := strings.TrimSuffix(base, filepath.Ext(base))
+	if id == "" {
+		return errors.New("Claude Desktop config profile ID is empty")
+	}
+	metaPath := filepath.Join(dir, "_meta.json")
+	meta, err := readJSONMap(metaPath)
+	if err != nil {
+		return err
+	}
+	meta["appliedId"] = id
+	entries, ok := meta["entries"].([]any)
+	if !ok {
+		entries = []any{}
+	}
+	found := false
+	for _, raw := range entries {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if entryID, _ := entry["id"].(string); entryID == id {
+			found = true
+			break
+		}
+	}
+	if !found {
+		entries = append(entries, map[string]any{"id": id, "name": "Vision Relay"})
+		meta["entries"] = entries
+	}
+	return writeJSONFile(metaPath, meta)
 }
 
 func writeCodexConfig(ctx clientConfigContext) (string, error) {
@@ -531,6 +717,8 @@ func writeCodexConfig(ctx clientConfigContext) (string, error) {
 }
 
 func codexRelayConfigBlock(ctx clientConfigContext, model string) []string {
+	preserveOfficialAuth := preserveCodexOfficialAuthForContext(ctx)
+	requiresOpenAIAuth := ctx.DirectUpstream || preserveOfficialAuth
 	block := []string{
 		"# Added by Vision Relay. Edit from the Client Access page.",
 		fmt.Sprintf("model = %q", model),
@@ -547,11 +735,15 @@ func codexRelayConfigBlock(ctx clientConfigContext, model string) []string {
 		"[model_providers."+codexProviderID+"]",
 		fmt.Sprintf("name = %q", clientProviderDisplayName(ctx)),
 		`wire_api = "responses"`,
-		fmt.Sprintf("requires_openai_auth = %t", ctx.DirectUpstream),
+		fmt.Sprintf("requires_openai_auth = %t", requiresOpenAIAuth),
 		fmt.Sprintf("base_url = %q", clientVersionedBaseURL(ctx)),
 	)
-	if ctx.DirectUpstream && preserveCodexOfficialAuthForContext(ctx) {
-		block = append(block, fmt.Sprintf("experimental_bearer_token = %q", ctx.Key))
+	if preserveOfficialAuth {
+		bearerToken := strings.TrimSpace(ctx.Key)
+		if !ctx.DirectUpstream {
+			bearerToken = codexLocalBearerToken
+		}
+		block = append(block, fmt.Sprintf("experimental_bearer_token = %q", bearerToken))
 	}
 	return block
 }

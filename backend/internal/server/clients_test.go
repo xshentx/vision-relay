@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,7 +18,7 @@ func TestClientKeyName(t *testing.T) {
 	tests := map[string]string{
 		clientCodex:      "Codex",
 		clientOpenCode:   "OpenCode",
-		clientClaudeCode: "Claude Code",
+		clientClaudeCode: "Claude",
 		clientOpenClaw:   "OpenClaw",
 	}
 	for client, want := range tests {
@@ -44,8 +45,81 @@ func TestNormalizeClientRouteEnabled(t *testing.T) {
 	}
 }
 
+func TestHandleClientConfigureAppliesDesktopAndCLIPrograms(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOME", home)
+	controller := &recordingClientProgramController{}
+	a := &app{
+		cfg:                     defaultConfig(),
+		configPath:              filepath.Join(home, "vision-relay.json"),
+		clientProgramController: controller,
+	}
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/client/configure", bytes.NewBufferString(`{"client":"codex"}`))
+	a.handleClientConfigure(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("configure status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	var payload struct {
+		Programs []clientProgramActionResult `json:"programs"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Programs) != 2 {
+		t.Fatalf("Codex configure programs = %#v, want desktop and CLI results", payload.Programs)
+	}
+	if payload.Programs[0].Client != clientCodex || payload.Programs[1].Client != clientCodexCLI {
+		t.Fatalf("Codex configure program order = %#v", payload.Programs)
+	}
+}
+
+func TestCodexRelayConfigBlockAuthModes(t *testing.T) {
+	tests := []struct {
+		name             string
+		directUpstream   bool
+		preserveOfficial bool
+		requiresAuth     bool
+		bearerToken      string
+	}{
+		{name: "local preserved", preserveOfficial: true, requiresAuth: true, bearerToken: codexLocalBearerToken},
+		{name: "local not preserved", preserveOfficial: false, requiresAuth: false},
+		{name: "direct preserved", directUpstream: true, preserveOfficial: true, requiresAuth: true, bearerToken: "sk-upstream"},
+		{name: "direct managed", directUpstream: true, preserveOfficial: false, requiresAuth: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			preserveOfficial := test.preserveOfficial
+			ctx := clientConfigContext{
+				Origin:               "http://127.0.0.1:8787",
+				Key:                  "sk-upstream",
+				DirectUpstream:       test.directUpstream,
+				PreserveOfficialAuth: &preserveOfficial,
+			}
+			config := strings.Join(codexRelayConfigBlock(ctx, "gpt-test"), "\n")
+			requiresAuth := fmt.Sprintf("requires_openai_auth = %t", test.requiresAuth)
+			if !strings.Contains(config, requiresAuth) {
+				t.Fatalf("Codex auth requirement = unexpected:\n%s", config)
+			}
+			if test.bearerToken == "" {
+				if strings.Contains(config, "experimental_bearer_token") {
+					t.Fatalf("Codex config should use managed or disabled auth without a provider token:\n%s", config)
+				}
+				return
+			}
+			bearerToken := fmt.Sprintf("experimental_bearer_token = %q", test.bearerToken)
+			if !strings.Contains(config, bearerToken) {
+				t.Fatalf("Codex config should use bearer token %q:\n%s", test.bearerToken, config)
+			}
+		})
+	}
+}
+
 func TestWriteClientConfigs(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	projectDir := filepath.Join(home, "project")
 	ctx := clientConfigContext{
 		HomeDir:       home,
@@ -74,14 +148,14 @@ func TestWriteClientConfigs(t *testing.T) {
 		!strings.Contains(codexUser, `disable_response_storage = true`) ||
 		!strings.Contains(codexUser, `web_search = "disabled"`) ||
 		!strings.Contains(codexUser, `[model_providers.custom]`) ||
-		!strings.Contains(codexUser, `requires_openai_auth = false`) ||
+		!strings.Contains(codexUser, `requires_openai_auth = true`) ||
 		!strings.Contains(codexUser, `[windows]`) ||
 		!strings.Contains(codexUser, `sandbox = "unelevated"`) ||
 		!strings.Contains(codexUser, `base_url = "http://127.0.0.1:8787/v1"`) {
 		t.Fatalf("bad codex user config:\n%s", codexUser)
 	}
-	if strings.Contains(codexUser, "experimental_bearer_token") {
-		t.Fatalf("local Codex config should not contain a bearer token:\n%s", codexUser)
+	if !strings.Contains(codexUser, `experimental_bearer_token = "`+codexLocalBearerToken+`"`) {
+		t.Fatalf("local Codex config should isolate official auth with the relay bearer marker:\n%s", codexUser)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "auth.json")); !os.IsNotExist(err) {
 		t.Fatalf("codex account auth should not be replaced, stat err: %v", err)
@@ -101,7 +175,7 @@ func TestWriteClientConfigs(t *testing.T) {
 		!strings.Contains(codexProject, `model_catalog_json = "vision-relay-model.json"`) ||
 		!strings.Contains(codexProject, `model_provider = "custom"`) ||
 		!strings.Contains(codexProject, `[model_providers.custom]`) ||
-		!strings.Contains(codexProject, `requires_openai_auth = false`) ||
+		!strings.Contains(codexProject, `requires_openai_auth = true`) ||
 		!strings.Contains(codexProject, `sandbox = "unelevated"`) ||
 		!strings.Contains(codexProject, `base_url = "http://127.0.0.1:8787/v1"`) {
 		t.Fatalf("bad codex project config:\n%s", codexProject)
@@ -159,21 +233,80 @@ func TestWriteClientConfigs(t *testing.T) {
 	if err := readJSON(claudePath, &claude); err != nil {
 		t.Fatal(err)
 	}
-	env := claude["env"].(map[string]any)
+	if claude["inferenceProvider"] != "gateway" ||
+		claude["inferenceGatewayBaseUrl"] != "http://127.0.0.1:8787" ||
+		claude["inferenceGatewayAuthScheme"] != "bearer" ||
+		claude["inferenceGatewayApiKey"] != "vision-relay" ||
+		claude["disableDeploymentModeChooser"] != true {
+		t.Fatalf("bad Claude Desktop gateway config: %#v", claude)
+	}
+	for _, key := range []string{"$schema", "availableModels", "env", "model", "inferenceAnthropicApiKey", "modelDiscoveryEnabled"} {
+		if _, exists := claude[key]; exists {
+			t.Fatalf("Claude Desktop config contains CLI-only key %q: %#v", key, claude)
+		}
+	}
+	desktopModels := claude["inferenceModels"].([]any)
+	if len(desktopModels) != 2 || desktopModels[0].(map[string]any)["name"] != "z-ai/glm-5.2" || desktopModels[1].(map[string]any)["name"] != "deepseek-ai/deepseek-v4-pro" {
+		t.Fatalf("Claude Desktop should expose every configured model: %#v", models)
+	}
+	metaPath := filepath.Join(filepath.Dir(claudePath), "_meta.json")
+	var meta map[string]any
+	if err := readJSON(metaPath, &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta["appliedId"] != strings.TrimSuffix(filepath.Base(claudePath), filepath.Ext(claudePath)) {
+		t.Fatalf("Claude Desktop active profile was not updated: %#v", meta)
+	}
+
+	cliCtx := ctx
+	cliCtx.ConfigPath = filepath.Join(home, ".claude", "settings.json")
+	claudeCLIPath, err := writeClaudeCodeConfig(cliCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claudeCLI map[string]any
+	if err := readJSON(claudeCLIPath, &claudeCLI); err != nil {
+		t.Fatal(err)
+	}
+	env := claudeCLI["env"].(map[string]any)
 	if env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8787" {
-		t.Fatalf("bad claude env: %#v", env)
+		t.Fatalf("bad Claude Code CLI env: %#v", env)
 	}
 	if _, exists := env["ANTHROPIC_AUTH_TOKEN"]; exists {
-		t.Fatalf("local Claude Code config should not contain an auth token: %#v", env)
+		t.Fatalf("local Claude Code CLI config should not contain an auth token: %#v", env)
 	}
-	availableModels := claude["availableModels"].([]any)
+	availableModels := claudeCLI["availableModels"].([]any)
 	if len(availableModels) != 2 || availableModels[0] != "z-ai/glm-5.2" || availableModels[1] != "deepseek-ai/deepseek-v4-pro" {
-		t.Fatalf("Claude Code should expose every configured model: %#v", availableModels)
+		t.Fatalf("Claude Code CLI should expose every configured model: %#v", availableModels)
 	}
 	if env["ANTHROPIC_CUSTOM_MODEL_OPTION"] != "z-ai/glm-5.2" ||
 		env["ANTHROPIC_DEFAULT_SONNET_MODEL"] != "deepseek-ai/deepseek-v4-pro" ||
 		env["ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"] != "Vision Relay deepseek-ai/deepseek-v4-pro" {
-		t.Fatalf("Claude Code picker slots were not synchronized: %#v", env)
+		t.Fatalf("Claude Code CLI picker slots were not synchronized: %#v", env)
+	}
+
+}
+
+func TestWriteClaudeDesktopConfigUsesGatewaySchemaForDirectAnthropic(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "AppData", "Local", "Claude-3p", "configLibrary", "profile.json")
+	ctx := clientConfigContext{
+		HomeDir: home, ConfigPath: path, Origin: "https://api.anthropic.com/v1",
+		Key: "anthropic-key", Provider: "anthropic", DirectUpstream: true,
+		ModelMappings: []textModelMapping{{Name: "claude-sonnet-4-6", Model: "claude-sonnet-4-6"}},
+	}
+	if _, err := writeClaudeDesktopConfig(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := readJSON(path, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["inferenceProvider"] != "gateway" || cfg["inferenceGatewayBaseUrl"] != "https://api.anthropic.com" || cfg["inferenceGatewayAuthScheme"] != "x-api-key" || cfg["inferenceGatewayApiKey"] != "anthropic-key" {
+		t.Fatalf("bad direct Anthropic Claude Desktop config: %#v", cfg)
+	}
+	if _, exists := cfg["inferenceAnthropicApiKey"]; exists {
+		t.Fatalf("unsupported Anthropic-specific key was written: %#v", cfg)
 	}
 }
 
@@ -603,13 +736,13 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	}
 	config := string(raw)
 	if !strings.Contains(config, `model_provider = "custom"`) ||
-		!strings.Contains(config, `requires_openai_auth = false`) ||
+		!strings.Contains(config, `requires_openai_auth = true`) ||
 		!strings.Contains(config, `model_catalog_json = "vision-relay-model.json"`) ||
 		!strings.Contains(config, `web_search = "disabled"`) {
 		t.Fatalf("codex config was not written:\n%s", config)
 	}
-	if strings.Contains(config, "experimental_bearer_token") {
-		t.Fatalf("local Codex config should not contain a bearer token:\n%s", config)
+	if !strings.Contains(config, `experimental_bearer_token = "`+codexLocalBearerToken+`"`) {
+		t.Fatalf("local Codex config should isolate official auth with the relay bearer marker:\n%s", config)
 	}
 	catalogRaw, err := os.ReadFile(filepath.Join(home, ".codex", "vision-relay-model.json"))
 	if err != nil {
@@ -864,7 +997,7 @@ func TestWriteCodexConfigReplacesPreviousRelayBlock(t *testing.T) {
 	}
 	if !strings.Contains(after, `model_provider = "custom"`) ||
 		!strings.Contains(after, `[model_providers.custom]`) ||
-		!strings.Contains(after, `requires_openai_auth = false`) ||
+		!strings.Contains(after, `requires_openai_auth = true`) ||
 		!strings.Contains(after, `base_url = "http://new/v1"`) {
 		t.Fatalf("global codex config should route the custom provider through Vision Relay:\n%s", after)
 	}
@@ -888,7 +1021,7 @@ func TestWriteCodexConfigReplacesPreviousRelayBlock(t *testing.T) {
 	if !strings.Contains(project, `model = "new-model"`) ||
 		!strings.Contains(project, `model_catalog_json = "vision-relay-model.json"`) ||
 		!strings.Contains(project, `model_provider = "custom"`) ||
-		!strings.Contains(project, `requires_openai_auth = false`) ||
+		!strings.Contains(project, `requires_openai_auth = true`) ||
 		!strings.Contains(project, `sandbox = "unelevated"`) ||
 		!strings.Contains(project, `base_url = "http://new/v1"`) {
 		t.Fatalf("project codex model was not updated:\n%s", project)

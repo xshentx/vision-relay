@@ -42,6 +42,20 @@ func TestNormalizeListenAddress(t *testing.T) {
 	}
 }
 
+func TestNormalizeClientProgramIDIncludesTerminalClients(t *testing.T) {
+	tests := map[string]string{
+		"codex":      clientCodex,
+		"codex-cli":  clientCodexCLI,
+		"claude":     clientClaudeCode,
+		"claude-cli": clientClaudeCLI,
+	}
+	for input, want := range tests {
+		if got := normalizeClientProgramID(input); got != want {
+			t.Fatalf("normalizeClientProgramID(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestLegacyConfigGetsOneTimeClientPathDetection(t *testing.T) {
 	home := t.TempDir()
 	clearClientPathEnvironment(t)
@@ -133,6 +147,60 @@ func TestPathDetectionRevisionPreservesCustomPathsAndFillsMissingValues(t *testi
 	}
 	if cfg.ClientPathDetectionVersion != currentClientPathDetectionVersion {
 		t.Fatalf("detection version = %d, want %d", cfg.ClientPathDetectionVersion, currentClientPathDetectionVersion)
+	}
+}
+
+func TestClaudeDesktopCLISplitMigratesArbitraryLegacyConfigPath(t *testing.T) {
+	home := t.TempDir()
+	clearClientPathEnvironment(t)
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	legacyCLIPath := filepath.Join(home, "profiles", "work", "settings.json")
+
+	cfg := defaultConfig()
+	cfg.ClientPathsDetected = true
+	cfg.ClientPathDetectionVersion = claudeDesktopCLISplitPathDetectionVersion - 1
+	cfg.ClientConfigPaths = map[string]string{clientClaudeCode: legacyCLIPath}
+	cfg = detectClientPaths(cfg, home, false)
+
+	if got := cfg.ClientConfigPaths[clientClaudeCLI]; got != legacyCLIPath {
+		t.Fatalf("migrated Claude CLI config = %q, want %q", got, legacyCLIPath)
+	}
+	wantDesktop := defaultClientConfigPath(clientClaudeCode, home)
+	if got := cfg.ClientConfigPaths[clientClaudeCode]; got != wantDesktop {
+		t.Fatalf("detected Claude Desktop config = %q, want %q", got, wantDesktop)
+	}
+}
+
+func TestClaudeDesktopCLISplitMigratesLegacyLifecyclePreferences(t *testing.T) {
+	home := t.TempDir()
+	clearClientPathEnvironment(t)
+
+	cfg := defaultConfig()
+	cfg.ClientPathsDetected = true
+	cfg.ClientPathDetectionVersion = claudeDesktopCLISplitPathDetectionVersion - 1
+	cfg.ClientAutoRestart = map[string]bool{clientClaudeCode: false}
+	cfg.ClientAutoStart = map[string]bool{clientClaudeCode: true}
+	cfg = detectClientPaths(cfg, home, false)
+
+	if cfg.ClientAutoRestart[clientClaudeCLI] {
+		t.Fatal("legacy Claude CLI auto-restart=false preference was not migrated")
+	}
+	if !cfg.ClientAutoStart[clientClaudeCLI] {
+		t.Fatal("legacy Claude CLI auto-start=true preference was not migrated")
+	}
+	if !cfg.ClientAutoRestart[clientClaudeCode] || cfg.ClientAutoStart[clientClaudeCode] {
+		t.Fatalf("Claude Desktop defaults = restart %t, start %t", cfg.ClientAutoRestart[clientClaudeCode], cfg.ClientAutoStart[clientClaudeCode])
+	}
+}
+
+func TestConfiguredClaudeDesktopPathRejectsCLISettingsPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
+	cfg := defaultConfig()
+	cfg.ClientConfigPaths = map[string]string{clientClaudeCode: filepath.Join(home, ".claude", "settings.json")}
+	want := defaultClientConfigPath(clientClaudeCode, home)
+	if got := configuredClientConfigPath(cfg, clientClaudeCode, home); got != want {
+		t.Fatalf("Claude desktop path = %q, want %q", got, want)
 	}
 }
 

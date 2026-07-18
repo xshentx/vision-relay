@@ -46,24 +46,31 @@ const clientConfigPathInputs = {
   codex: document.querySelector("#configPathCodex"),
   opencode: document.querySelector("#configPathOpenCode"),
   "claude-code": document.querySelector("#configPathClaudeCode"),
+  "claude-cli": document.querySelector("#configPathClaudeCLI"),
   openclaw: document.querySelector("#configPathOpenClaw")
 };
 const clientProgramPathInputs = {
   codex: document.querySelector("#programPathCodex"),
+  "codex-cli": document.querySelector("#programPathCodexCLI"),
   opencode: document.querySelector("#programPathOpenCode"),
   "claude-code": document.querySelector("#programPathClaudeCode"),
+  "claude-cli": document.querySelector("#programPathClaudeCLI"),
   openclaw: document.querySelector("#programPathOpenClaw")
 };
 const clientAutoRestartInputs = {
   codex: document.querySelector("#autoRestartCodex"),
+  "codex-cli": document.querySelector("#autoRestartCodexCLI"),
   opencode: document.querySelector("#autoRestartOpenCode"),
   "claude-code": document.querySelector("#autoRestartClaudeCode"),
+  "claude-cli": document.querySelector("#autoRestartClaudeCLI"),
   openclaw: document.querySelector("#autoRestartOpenClaw")
 };
 const clientAutoStartInputs = {
   codex: document.querySelector("#autoStartCodex"),
+  "codex-cli": document.querySelector("#autoStartCodexCLI"),
   opencode: document.querySelector("#autoStartOpenCode"),
   "claude-code": document.querySelector("#autoStartClaudeCode"),
+  "claude-cli": document.querySelector("#autoStartClaudeCLI"),
   openclaw: document.querySelector("#autoStartOpenClaw")
 };
 const textProfileList = document.querySelector("#textProfileList");
@@ -257,11 +264,23 @@ async function readErrorMessage(res) {
   }
 }
 
-function normalizeClientPaths(paths) {
+function normalizeClientConfigPaths(paths) {
   return {
     codex: String(paths?.codex || "").trim(),
     opencode: String(paths?.opencode || "").trim(),
     "claude-code": String(paths?.["claude-code"] || "").trim(),
+    "claude-cli": String(paths?.["claude-cli"] || "").trim(),
+    openclaw: String(paths?.openclaw || "").trim()
+  };
+}
+
+function normalizeClientProgramPaths(paths) {
+  return {
+    codex: String(paths?.codex || "").trim(),
+    "codex-cli": String(paths?.["codex-cli"] || "").trim(),
+    opencode: String(paths?.opencode || "").trim(),
+    "claude-code": String(paths?.["claude-code"] || "").trim(),
+    "claude-cli": String(paths?.["claude-cli"] || "").trim(),
     openclaw: String(paths?.openclaw || "").trim()
   };
 }
@@ -269,8 +288,10 @@ function normalizeClientPaths(paths) {
 function normalizeClientBehavior(values, fallback) {
   return {
     codex: typeof values?.codex === "boolean" ? values.codex : fallback,
+    "codex-cli": typeof values?.["codex-cli"] === "boolean" ? values["codex-cli"] : fallback,
     opencode: typeof values?.opencode === "boolean" ? values.opencode : fallback,
     "claude-code": typeof values?.["claude-code"] === "boolean" ? values["claude-code"] : fallback,
+    "claude-cli": typeof values?.["claude-cli"] === "boolean" ? values["claude-cli"] : fallback,
     openclaw: typeof values?.openclaw === "boolean" ? values.openclaw : fallback
   };
 }
@@ -343,8 +364,8 @@ async function loadConfig() {
     localAPIEnabled: cfg.local_api_enabled !== false,
     openWindow: cfg.open_window !== false,
     openBrowser: cfg.open_browser === true,
-    clientConfigPaths: normalizeClientPaths(cfg.client_config_paths),
-    clientProgramPaths: normalizeClientPaths(cfg.client_program_paths),
+    clientConfigPaths: normalizeClientConfigPaths(cfg.client_config_paths),
+    clientProgramPaths: normalizeClientProgramPaths(cfg.client_program_paths),
     clientAutoRestart: normalizeClientBehavior(cfg.client_auto_restart, true),
     clientAutoStart: normalizeClientBehavior(cfg.client_auto_start, false),
     clientPathsDetected: cfg.client_paths_detected === true
@@ -470,9 +491,11 @@ visionEnabledInput?.addEventListener("change", () => {
 preserveCodexOfficialAuth?.addEventListener("change", () => {
 	const enabled = preserveCodexOfficialAuth.checked;
   const message = preserveCodexOfficialAuth.checked ? "切换第三方时将保留官方登录" : "切换第三方时将使用中转认证";
+  renderOpenCodeSnippet();
   persistConfig(message).catch((err) => {
     console.error(err);
 		preserveCodexOfficialAuth.checked = !enabled;
+    renderOpenCodeSnippet();
     showToast(`保存失败：${err.message || err}`, "error");
   });
 });
@@ -565,8 +588,8 @@ async function persistConfig(successMessage = "配置已自动保存") {
   const data = {};
   data.addr = programSettings.addr;
   data.local_api_enabled = programSettings.localAPIEnabled;
-  data.client_config_paths = normalizeClientPaths(programSettings.clientConfigPaths);
-  data.client_program_paths = normalizeClientPaths(programSettings.clientProgramPaths);
+  data.client_config_paths = normalizeClientConfigPaths(programSettings.clientConfigPaths);
+  data.client_program_paths = normalizeClientProgramPaths(programSettings.clientProgramPaths);
   data.client_auto_restart = normalizeClientBehavior(programSettings.clientAutoRestart, true);
   data.client_auto_start = normalizeClientBehavior(programSettings.clientAutoStart, false);
   data.client_paths_detected = programSettings.clientPathsDetected;
@@ -690,7 +713,7 @@ detectClientPaths?.addEventListener("click", async () => {
 const clientConfigureActions = [
   {button: configureOpenCode, client: "opencode", name: "OpenCode"},
   {button: configureCodex, client: "codex", name: "Codex"},
-  {button: configureClaudeCode, client: "claude-code", name: "Claude Code"},
+  {button: configureClaudeCode, client: "claude-code", name: "Claude"},
   {button: configureOpenClaw, client: "openclaw", name: "OpenClaw"}
 ];
 
@@ -731,20 +754,27 @@ async function configureClient({button, client, name}) {
     });
     if (!res.ok) throw new Error(await readErrorMessage(res));
     const payload = await res.json();
+    const programResults = Array.isArray(payload?.programs) ? payload.programs : [];
+    const programRestarted = programResults.some((program) => program?.restarted === true);
+    const programStarted = programResults.some((program) => program?.started === true);
+    const programRestartRequired = programResults.some((program) => program?.restart_required === true);
+    const programWasRunning = programResults.some((program) => program?.was_running === true);
+    const warnings = programResults.map((program) => program?.program_warning).filter(Boolean);
+    if (programResults.length === 0 && payload?.program_warning) warnings.push(payload.program_warning);
     clientRouteEnabled[client] = payload?.route_enabled !== false;
     await loadConfig();
     const path = payload?.path ? `：${payload.path}` : "";
     let behaviorMessage = "配置已写入";
-    if (payload?.restarted === true) {
+    if (programRestarted || payload?.restarted === true) {
       behaviorMessage = "客户端已自动重启";
-    } else if (payload?.started === true && payload?.was_running !== true) {
+    } else if (programStarted || (payload?.started === true && payload?.was_running !== true)) {
       behaviorMessage = "客户端已自动启动";
-    } else if (payload?.was_running === true && payload?.restart_required === true) {
+    } else if (programRestartRequired || (payload?.was_running === true && payload?.restart_required === true)) {
       behaviorMessage = "请手动重启客户端程序";
     } else if (payload?.was_running !== true && payload?.started !== true) {
       behaviorMessage = "客户端当前未运行，未自动启动";
     }
-    const warning = payload?.program_warning ? `；${payload.program_warning}` : "";
+    const warning = warnings.length ? `；${warnings.join("；")}` : "";
     const routeMessage = payload?.direct_upstream
       ? `已直连 ${payload.provider || "当前供应商"}`
       : "已接入本地 API";
@@ -1639,6 +1669,11 @@ function clientVersionedBaseURL(profile) {
   return `${baseURL}/${String(profile?.provider || "").toLowerCase() === "gemini" ? "v1beta" : "v1"}`;
 }
 
+function claudeDesktopGatewayBaseURL(profile) {
+  const baseURL = String(profile?.base_url || defaultBaseURL(profile?.provider)).trim().replace(/\/+$/, "");
+  return baseURL.replace(/\/(?:v1|v1beta)$/i, "");
+}
+
 function directClientMappings(mappings) {
   const seen = new Set();
   return mappings.map((mapping) => {
@@ -1661,7 +1696,7 @@ function directClientCompatibilityMessage(client, profile) {
     return "关闭本地 API 后，Codex 仅支持直连使用 Responses 协议的 OpenAI 兼容供应商。";
   }
   if (client === "claude-code" && provider !== "anthropic") {
-    return "关闭本地 API 后，Claude Code 仅支持直连 Anthropic 协议供应商。";
+    return "关闭本地 API 后，Claude 仅支持直连 Anthropic 协议供应商。";
   }
   return "";
 }
@@ -1698,6 +1733,9 @@ function renderOpenCodeSnippet() {
   const mappings = directUpstream ? directClientMappings(sourceMappings) : sourceMappings;
   const providerDisplayName = directUpstream ? `${profile?.provider || "供应商"}（直连）` : "Vision Relay";
   const upstreamKey = directUpstream ? String(profile?.api_key || "").trim() : "";
+  const preserveOfficialAuth = preserveCodexOfficialAuth?.checked !== false;
+  const codexRequiresOpenAIAuth = directUpstream || preserveOfficialAuth;
+  const codexBearerToken = preserveOfficialAuth ? (directUpstream ? upstreamKey : "vision-relay-local") : "";
   if (directUpstream && mappings.length === 0) {
     const message = "关闭本地 API 后，请先为当前文本供应商添加至少一个模型。";
     [opencodeConfig, openclawConfig, codexConfig, claudeCodeConfig].forEach((element) => {
@@ -1834,9 +1872,9 @@ function renderOpenCodeSnippet() {
       `[model_providers.custom]`,
       `name = "${providerDisplayName}"`,
       `wire_api = "responses"`,
-      `requires_openai_auth = ${directUpstream}`,
+      `requires_openai_auth = ${codexRequiresOpenAIAuth}`,
       `base_url = "${directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`}"`,
-      ...(directUpstream ? [`experimental_bearer_token = "${upstreamKey}"`] : []),
+      ...(codexBearerToken ? [`experimental_bearer_token = "${codexBearerToken}"`] : []),
       ``,
       `[windows]`,
       `sandbox = "unelevated"`,
@@ -1855,9 +1893,9 @@ function renderOpenCodeSnippet() {
       `[model_providers.custom]`,
       `name = "${providerDisplayName}"`,
       `wire_api = "responses"`,
-      `requires_openai_auth = ${directUpstream}`,
+      `requires_openai_auth = ${codexRequiresOpenAIAuth}`,
       `base_url = "${directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`}"`,
-      ...(directUpstream ? [`experimental_bearer_token = "${upstreamKey}"`] : []),
+      ...(codexBearerToken ? [`experimental_bearer_token = "${codexBearerToken}"`] : []),
       ``,
       `[windows]`,
       `sandbox = "unelevated"`
@@ -1867,30 +1905,24 @@ function renderOpenCodeSnippet() {
   }
   const claudeDirectError = directUpstream ? directClientCompatibilityMessage("claude-code", profile) : "";
   if (claudeCodeConfig && !claudeDirectError) {
-    const claudeModelIDs = snippetMappings.map((mapping) => mapping.name || mapping.model);
-    const claudeEnv = {
-      ANTHROPIC_BASE_URL: directUpstream ? String(profile?.base_url || defaultBaseURL(profile?.provider)).replace(/\/+$/, "") : location.origin,
-      ...(directUpstream ? {ANTHROPIC_AUTH_TOKEN: upstreamKey} : {})
+    const claudeModels = snippetMappings.map((mapping) => ({
+      name: mapping.name || mapping.model,
+      ...(Number(mapping.context_window || 0) >= 1000000 ? {supports1m: true} : {})
+    }));
+    const directAnthropic = directUpstream && normalizedDirectProvider(profile) === "anthropic";
+    const claudeDesktopConfig = {
+      inferenceProvider: "gateway",
+      inferenceGatewayBaseUrl: directUpstream ? claudeDesktopGatewayBaseURL(profile) : location.origin,
+      inferenceGatewayAuthScheme: directAnthropic ? "x-api-key" : "bearer",
+      inferenceGatewayApiKey: directUpstream ? upstreamKey : "vision-relay",
+      inferenceModels: claudeModels,
+      disableDeploymentModeChooser: true
     };
-    [
-      ["ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
-      ["ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"],
-      ["ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"],
-      ["ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"]
-    ].forEach(([modelKey, nameKey], index) => {
-      if (!claudeModelIDs[index]) return;
-      claudeEnv[modelKey] = claudeModelIDs[index];
-      claudeEnv[nameKey] = `Vision Relay ${claudeModelIDs[index]}`;
-    });
-    claudeCodeConfig.textContent = JSON.stringify({
-      "$schema": "https://json.schemastore.org/claude-code-settings.json",
-      model: claudeModelIDs[0],
-      availableModels: claudeModelIDs,
-      env: claudeEnv
-    }, null, 2);
+    claudeCodeConfig.textContent = JSON.stringify(claudeDesktopConfig, null, 2);
   } else if (claudeCodeConfig) {
     claudeCodeConfig.textContent = claudeDirectError;
   }
+
 }
 
 function applyTextProfile(id) {
