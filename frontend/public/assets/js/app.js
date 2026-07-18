@@ -977,7 +977,6 @@ function renderLogs(logs) {
 function formatUpstream(log) {
   const name = String(log.upstream_name || "").trim();
   const provider = String(log.upstream_provider || "").trim();
-  if (name && provider) return `${name} / ${provider}`;
   return name || provider || "-";
 }
 

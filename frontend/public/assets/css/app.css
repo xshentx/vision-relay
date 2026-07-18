@@ -808,6 +808,25 @@ h3 {
   gap: 8px;
   align-items: center;
   justify-content: flex-end;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(6px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.profile-row:hover .profile-actions,
+.profile-row:focus-within .profile-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .profile-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
 }
 
 .profile-badge {
@@ -980,11 +999,13 @@ button[type="submit"]:hover,
 
 .modal {
   width: min(680px, calc(100vw - 28px));
+  max-height: calc(100vh - 28px);
   padding: 0;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: var(--text);
+  overflow: hidden;
 }
 
 .modal::backdrop {
@@ -993,6 +1014,9 @@ button[type="submit"]:hover,
 }
 
 .modal-card {
+  max-height: calc(100vh - 28px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 22px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1140,9 +1164,15 @@ button[type="submit"]:hover,
 }
 
 .model-picker-panel {
+  grid-column: 1 / -1;
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-self: start;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8fafc;
 }
 
 .model-picker-panel[hidden] {
@@ -1150,8 +1180,13 @@ button[type="submit"]:hover,
 }
 
 #modelSelect {
+  grid-column: 1 / -1;
+  width: 100%;
   min-height: 170px;
+  max-height: 250px;
   padding: 8px;
+  border-color: #cbd5e1;
+  background: #fff;
 }
 
 #modelSelect option {
@@ -1160,10 +1195,12 @@ button[type="submit"]:hover,
 
 .model-picker-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
 }
 
 .model-picker-status {
+  grid-column: 1 / -1;
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;

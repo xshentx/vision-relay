@@ -73,6 +73,12 @@ func TestLocalAPIHasNoTokenManagement(t *testing.T) {
 	if !strings.Contains(script, `<span>供应商：${escapeHTML(formatUpstream(log))}</span>`) {
 		t.Fatal("request logs must display the supplier instead of a client token")
 	}
+	if strings.Contains(script, "if (name && provider) return `${name} / ${provider}`") {
+		t.Fatal("request logs must display the supplier name without the provider type")
+	}
+	if !strings.Contains(string(indexRaw), "供应商名称") {
+		t.Fatal("model profile modal must label the profile name as the supplier name")
+	}
 }
 
 func TestClientProviderRoutesAreEmbedded(t *testing.T) {
@@ -150,6 +156,9 @@ func TestProfileSwitchUsesExplicitButtonAndSupportsPersistentDragSorting(t *test
 		`.profile-row.drop-before::before`,
 		`.profile-row.drop-after::after`,
 		`.profile-switch:disabled`,
+		`.profile-row:hover .profile-actions`,
+		`.profile-row:focus-within .profile-actions`,
+		`@media (hover: none), (pointer: coarse)`,
 	} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("profile drag-sort style %q is missing", expected)
@@ -237,6 +246,19 @@ func TestTextProfileHidesLegacyForcedModelField(t *testing.T) {
 	}
 	if !strings.Contains(style, `.modal-grid > [hidden]`) || !strings.Contains(style, `display: none !important;`) {
 		t.Fatal("modal grid styles must honor the hidden attribute")
+	}
+	for _, expected := range []string{
+		`max-height: calc(100vh - 28px);`,
+		`overflow: hidden;`,
+		`overflow-y: auto;`,
+		`.model-picker-panel`,
+		`grid-column: 1 / -1;`,
+		`#modelSelect`,
+		`width: 100%;`,
+	} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("modal scrolling style %q is missing", expected)
+		}
 	}
 }
 
