@@ -2,11 +2,6 @@ const form = document.querySelector("#configForm");
 const statusEl = document.querySelector("#status");
 const toast = document.querySelector("#toast");
 const serviceState = document.querySelector("#serviceState");
-const imageInput = document.querySelector("#image");
-const preview = document.querySelector("#preview");
-const output = document.querySelector("#output");
-const visionOutput = document.querySelector("#visionOutput");
-const send = document.querySelector("#send");
 const reloadConfig = document.querySelector("#reloadConfig");
 const refreshLogs = document.querySelector("#refreshLogs");
 const clearLogs = document.querySelector("#clearLogs");
@@ -15,8 +10,15 @@ const logPageSize = document.querySelector("#logPageSize");
 const logPageInfo = document.querySelector("#logPageInfo");
 const prevLogPage = document.querySelector("#prevLogPage");
 const nextLogPage = document.querySelector("#nextLogPage");
-const fileName = document.querySelector("#fileName");
-const segments = [...document.querySelectorAll(".segment")];
+const refreshDashboard = document.querySelector("#refreshDashboard");
+const dashboardPeriods = [...document.querySelectorAll("[data-dashboard-period]")];
+const dashboardChartModes = [...document.querySelectorAll("[data-dashboard-chart-mode]")];
+const dashboardSupplier = document.querySelector("#dashboardSupplier");
+const dashboardModel = document.querySelector("#dashboardModel");
+const dashboardTokenChart = document.querySelector("#dashboardTokenChart");
+const dashboardRequestChart = document.querySelector("#dashboardRequestChart");
+const dashboardTokenLegend = document.querySelector("#dashboardTokenLegend");
+const dashboardModelRows = document.querySelector("#dashboardModelRows");
 const opencodeConfig = document.querySelector("#opencodeConfig");
 const configureOpenCode = document.querySelector("#configureOpenCode");
 const codexConfig = document.querySelector("#codexConfig");
@@ -129,8 +131,6 @@ const serviceCard = document.querySelector("#serviceCard");
 const clientTabButtons = [...document.querySelectorAll("[data-client-tab]")];
 const clientTabPanels = [...document.querySelectorAll("[data-client-panel]")];
 
-let imageDataUrl = "";
-let testMode = "chat";
 let textProfiles = [];
 let activeTextProfileId = "";
 let visionProfiles = [];
@@ -158,6 +158,13 @@ let fetchedModels = [];
 let modalModelMappings = [];
 let currentLogPage = 1;
 let currentLogTotal = 0;
+let dashboardPeriod = "day";
+let dashboardChartMode = "type";
+let dashboardSupplierFilter = "";
+let dashboardModelFilter = "";
+let dashboardPayload = null;
+let dashboardRequestSequence = 0;
+let dashboardRequestController = null;
 
 const endpoints = {
   openaiBaseEndpoint: `${location.origin}/v1`,
@@ -179,6 +186,12 @@ for (const [id, value] of Object.entries(endpoints)) {
 navItems.forEach((item) => {
   item.addEventListener("click", () => {
     showPage(item.dataset.page);
+    if (item.dataset.page === "dashboard") {
+      loadDashboard().catch((err) => {
+        console.error(err);
+        showToast(`加载看板失败：${err.message || err}`, "error");
+      });
+    }
     if (item.dataset.page === "logs") {
       loadLogs().catch((err) => {
         console.error(err);
@@ -417,6 +430,49 @@ reloadConfig.addEventListener("click", () => {
     console.error(err);
     setStatus("加载失败");
     setServiceOnline(false);
+  });
+});
+
+refreshDashboard.addEventListener("click", () => {
+  loadDashboard().catch((err) => {
+    console.error(err);
+    showToast(`加载看板失败：${err.message || err}`, "error");
+  });
+});
+
+dashboardPeriods.forEach((button) => {
+  button.addEventListener("click", () => {
+    dashboardPeriod = button.dataset.dashboardPeriod || "day";
+    dashboardPeriods.forEach((item) => item.classList.toggle("active", item === button));
+    loadDashboard().catch((err) => {
+      console.error(err);
+      showToast(`加载看板失败：${err.message || err}`, "error");
+    });
+  });
+});
+
+dashboardChartModes.forEach((button) => {
+  button.addEventListener("click", () => {
+    dashboardChartMode = button.dataset.dashboardChartMode || "type";
+    dashboardChartModes.forEach((item) => item.classList.toggle("active", item === button));
+    if (dashboardPayload) renderDashboardTokenTrend(dashboardPayload);
+  });
+});
+
+dashboardSupplier.addEventListener("change", () => {
+  dashboardSupplierFilter = dashboardSupplier.value;
+  dashboardModelFilter = "";
+  loadDashboard().catch((err) => {
+    console.error(err);
+    showToast(`加载看板失败：${err.message || err}`, "error");
+  });
+});
+
+dashboardModel.addEventListener("change", () => {
+  dashboardModelFilter = dashboardModel.value;
+  loadDashboard().catch((err) => {
+    console.error(err);
+    showToast(`加载看板失败：${err.message || err}`, "error");
   });
 });
 
@@ -928,6 +984,347 @@ async function runCodexHistoryAction(action) {
   return await res.json();
 }
 
+async function loadDashboard() {
+  const requestSequence = ++dashboardRequestSequence;
+  dashboardRequestController?.abort();
+  const controller = new AbortController();
+  dashboardRequestController = controller;
+  refreshDashboard.disabled = true;
+  try {
+    const params = new URLSearchParams({period: dashboardPeriod});
+    if (dashboardSupplierFilter) params.set("supplier", dashboardSupplierFilter);
+    if (dashboardModelFilter) params.set("model", dashboardModelFilter);
+    const res = await fetch(`/api/dashboard?${params.toString()}`, {signal: controller.signal});
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const payload = await res.json();
+    if (requestSequence !== dashboardRequestSequence) return;
+    dashboardPayload = payload;
+    renderDashboard(payload);
+  } catch (err) {
+    if (err?.name === "AbortError") return;
+    throw err;
+  } finally {
+    if (requestSequence === dashboardRequestSequence) {
+      refreshDashboard.disabled = false;
+      dashboardRequestController = null;
+    }
+  }
+}
+
+function renderDashboard(payload) {
+  const summary = payload?.summary || {};
+  renderDashboardFilters(payload?.options || {});
+  setDashboardToken("dashboardLifetimeTokens", summary.lifetime_tokens);
+  setDashboardToken("dashboardTodayTokens", summary.today_tokens);
+  setDashboardToken("dashboardPeriodTokens", summary.period_tokens);
+  setDashboardToken("dashboardInputTokens", summary.input_tokens);
+  setDashboardToken("dashboardOutputTokens", summary.output_tokens);
+  setDashboardToken("dashboardCacheTokens", summary.cache_hit_tokens);
+  setDashboardText("dashboardRequests", formatNumber(summary.requests));
+  setDashboardText("dashboardFailures", formatNumber(summary.failures));
+  setDashboardText("dashboardFailureSummary", `失败 ${formatNumber(summary.failures)} 次`);
+  setDashboardText("dashboardAverageFirst", formatDashboardDuration(summary.average_first_token_ms));
+  setDashboardText("dashboardAverageDuration", formatDashboardDuration(summary.average_duration_ms));
+  setDashboardText("dashboardUpdatedAt", `更新于 ${new Date(payload.generated_at).toLocaleString()}`);
+  const periodLabels = {day: "当日统计", "7d": "近 7 天统计", month: "本月统计"};
+  setDashboardText("dashboardPeriodLabel", periodLabels[payload.period] || "周期统计");
+  renderDashboardTokenTrend(payload);
+  renderDashboardComposition(summary);
+  renderDashboardModels(Array.isArray(payload.models) ? payload.models : []);
+  renderDashboardRequests(Array.isArray(payload.series) ? payload.series : []);
+}
+
+function renderDashboardFilters(options) {
+  fillDashboardSelect(dashboardSupplier, options.suppliers, "全部供应商", dashboardSupplierFilter);
+  fillDashboardSelect(dashboardModel, options.models, "全部模型", dashboardModelFilter);
+}
+
+function fillDashboardSelect(select, values, allLabel, selectedValue) {
+  const fragment = document.createDocumentFragment();
+  const allOption = document.createElement("option");
+  allOption.value = "";
+  allOption.textContent = allLabel;
+  fragment.appendChild(allOption);
+  (Array.isArray(values) ? values : []).forEach((value) => {
+    const option = document.createElement("option");
+    option.value = String(value);
+    option.textContent = String(value);
+    fragment.appendChild(option);
+  });
+  select.replaceChildren(fragment);
+  select.value = selectedValue;
+}
+
+function setDashboardText(id, value) {
+  const element = document.querySelector(`#${id}`);
+  if (element) element.textContent = value;
+}
+
+function setDashboardToken(id, value) {
+  const element = document.querySelector(`#${id}`);
+  if (!element) return;
+  element.textContent = formatCompactNumber(value);
+  element.title = `${formatNumber(value)} Token`;
+}
+
+function formatDashboardDuration(value) {
+  const duration = Number(value || 0);
+  return duration > 0 ? `${formatNumber(Math.round(duration))} ms` : "-";
+}
+
+function renderDashboardTokenTrend(payload) {
+  const buckets = Array.isArray(payload.series) ? payload.series : [];
+  let chartSeries;
+  if (dashboardChartMode === "model") {
+    const colors = ["#2563eb", "#8b5cf6", "#0ea5e9", "#f59e0b", "#10b981"];
+    chartSeries = (Array.isArray(payload.models) ? payload.models : []).slice(0, 5).map((model, index) => ({
+      name: `${model.model} · ${model.supplier}`,
+      color: colors[index],
+      values: buckets.map((bucket) => Number(bucket.models?.[model.series_key] || 0))
+    }));
+  } else {
+    chartSeries = [
+      {name: "输入", color: "#2563eb", values: buckets.map((bucket) => Number(bucket.input_tokens || 0))},
+      {name: "输出", color: "#8b5cf6", values: buckets.map((bucket) => Number(bucket.output_tokens || 0))},
+      {name: "缓存命中", color: "#10b981", values: buckets.map((bucket) => Number(bucket.cache_hit_tokens || 0))}
+    ];
+  }
+  dashboardTokenLegend.innerHTML = chartSeries.map((series) => `<span><i style="background:${series.color}"></i>${escapeHTML(series.name)}</span>`).join("");
+  renderDashboardLineChart(dashboardTokenChart, buckets.map((bucket) => bucket.label), chartSeries);
+}
+function renderDashboardComposition(summary) {
+  const input = Number(summary.input_tokens || 0);
+  const output = Number(summary.output_tokens || 0);
+  const cache = Number(summary.cache_hit_tokens || 0);
+  const uncachedInput = Math.max(0, input - cache);
+  const total = Math.max(0, uncachedInput + output + cache);
+  const values = [
+    {name: "普通输入", value: uncachedInput, color: "#2563eb"},
+    {name: "输出", value: output, color: "#8b5cf6"},
+    {name: "缓存命中", value: cache, color: "#10b981"}
+  ];
+  let offset = 0;
+  const stops = values.map((item) => {
+    const start = total > 0 ? offset / total * 100 : 0;
+    offset += item.value;
+    const end = total > 0 ? offset / total * 100 : 0;
+    return `${item.color} ${start}% ${end}%`;
+  });
+  const donut = document.querySelector("#dashboardTokenDonut");
+  donut.style.background = total > 0 ? `conic-gradient(${stops.join(",")})` : "#e8eef6";
+  setDashboardText("dashboardDonutTotal", formatCompactNumber(Number(summary.period_tokens || 0)));
+  const list = document.querySelector("#dashboardCompositionList");
+  list.innerHTML = values.map((item) => {
+    const percent = total > 0 ? item.value / total * 100 : 0;
+    return `<div><span><i style="background:${item.color}"></i>${item.name}</span><strong>${formatCompactNumber(item.value)} <small>${percent.toFixed(1)}%</small></strong></div>`;
+  }).join("");
+}
+
+function renderDashboardModels(models) {
+  if (models.length === 0) {
+    dashboardModelRows.innerHTML = '<tr><td class="dashboard-table-empty" colspan="7">当前筛选范围内暂无模型用量</td></tr>';
+    return;
+  }
+  dashboardModelRows.innerHTML = models.map((model) => `
+    <tr>
+      <td><strong>${escapeHTML(model.model || "-")}</strong></td>
+      <td>${escapeHTML(model.supplier || "-")}</td>
+      <td title="${formatNumber(model.input_tokens)} Token">${formatCompactNumber(model.input_tokens)}</td>
+      <td title="${formatNumber(model.output_tokens)} Token">${formatCompactNumber(model.output_tokens)}</td>
+      <td title="${formatNumber(model.cache_hit_tokens)} Token">${formatCompactNumber(model.cache_hit_tokens)}</td>
+      <td title="${formatNumber(model.total_tokens)} Token"><strong>${formatCompactNumber(model.total_tokens)}</strong></td>
+      <td>${formatNumber(model.requests)}</td>
+    </tr>
+  `).join("");
+}
+
+function renderDashboardRequests(buckets) {
+  const labels = buckets.map((bucket) => bucket.label);
+  const values = buckets.map((bucket) => Number(bucket.requests || 0));
+  renderDashboardBarChart(dashboardRequestChart, labels, values);
+}
+
+function renderDashboardLineChart(container, labels, seriesList) {
+  if (!container) return;
+  const width = Math.max(420, Math.round(container.getBoundingClientRect().width || 900));
+  const height = 360;
+  const padding = {left: 64, right: 22, top: 22, bottom: 44};
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const values = seriesList.flatMap((series) => series.values);
+  const maxValue = Math.max(1, ...values);
+  const yMax = dashboardAxisMaximum(maxValue);
+  const x = (index) => padding.left + (labels.length <= 1 ? 0 : index * plotWidth / (labels.length - 1));
+  const y = (value) => padding.top + plotHeight - Number(value || 0) / yMax * plotHeight;
+  const grid = [];
+  for (let index = 0; index <= 5; index++) {
+    const value = yMax * (5 - index) / 5;
+    const position = padding.top + plotHeight * index / 5;
+    grid.push(`<line x1="${padding.left}" y1="${position}" x2="${width - padding.right}" y2="${position}" />`);
+    grid.push(`<text x="${padding.left - 10}" y="${position + 4}" text-anchor="end">${formatCompactNumber(value)}</text>`);
+  }
+  const labelStep = Math.max(1, Math.ceil(labels.length / 8));
+  const xLabels = labels.map((label, index) => index % labelStep === 0 || index === labels.length - 1
+    ? `<text x="${x(index)}" y="${height - 12}" text-anchor="middle">${escapeHTML(label)}</text>` : "").join("");
+  const lines = seriesList.map((series) => {
+    const points = series.values.map((value, index) => `${x(index)},${y(value)}`).join(" ");
+    const dots = series.values.map((value, index) => Number(value || 0) > 0
+      ? `<circle class="dashboard-chart-point" cx="${x(index)}" cy="${y(value)}" r="4.5" fill="${series.color}" />` : "").join("");
+    return `<polyline points="${points}" fill="none" stroke="${series.color}" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />${dots}`;
+  }).join("");
+  container.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Token usage trend">
+      <g class="dashboard-chart-grid">${grid.join("")}${xLabels}</g>
+      ${lines}
+    </svg>
+    <div class="dashboard-chart-crosshair" hidden></div>
+    <div class="dashboard-chart-tooltip" role="status" hidden></div>`;
+
+  const svg = container.querySelector("svg");
+  const crosshair = container.querySelector(".dashboard-chart-crosshair");
+  const tooltip = container.querySelector(".dashboard-chart-tooltip");
+  const hideTooltip = () => {
+    crosshair.hidden = true;
+    tooltip.hidden = true;
+  };
+  container.onpointerleave = hideTooltip;
+  container.onpointermove = (event) => {
+    if (labels.length === 0 || seriesList.length === 0) {
+      hideTooltip();
+      return;
+    }
+    const svgRect = svg.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const viewX = (event.clientX - svgRect.left) / Math.max(1, svgRect.width) * width;
+    if (viewX < padding.left || viewX > width - padding.right) {
+      hideTooltip();
+      return;
+    }
+    const rawIndex = labels.length <= 1 ? 0 : (viewX - padding.left) / plotWidth * (labels.length - 1);
+    const index = Math.max(0, Math.min(labels.length - 1, Math.round(rawIndex)));
+    const scaleX = svgRect.width / width;
+    const scaleY = svgRect.height / height;
+    const crosshairLeft = svgRect.left - containerRect.left + x(index) * scaleX;
+    crosshair.style.left = `${crosshairLeft}px`;
+    crosshair.style.top = `${svgRect.top - containerRect.top + padding.top * scaleY}px`;
+    crosshair.style.height = `${plotHeight * scaleY}px`;
+    crosshair.hidden = false;
+
+    const rows = seriesList.map((series) => {
+      const value = Number(series.values[index] || 0);
+      return `<div><span><i style="background:${series.color}"></i>${escapeHTML(series.name)}</span><strong>${formatNumber(value)} Token</strong></div>`;
+    }).join("");
+    tooltip.innerHTML = `<b>${escapeHTML(labels[index])}</b>${rows}`;
+    tooltip.hidden = false;
+    const tooltipWidth = tooltip.offsetWidth;
+    const tooltipHeight = tooltip.offsetHeight;
+    let left = crosshairLeft + 14;
+    if (left + tooltipWidth > containerRect.width - 8) left = crosshairLeft - tooltipWidth - 14;
+    left = Math.max(8, Math.min(left, containerRect.width - tooltipWidth - 8));
+    const pointerTop = event.clientY - containerRect.top;
+    let top = pointerTop - tooltipHeight - 14;
+    if (top < 8) top = pointerTop + 14;
+    top = Math.max(8, Math.min(top, containerRect.height - tooltipHeight - 8));
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+  };
+}
+function renderDashboardBarChart(container, labels, values) {
+  if (!container) return;
+  const width = Math.max(420, Math.round(container.getBoundingClientRect().width || 900));
+  const height = 360;
+  const padding = {left: 64, right: 22, top: 22, bottom: 44};
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const yMax = dashboardAxisMaximum(Math.max(1, ...values));
+  const slotWidth = labels.length > 0 ? plotWidth / labels.length : plotWidth;
+  const barWidth = Math.max(5, Math.min(32, slotWidth * 0.58));
+  const grid = [];
+  for (let index = 0; index <= 5; index++) {
+    const value = yMax * (5 - index) / 5;
+    const position = padding.top + plotHeight * index / 5;
+    grid.push(`<line x1="${padding.left}" y1="${position}" x2="${width - padding.right}" y2="${position}" />`);
+    grid.push(`<text x="${padding.left - 9}" y="${position + 4}" text-anchor="end">${formatCompactNumber(value)}</text>`);
+  }
+  const labelStep = Math.max(1, Math.ceil(labels.length / 8));
+  const bars = values.map((value, index) => {
+    const barHeight = Number(value || 0) / yMax * plotHeight;
+    const x = padding.left + index * slotWidth + (slotWidth - barWidth) / 2;
+    const y = padding.top + plotHeight - barHeight;
+    const label = index % labelStep === 0 || index === labels.length - 1
+      ? `<text x="${x + barWidth / 2}" y="${height - 11}" text-anchor="middle">${escapeHTML(labels[index])}</text>` : "";
+    return `<rect class="dashboard-request-bar" x="${x}" y="${y}" width="${barWidth}" height="${Math.max(0, barHeight)}" rx="4" fill="#60a5fa" />${label}`;
+  }).join("");
+  container.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="请求量趋势">
+      <g class="dashboard-chart-grid">${grid.join("")}${bars}</g>
+    </svg>
+    <div class="dashboard-chart-crosshair" hidden></div>
+    <div class="dashboard-chart-tooltip" role="status" hidden></div>`;
+
+  const svg = container.querySelector("svg");
+  const crosshair = container.querySelector(".dashboard-chart-crosshair");
+  const tooltip = container.querySelector(".dashboard-chart-tooltip");
+  const hideTooltip = () => {
+    crosshair.hidden = true;
+    tooltip.hidden = true;
+  };
+  container.onpointerleave = hideTooltip;
+  container.onpointermove = (event) => {
+    if (labels.length === 0) {
+      hideTooltip();
+      return;
+    }
+    const svgRect = svg.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const viewX = (event.clientX - svgRect.left) / Math.max(1, svgRect.width) * width;
+    if (viewX < padding.left || viewX > width - padding.right) {
+      hideTooltip();
+      return;
+    }
+    const index = Math.max(0, Math.min(labels.length - 1, Math.floor((viewX - padding.left) / slotWidth)));
+    const scaleX = svgRect.width / width;
+    const scaleY = svgRect.height / height;
+    const crosshairLeft = svgRect.left - containerRect.left + (padding.left + (index + 0.5) * slotWidth) * scaleX;
+    crosshair.style.left = `${crosshairLeft}px`;
+    crosshair.style.top = `${svgRect.top - containerRect.top + padding.top * scaleY}px`;
+    crosshair.style.height = `${plotHeight * scaleY}px`;
+    crosshair.hidden = false;
+
+    tooltip.innerHTML = `<b>${escapeHTML(labels[index])}</b><div><span><i style="background:#60a5fa"></i>请求数</span><strong>${formatNumber(values[index])} 次</strong></div>`;
+    tooltip.hidden = false;
+    const tooltipWidth = tooltip.offsetWidth;
+    const tooltipHeight = tooltip.offsetHeight;
+    let left = crosshairLeft + 14;
+    if (left + tooltipWidth > containerRect.width - 8) left = crosshairLeft - tooltipWidth - 14;
+    left = Math.max(8, Math.min(left, containerRect.width - tooltipWidth - 8));
+    const pointerTop = event.clientY - containerRect.top;
+    let top = pointerTop - tooltipHeight - 14;
+    if (top < 8) top = pointerTop + 14;
+    top = Math.max(8, Math.min(top, containerRect.height - tooltipHeight - 8));
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+  };
+}
+function dashboardAxisMaximum(value) {
+  const magnitude = 10 ** Math.floor(Math.log10(Math.max(1, value)));
+  return Math.ceil(value / magnitude) * magnitude;
+}
+
+function formatCompactNumber(value) {
+  const number = Number(value || 0);
+  const absolute = Math.abs(number);
+  if (absolute >= 1000000) return `${formatScaledNumber(number / 1000000)}M`;
+  if (absolute >= 1000) return `${formatScaledNumber(number / 1000)}K`;
+  return String(Math.round(number));
+}
+
+function formatScaledNumber(value) {
+  const absolute = Math.abs(value);
+  const digits = absolute >= 100 ? 0 : (absolute >= 10 ? 1 : 2);
+  const fixed = value.toFixed(digits);
+  return digits === 0 ? fixed : fixed.replace(/\.?0+$/, "");
+}
 async function loadLogs(page = currentLogPage) {
   const pageSize = Number(logPageSize.value || 20);
   const res = await fetch(`/api/logs?page=${encodeURIComponent(page)}&page_size=${encodeURIComponent(pageSize)}`);
@@ -950,28 +1347,60 @@ function renderLogs(logs) {
   }
   logs.forEach((log) => {
     const item = document.createElement("div");
-    item.className = "log-item";
+    const status = Number(log.status || 0);
+    const failed = status >= 400 || Boolean(log.error);
+    const usageAvailable = hasTokenUsage(log);
+    const statusText = status > 0 ? `${status} ${failed ? "失败" : "成功"}` : "状态未知";
+    item.className = `log-item ${failed ? "failed" : "succeeded"}`;
     item.innerHTML = `
       <div class="log-head">
-        <div>
-          <strong>${escapeHTML(log.protocol || "-")}</strong>
-          <span>${escapeHTML(new Date(log.at).toLocaleString())} · ${escapeHTML(log.method || "")} ${escapeHTML(log.path || "")}</span>
+        <div class="log-identity">
+          <strong class="log-model">${escapeHTML(log.model || "未知模型")}</strong>
+          <div class="log-meta">
+            <span class="log-supplier">供应商 ${escapeHTML(formatUpstream(log))}</span>
+            <span class="log-mode ${formatRequestMode(log).className}">${formatRequestMode(log).label}</span>
+            <span class="log-meta-separator" aria-hidden="true">·</span>
+            <span>${escapeHTML(new Date(log.at).toLocaleString())}</span>
+            <span class="log-meta-separator" aria-hidden="true">·</span>
+            <span>${escapeHTML(log.method || "")} ${escapeHTML(log.path || "")}</span>
+          </div>
         </div>
-        <em class="${Number(log.status) >= 400 ? "log-status error" : "log-status"}">${escapeHTML(String(log.status || "-"))}</em>
+        <em class="${failed ? "log-status error" : "log-status"}">${escapeHTML(statusText)}</em>
       </div>
-      <div class="log-metrics">
-        <span>供应商：${escapeHTML(formatUpstream(log))}</span>
-        <span>模型：${escapeHTML(log.model || "-")}</span>
-        <span>输入：${formatNumber(log.input_tokens)} tok</span>
-        <span>输出：${formatNumber(log.output_tokens)} tok</span>
-        <span>总计：${formatNumber(log.total_tokens)} tok</span>
-        <span>缓存命中：${formatNumber(log.cache_hit_tokens)} tok</span>
-        <span>首 token：${formatDuration(log.first_token_ms)}</span>
-        <span>耗时：${formatNumber(log.duration_ms)} ms</span>
+      <div class="log-token-grid">
+        ${renderLogMetric("输入", formatTokenUsage(log.input_tokens, usageAvailable))}
+        ${renderLogMetric("输出", formatTokenUsage(log.output_tokens, usageAvailable))}
+        ${renderLogMetric("总计", formatTokenUsage(log.total_tokens, usageAvailable))}
+        ${renderLogMetric("缓存命中", formatTokenUsage(log.cache_hit_tokens, usageAvailable))}
+        ${renderLogMetric("首 Token", formatFirstTokenDuration(log.first_token_ms))}
       </div>
+      ${log.error ? `<div class="log-error"><span class="log-error-icon" aria-hidden="true">!</span><span>${escapeHTML(log.error)}</span></div>` : ""}
+      <div class="log-duration" title="总耗时"><span class="log-duration-icon" aria-hidden="true"></span><span class="log-duration-label">总耗时</span><strong>${formatLogDuration(log.duration_ms)}</strong></div>
     `;
     logList.appendChild(item);
   });
+}
+
+function renderLogMetric(label, value) {
+  return `<div><span>${label}</span><strong>${value}</strong></div>`;
+}
+function hasTokenUsage(log) {
+  return [log.input_tokens, log.output_tokens, log.total_tokens].some((value) => Number(value || 0) > 0);
+}
+
+function formatTokenUsage(value, available) {
+  return available ? formatCompactNumber(value) : "-";
+}
+
+function formatRequestMode(log) {
+  switch (String(log.request_mode || "").toLowerCase()) {
+    case "stream":
+      return {className: "stream", label: "流式"};
+    case "sync":
+      return {className: "sync", label: "同步"};
+    default:
+      return {className: "unknown", label: "未知"};
+  }
 }
 
 function formatUpstream(log) {
@@ -980,9 +1409,16 @@ function formatUpstream(log) {
   return name || provider || "-";
 }
 
-function formatDuration(value) {
-  const n = Number(value || 0);
-  return n > 0 ? `${formatNumber(n)} ms` : "-";
+function formatFirstTokenDuration(value) {
+  const duration = Number(value || 0);
+  return duration > 0 ? `${(duration / 1000).toFixed(1)}s` : "-";
+}
+
+function formatLogDuration(value) {
+  const duration = Number(value || 0);
+  if (duration <= 0) return "-";
+  if (duration < 1000) return `${formatNumber(duration)} ms`;
+  return `${(duration / 1000).toFixed(1)}s`;
 }
 
 function renderLogPager() {
@@ -2108,119 +2544,6 @@ function defaultBaseURL(provider) {
   }
 }
 
-segments.forEach((button) => {
-  button.addEventListener("click", () => {
-    testMode = button.dataset.mode;
-    segments.forEach((item) => item.classList.toggle("active", item === button));
-  });
-});
-
-imageInput.addEventListener("change", async () => {
-  const file = imageInput.files[0];
-  imageDataUrl = "";
-  preview.innerHTML = "";
-  fileName.textContent = "支持 data URL、本地上传、远程图片 URL";
-  if (!file) return;
-  imageDataUrl = await readAsDataURL(file);
-  fileName.textContent = `${file.name} · ${formatBytes(file.size)}`;
-  const img = document.createElement("img");
-  img.src = imageDataUrl;
-  preview.appendChild(img);
-});
-
-send.addEventListener("click", async () => {
-  const prompt = document.querySelector("#prompt").value.trim() || "请描述这张图片。";
-  const model = textProfileDisplayModels(activeTextProfile())[0] || "local-text-model";
-  const headers = {"Content-Type": "application/json"};
-
-  const request = testMode === "responses"
-    ? buildResponsesRequest(model, prompt)
-    : buildChatRequest(model, prompt);
-
-  output.textContent = `POST ${request.path}\n\n请求中...`;
-  visionOutput.textContent = imageDataUrl ? "等待图片模型返回..." : "本次请求未上传图片";
-  if (imageDataUrl && !visionCapabilityEnabled) {
-    visionOutput.textContent = "视觉模型能力未开启，本次请求直接发送到文本模型";
-  }
-  send.disabled = true;
-  try {
-    const res = await fetch(request.path, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(request.body)
-    });
-    const text = await res.text();
-    try {
-      output.textContent = JSON.stringify(JSON.parse(text), null, 2);
-    } catch {
-      output.textContent = text;
-    }
-    await refreshVisionDebug();
-  } catch (err) {
-    output.textContent = String(err);
-    await refreshVisionDebug();
-  } finally {
-    send.disabled = false;
-  }
-});
-
-async function refreshVisionDebug() {
-  if (!visionCapabilityEnabled) {
-    visionOutput.textContent = "视觉模型能力未开启，当前请求不会触发图片解析";
-    return;
-  }
-  try {
-    const res = await fetch("/api/debug/vision");
-    if (!res.ok) return;
-    const info = await res.json();
-    if (!info || !info.at || info.image_count === 0) {
-      visionOutput.textContent = "尚未触发图片解析";
-      return;
-    }
-    const lines = [
-      `时间：${new Date(info.at).toLocaleString()}`,
-      `上游：${info.provider || "-"} / ${info.model || "-"}`,
-      `图片数：${info.image_count}`,
-      `用户需求：${info.user_text || "-"}`,
-      "",
-      info.error ? `错误：${info.error}` : info.text
-    ];
-    visionOutput.textContent = lines.join("\n");
-  } catch (err) {
-    console.error(err);
-  }
-}
-
-function buildChatRequest(model, prompt) {
-  const content = [{type: "text", text: prompt}];
-  if (imageDataUrl) {
-    content.push({type: "image_url", image_url: {url: imageDataUrl}});
-  }
-  return {
-    path: "/v1/chat/completions",
-    body: {
-      model,
-      messages: [{role: "user", content}],
-      temperature: 0.2
-    }
-  };
-}
-
-function buildResponsesRequest(model, prompt) {
-  const content = [{type: "input_text", text: prompt}];
-  if (imageDataUrl) {
-    content.push({type: "input_image", image_url: imageDataUrl});
-  }
-  return {
-    path: "/v1/responses",
-    body: {
-      model,
-      input: [{role: "user", content}],
-      temperature: 0.2
-    }
-  };
-}
-
 function escapeAttr(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -2231,15 +2554,6 @@ function escapeAttr(value) {
 
 function escapeHTML(value) {
   return escapeAttr(value);
-}
-
-function readAsDataURL(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 }
 
 function formatBytes(value) {

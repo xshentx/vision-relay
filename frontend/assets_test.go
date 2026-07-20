@@ -6,6 +6,17 @@ import (
 	"testing"
 )
 
+func TestTextNavigationUsesProviderWording(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	if !strings.Contains(index, `data-page="text"><span class="nav-icon">T</span><span>模型供应商</span>`) {
+		t.Fatal("text navigation must use the model supplier wording")
+	}
+}
+
 func TestClientConfigureActionsAreEmbedded(t *testing.T) {
 	indexRaw, err := fs.ReadFile(FS, "index.html")
 	if err != nil {
@@ -70,11 +81,36 @@ func TestLocalAPIHasNoTokenManagement(t *testing.T) {
 			t.Fatalf("obsolete token behavior %q remains", forbidden)
 		}
 	}
-	if !strings.Contains(script, `<span>供应商：${escapeHTML(formatUpstream(log))}</span>`) {
-		t.Fatal("request logs must display the supplier instead of a client token")
+	for _, expected := range []string{
+		`<strong class="log-model">${escapeHTML(log.model || "未知模型")}</strong>`,
+		`<span class="log-supplier">供应商 ${escapeHTML(formatUpstream(log))}</span>`,
+		`<span class="log-mode ${formatRequestMode(log).className}">${formatRequestMode(log).label}</span>`,
+		`<div class="log-token-grid">`,
+		`formatRequestMode(log)`,
+		`formatFirstTokenDuration(log.first_token_ms)`,
+		`<span class="log-duration-label">总耗时</span>`,
+		`formatLogDuration(log.duration_ms)`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("request log layout %q is missing", expected)
+		}
+	}
+	if strings.Contains(script, `<strong>${escapeHTML(log.protocol || "-")}</strong>`) {
+		t.Fatal("request protocol must not be used as the log card title")
 	}
 	if strings.Contains(script, "if (name && provider) return `${name} / ${provider}`") {
 		t.Fatal("request logs must display the supplier name without the provider type")
+	}
+
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := string(styleRaw)
+	for _, expected := range []string{".log-item::before", ".log-item.failed::before", ".log-mode.stream", ".log-token-grid", ".log-duration-icon"} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("request log style %q is missing", expected)
+		}
 	}
 	if !strings.Contains(string(indexRaw), "供应商名称") {
 		t.Fatal("model profile modal must label the profile name as the supplier name")
@@ -371,11 +407,13 @@ func TestUpdateAndSettingsMenusAreAtSidebarBottom(t *testing.T) {
 		t.Fatal("sidebar navigation is missing")
 	}
 	nav := index[navStart:navEnd]
-	playgroundIndex := strings.Index(nav, `data-page="playground"`)
 	updateIndex := strings.Index(nav, `data-page="update"`)
 	settingsIndex := strings.Index(nav, `data-page="settings"`)
-	if playgroundIndex < 0 || updateIndex <= playgroundIndex || settingsIndex <= updateIndex {
-		t.Fatalf("sidebar bottom menu order is invalid: playground=%d update=%d settings=%d", playgroundIndex, updateIndex, settingsIndex)
+	if updateIndex < 0 || settingsIndex <= updateIndex {
+		t.Fatalf("sidebar bottom menu order is invalid: update=%d settings=%d", updateIndex, settingsIndex)
+	}
+	if strings.Contains(nav, `data-page="playground"`) {
+		t.Fatal("playground menu should be removed")
 	}
 	for _, expected := range []string{`<span>更新</span>`, `<span>设置</span>`} {
 		if !strings.Contains(nav, expected) {
@@ -394,13 +432,15 @@ func TestBusinessPagesUseCommonLayout(t *testing.T) {
 	}
 	index := string(indexRaw)
 	expectedOpenings := map[string]string{
-		"text":       `<section class="page panel standard-page span-12" id="text"`,
-		"vision":     `<section class="page panel standard-page span-12" id="vision"`,
-		"access":     `<section class="page panel standard-page access-page span-12" id="access"`,
-		"settings":   `<section class="page panel standard-page settings-page span-12" id="settings"`,
-		"logs":       `<section class="page panel standard-page span-12" id="logs"`,
-		"update":     `<section class="page panel standard-page span-12" id="update"`,
-		"playground": `<section class="page panel standard-page span-12" id="playground"`,
+		"text":     `<section class="page panel standard-page span-12" id="text"`,
+		"vision":   `<section class="page panel standard-page span-12" id="vision"`,
+		"access":   `<section class="page panel standard-page access-page span-12" id="access"`,
+		"settings": `<section class="page panel standard-page settings-page span-12" id="settings"`,
+		"logs":     `<section class="page panel standard-page span-12" id="logs"`,
+		"update":   `<section class="page panel standard-page span-12" id="update"`,
+	}
+	if strings.Contains(index, `id="playground"`) || strings.Contains(index, `data-target-page="playground"`) {
+		t.Fatal("playground page and shortcuts should be removed")
 	}
 	for page, opening := range expectedOpenings {
 		if !strings.Contains(index, opening) {
@@ -616,5 +656,69 @@ func TestClaudeProgramSettingsUseDesktopClient(t *testing.T) {
 	}
 	if strings.Contains(html, `<strong>Claude Code</strong><small>`) {
 		t.Fatal("Claude desktop row must not be labeled as Claude Code CLI")
+	}
+}
+
+func TestDashboardAssetsAreEmbedded(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	for _, expected := range []string{
+		`data-page="dashboard"`,
+		`data-page-panel="dashboard"`,
+		`id="dashboardSupplier"`,
+		`id="dashboardModel"`,
+		`id="dashboardTokenChart"`,
+		`id="dashboardRequestChart"`,
+		`id="dashboardModelRows"`,
+	} {
+		if !strings.Contains(index, expected) {
+			t.Fatalf("dashboard markup %q is missing", expected)
+		}
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		"fetch(`/api/dashboard?${params.toString()}`, {signal: controller.signal})",
+		`dashboardRequestController?.abort();`,
+		`if (requestSequence !== dashboardRequestSequence) return;`,
+		`if (err?.name === "AbortError") return;`,
+		`bucket.models?.[model.series_key]`,
+		`data-dashboard-chart-mode`,
+		`renderDashboardTokenTrend`,
+		`renderDashboardModels`,
+		`dashboard-chart-tooltip`,
+		`container.onpointermove`,
+		`formatNumber(value)} Token`,
+		`dashboard-request-bar`,
+		`formatNumber(values[index])} 次`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("dashboard behavior %q is missing", expected)
+		}
+	}
+
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := string(styleRaw)
+	for _, expected := range []string{
+		`.token-trend-panel .dashboard-chart`,
+		`height: 360px`,
+		`.dashboard-chart-tooltip`,
+		`.dashboard-chart-crosshair`,
+		`.request-chart`,
+		`.dashboard-request-bar`,
+	} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("dashboard chart style %q is missing", expected)
+		}
 	}
 }

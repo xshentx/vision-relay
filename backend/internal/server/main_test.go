@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -804,6 +805,46 @@ func TestAnthropicMessagesConvertToolCallsToClaudeCodeToolUse(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamingRequestStaysStreamingUpstream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if stream, _ := payload["stream"].(bool); !stream {
+			t.Fatalf("upstream request should stay streaming: %#v", payload)
+		}
+		streamOptions, _ := payload["stream_options"].(map[string]any)
+		if includeUsage, _ := streamOptions["include_usage"].(bool); !includeUsage {
+			t.Fatalf("upstream stream should request usage: %#v", payload)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-stream\",\"model\":\"glm-5.1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":1}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			TextProvider: "openai",
+			TextBaseURL:  upstream.URL,
+		}),
+		httpClient: upstream.Client(),
+	}
+	body := `{"model":"claude-sonnet-4","stream":true,"max_tokens":256,"messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	recorder := httptest.NewRecorder()
+
+	a.handleAnthropicMessages(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	responseBody := recorder.Body.String()
+	if !strings.Contains(responseBody, "event: content_block_delta") || !strings.Contains(responseBody, `"text":"ok"`) {
+		t.Fatalf("anthropic stream was not converted incrementally: %s", responseBody)
+	}
+}
 func TestAnthropicCountTokensForClaudeCode(t *testing.T) {
 	a := &app{cfg: normalizeSeparateModelProfiles(config{TextProvider: "openai"})}
 	body := `{"model":"claude-sonnet-4","system":"be useful","messages":[{"role":"user","content":"hello world"}]}`
@@ -1463,6 +1504,44 @@ func TestFillUsageFromResponsesCompletedSSE(t *testing.T) {
 	}
 }
 
+func TestInspectSSELogBodySupportsNamedResponsesEvents(t *testing.T) {
+	body := []byte("event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"total_tokens\":6}}}\n\n")
+	state := inspectSSELogBody(body)
+	if !state.IsSSE || !state.Completed || state.Failed {
+		t.Fatalf("bad SSE state: %#v", state)
+	}
+}
+
+func TestResponsesStreamFailureIsNotLoggedAsHTTP200(t *testing.T) {
+	a := &app{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`))
+	body := []byte("event: error\n" +
+		"data: {\"type\":\"error\",\"code\":\"upstream_timeout\",\"message\":\"stream timed out\"}\n\n")
+	a.logCompletedRequest(req, nil, body, http.StatusOK, time.Now())
+
+	logs := a.currentLogs()
+	if len(logs) != 1 {
+		t.Fatalf("expected one log, got %d", len(logs))
+	}
+	if logs[0].Status != http.StatusBadGateway || logs[0].Error != "stream timed out" {
+		t.Fatalf("stream failure was logged as success: %#v", logs[0])
+	}
+}
+
+func TestIncompleteResponsesStreamWithoutUsageIsNotLoggedAsHTTP200(t *testing.T) {
+	a := &app{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`))
+	body := []byte("event: response.created\n" +
+		"data: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n")
+	a.logCompletedRequest(req, nil, body, http.StatusOK, time.Now())
+
+	logs := a.currentLogs()
+	if len(logs) != 1 || logs[0].Status != http.StatusBadGateway || logs[0].Error == "" {
+		t.Fatalf("incomplete stream was logged as success: %#v", logs)
+	}
+}
+
 func TestLoggingResponseWriterKeepsUsageTail(t *testing.T) {
 	rec := httptest.NewRecorder()
 	lrw := newLoggingResponseWriter(rec, time.Now())
@@ -1476,6 +1555,34 @@ func TestLoggingResponseWriterKeepsUsageTail(t *testing.T) {
 	}
 }
 
+func TestRequestStreamMode(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		body   string
+		accept string
+		want   string
+	}{
+		{name: "openai stream", path: "/v1/chat/completions", body: `{"stream":true}`, want: "stream"},
+		{name: "openai sync", path: "/v1/responses", body: `{"stream":false}`, want: "sync"},
+		{name: "openai default sync", path: "/v1/chat/completions", body: `{}`, want: "sync"},
+		{name: "gemini stream path", path: "/v1beta/models/gemini:test:streamGenerateContent", body: `{}`, want: "stream"},
+		{name: "ollama default stream", path: "/api/chat", body: `{}`, want: "stream"},
+		{name: "ollama explicit sync", path: "/api/generate", body: `{"stream":false}`, want: "sync"},
+		{name: "sse accept header", path: "/custom", body: `{}`, accept: "text/event-stream", want: "stream"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			if test.accept != "" {
+				req.Header.Set("Accept", test.accept)
+			}
+			if got := requestStreamMode(req, decodeJSONMap([]byte(test.body))); got != test.want {
+				t.Fatalf("requestStreamMode() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
 func TestRouteLogsOnlyStatusForHTMLUpstreamErrors(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
@@ -1510,6 +1617,38 @@ func TestRouteLogsOnlyStatusForHTMLUpstreamErrors(t *testing.T) {
 	}
 }
 
+func TestRequestLogSchemaMigratesRequestMode(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "legacy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE request_logs (id INTEGER PRIMARY KEY, first_token_ms INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO request_logs(id, first_token_ms) VALUES (1, 250), (2, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureRequestLogColumns(db); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := db.Query(`SELECT request_mode FROM request_logs ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var modes []string
+	for rows.Next() {
+		var mode string
+		if err := rows.Scan(&mode); err != nil {
+			t.Fatal(err)
+		}
+		modes = append(modes, mode)
+	}
+	if len(modes) != 2 || modes[0] != "stream" || modes[1] != "unknown" {
+		t.Fatalf("unexpected migrated request modes: %#v", modes)
+	}
+}
 func TestDatabaseStoresConfigAndLogsWithoutBodies(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), appSlug+".db")
 	db, err := openAppDB(dbPath)
@@ -1540,6 +1679,7 @@ func TestDatabaseStoresConfigAndLogsWithoutBodies(t *testing.T) {
 		UpstreamProvider: "openai",
 		Status:           200,
 		FirstTokenMS:     12,
+		RequestMode:      "stream",
 		InputTokens:      3,
 		OutputTokens:     4,
 		RequestText:      "secret input",
@@ -1557,6 +1697,9 @@ func TestDatabaseStoresConfigAndLogsWithoutBodies(t *testing.T) {
 	}
 	if logs[0].FirstTokenMS != 12 {
 		t.Fatalf("first token latency was not stored: %#v", logs[0])
+	}
+	if logs[0].RequestMode != "stream" {
+		t.Fatalf("request stream mode was not stored: %#v", logs[0])
 	}
 	if logs[0].UpstreamName != "Text Channel A" || logs[0].UpstreamProvider != "openai" {
 		t.Fatalf("upstream identity was not stored: %#v", logs[0])

@@ -55,30 +55,6 @@ func (a *app) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *app) handleTest(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	var req map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	cfg := a.currentConfig()
-	req["model"] = firstString(effectiveTextModel(cfg, firstString(req["model"])), "local-text-model")
-	req["messages"] = []any{
-		map[string]any{"role": "user", "content": req["content"]},
-	}
-	body, _ := json.Marshal(req)
-	resp, status, err := a.processOpenAIChat(r.Context(), body, r.Header, "/v1/chat/completions")
-	if err != nil {
-		writeError(w, status, err)
-		return
-	}
-	writeUpstream(w, resp)
-}
-
 func (a *app) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
@@ -359,7 +335,8 @@ func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		stream, _ := payload["stream"].(bool)
 		if stream {
-			chatPayload["stream"] = false
+			chatPayload["stream"] = true
+			ensureStreamUsage(chatPayload)
 		}
 		sanitizeOpenAIChatPayload(chatPayload)
 		out, _ := json.Marshal(chatPayload)

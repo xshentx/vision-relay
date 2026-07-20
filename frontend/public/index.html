@@ -25,12 +25,12 @@
         <span class="nav-group-label">工作台</span>
         <button class="nav-item active" type="button" data-page="home"><span class="nav-icon">⌂</span><span>概览</span></button>
         <span class="nav-group-label">模型与接入</span>
-        <button class="nav-item" type="button" data-page="text"><span class="nav-icon">T</span><span>文本模型</span></button>
+        <button class="nav-item" type="button" data-page="text"><span class="nav-icon">T</span><span>模型供应商</span></button>
         <button class="nav-item" type="button" data-page="vision"><span class="nav-icon">V</span><span>视觉模型</span></button>
         <button class="nav-item" type="button" data-page="access"><span class="nav-icon">↗</span><span>客户端接入</span></button>
         <span class="nav-group-label">观测与调试</span>
+        <button class="nav-item" type="button" data-page="dashboard"><span class="nav-icon">D</span><span>数据看板</span></button>
         <button class="nav-item" type="button" data-page="logs"><span class="nav-icon">≡</span><span>使用日志</span></button>
-        <button class="nav-item" type="button" data-page="playground"><span class="nav-icon">›_</span><span>测试台</span></button>
         <span class="nav-group-label">系统</span>
         <button class="nav-item" type="button" data-page="update"><span class="nav-icon">&uarr;</span><span>更新</span></button>
         <button class="nav-item" type="button" data-page="settings"><span class="nav-icon">⚙</span><span>设置</span></button>
@@ -115,7 +115,6 @@
               <button class="secondary home-jump" type="button" data-target-page="text">文本模型</button>
               <button class="secondary home-jump" type="button" data-target-page="vision">视觉模型</button>
               <button class="secondary home-jump" type="button" data-target-page="access">客户端接入</button>
-              <button class="secondary home-jump" type="button" data-target-page="playground">测试台</button>
             </div>
           </article>
         </section>
@@ -303,6 +302,82 @@
             <div class="settings-note"><strong>路径用途</strong><span>配置文件位置用于“一键配置”和供应商切换同步；客户端程序位置用于检测运行状态，并在对应开关启用时自动启动或重启客户端。</span></div>
           </article>
         </section>
+        <section class="page dashboard-page span-12" id="dashboard" data-page-panel="dashboard">
+          <div class="dashboard-heading">
+            <div>
+              <h3>数据看板</h3>
+              <p>集中查看 Token 用量、模型分布、请求趋势和响应性能。</p>
+            </div>
+            <div class="dashboard-update"><span id="dashboardUpdatedAt">尚未更新</span><button class="secondary" id="refreshDashboard" type="button">刷新</button></div>
+          </div>
+
+          <div class="dashboard-filters panel">
+            <div class="dashboard-periods" role="group" aria-label="统计周期">
+              <button class="dashboard-period active" type="button" data-dashboard-period="day">当日</button>
+              <button class="dashboard-period" type="button" data-dashboard-period="7d">7 天</button>
+              <button class="dashboard-period" type="button" data-dashboard-period="month">当月</button>
+            </div>
+            <label><span>供应商</span><select id="dashboardSupplier"><option value="">全部供应商</option></select></label>
+            <label><span>模型</span><select id="dashboardModel"><option value="">全部模型</option></select></label>
+          </div>
+
+          <div class="dashboard-metrics" aria-label="Token 使用摘要">
+            <article class="dashboard-metric primary"><span>累计 Token</span><strong id="dashboardLifetimeTokens">0</strong><small>当前筛选条件的历史总量</small></article>
+            <article class="dashboard-metric"><span>今日 Token</span><strong id="dashboardTodayTokens">0</strong><small>本地时间当日用量</small></article>
+            <article class="dashboard-metric"><span>周期 Token</span><strong id="dashboardPeriodTokens">0</strong><small id="dashboardPeriodLabel">当日统计</small></article>
+            <article class="dashboard-metric input"><span>输入</span><strong id="dashboardInputTokens">0</strong><small>所选周期</small></article>
+            <article class="dashboard-metric output"><span>输出</span><strong id="dashboardOutputTokens">0</strong><small>所选周期</small></article>
+            <article class="dashboard-metric cache"><span>缓存命中</span><strong id="dashboardCacheTokens">0</strong><small>所选周期</small></article>
+            <article class="dashboard-metric requests"><span>请求量</span><strong id="dashboardRequests">0</strong><small id="dashboardFailureSummary">失败 0 次</small></article>
+          </div>
+
+          <div class="dashboard-main-grid">
+            <article class="panel dashboard-chart-panel token-trend-panel">
+              <div class="dashboard-card-head">
+                <div><h4>Token 用量趋势</h4><p>按时间查看输入、输出、缓存命中或各模型用量。</p></div>
+                <div class="dashboard-chart-modes" role="group" aria-label="趋势维度">
+                  <button class="active" type="button" data-dashboard-chart-mode="type">按类型</button>
+                  <button type="button" data-dashboard-chart-mode="model">按模型</button>
+                </div>
+              </div>
+              <div class="dashboard-chart-legend" id="dashboardTokenLegend"></div>
+              <div class="dashboard-chart" id="dashboardTokenChart" aria-label="Token 用量趋势图"></div>
+            </article>
+
+            <article class="panel dashboard-chart-panel dashboard-composition-panel">
+              <div class="dashboard-card-head"><div><h4>Token 构成</h4><p>所选周期内的用量组成。</p></div></div>
+              <div class="dashboard-donut-wrap">
+                <div class="dashboard-donut" id="dashboardTokenDonut"><span><strong id="dashboardDonutTotal">0</strong><small>Token</small></span></div>
+                <div class="dashboard-composition-list" id="dashboardCompositionList"></div>
+              </div>
+            </article>
+          </div>
+
+          <article class="panel dashboard-ranking-panel">
+            <div class="dashboard-card-head"><div><h4>模型用量排行</h4><p>按 Token 总量降序，展示模型和供应商的使用情况。</p></div></div>
+            <div class="dashboard-table-wrap">
+              <table class="dashboard-table">
+                <thead><tr><th>模型</th><th>供应商</th><th>输入</th><th>输出</th><th>缓存命中</th><th>总计</th><th>请求量</th></tr></thead>
+                <tbody id="dashboardModelRows"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <div class="dashboard-performance-grid">
+            <article class="panel dashboard-chart-panel">
+              <div class="dashboard-card-head"><div><h4>请求量趋势</h4><p>按所选周期展示请求次数。</p></div></div>
+              <div class="dashboard-chart request-chart" id="dashboardRequestChart" aria-label="请求量趋势图"></div>
+            </article>
+            <article class="panel dashboard-performance-card">
+              <div class="dashboard-card-head"><div><h4>响应性能</h4><p>统计有效请求的平均响应指标。</p></div></div>
+              <div class="dashboard-performance-list">
+                <div><span>平均首 Token</span><strong id="dashboardAverageFirst">-</strong></div>
+                <div><span>平均总耗时</span><strong id="dashboardAverageDuration">-</strong></div>
+                <div><span>失败请求</span><strong id="dashboardFailures">0</strong></div>
+              </div>
+            </article>
+          </div>
+        </section>
         <section class="page panel standard-page span-12" id="logs" data-page-panel="logs">
           <div class="panel-head">
             <div>
@@ -354,44 +429,6 @@
               <a class="button-link secondary" id="releaseLink" href="https://github.com/xshentx/vision-relay/releases" target="_blank" rel="noreferrer">&#26597;&#30475; GitHub Release</a>
             </div>
           </div>
-        </section>
-
-        <section class="page panel standard-page span-12" id="playground" data-page-panel="playground">
-          <div class="panel-head">
-            <div>
-              <h3>请求测试台</h3>
-              <p>上传图片后可分别测试 Chat Completions 和 Responses 请求形态。</p>
-            </div>
-            <div class="segmented" role="tablist" aria-label="测试接口">
-              <button class="segment active" type="button" data-mode="chat">Chat</button>
-              <button class="segment" type="button" data-mode="responses">Responses</button>
-            </div>
-          </div>
-
-          <div class="playground-grid">
-            <div class="composer">
-              <label>
-                需求
-                <textarea id="prompt" rows="5" placeholder="例如：读图后总结关键信息，并给出下一步建议"></textarea>
-              </label>
-              <label class="upload">
-                <input id="image" type="file" accept="image/*">
-                <span>选择图片</span>
-                <small id="fileName">支持 data URL、本地上传、远程图片 URL</small>
-              </label>
-            </div>
-
-            <div class="preview-wrap">
-              <div class="preview" id="preview"></div>
-              <button id="send" type="button">发送测试</button>
-            </div>
-          </div>
-
-          <div class="debug-output">
-            <div class="debug-title">图片模型返回</div>
-            <pre id="visionOutput">尚未触发图片解析</pre>
-          </div>
-          <pre id="output"></pre>
         </section>
       </form>
       </div>

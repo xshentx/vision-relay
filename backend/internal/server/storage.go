@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	status INTEGER NOT NULL,
 	duration_ms INTEGER NOT NULL,
 	first_token_ms INTEGER NOT NULL DEFAULT 0,
+	request_mode TEXT NOT NULL DEFAULT 'unknown',
 	input_tokens INTEGER NOT NULL,
 	output_tokens INTEGER NOT NULL,
 	total_tokens INTEGER NOT NULL,
@@ -172,6 +173,7 @@ CREATE INDEX IF NOT EXISTS idx_request_logs_at ON request_logs(at DESC);
 
 func ensureRequestLogColumns(db *sql.DB) error {
 	hasFirstToken := false
+	hasRequestMode := false
 	hasUpstreamName := false
 	hasUpstreamProvider := false
 	rows, err := db.Query(`PRAGMA table_info(request_logs)`)
@@ -191,6 +193,9 @@ func ensureRequestLogColumns(db *sql.DB) error {
 		if name == "first_token_ms" {
 			hasFirstToken = true
 		}
+		if name == "request_mode" {
+			hasRequestMode = true
+		}
 		if name == "upstream_name" {
 			hasUpstreamName = true
 		}
@@ -203,6 +208,14 @@ func ensureRequestLogColumns(db *sql.DB) error {
 	}
 	if !hasFirstToken {
 		if _, err := db.Exec(`ALTER TABLE request_logs ADD COLUMN first_token_ms INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	if !hasRequestMode {
+		if _, err := db.Exec(`ALTER TABLE request_logs ADD COLUMN request_mode TEXT NOT NULL DEFAULT 'unknown'`); err != nil {
+			return err
+		}
+		if _, err := db.Exec(`UPDATE request_logs SET request_mode = 'stream' WHERE first_token_ms > 0`); err != nil {
 			return err
 		}
 	}
@@ -251,11 +264,11 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.upd
 func insertRequestLogDB(db *sql.DB, log requestLog) error {
 	_, err := db.Exec(`
 INSERT INTO request_logs(
-	at, method, path, protocol, model, upstream_name, upstream_provider, client_name, client_key_preview, status, duration_ms, first_token_ms,
+	at, method, path, protocol, model, upstream_name, upstream_provider, client_name, client_key_preview, status, duration_ms, first_token_ms, request_mode,
 	input_tokens, output_tokens, total_tokens, cache_hit_tokens, cache_write_tokens, error
-) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `, log.At.Format(time.RFC3339Nano), log.Method, log.Path, log.Protocol, log.Model, log.UpstreamName, log.UpstreamProvider, log.ClientName, log.ClientKeyPreview,
-		log.Status, log.DurationMS, log.FirstTokenMS, log.InputTokens, log.OutputTokens, log.TotalTokens, log.CacheHitTokens, log.CacheWriteTokens, log.Error)
+		log.Status, log.DurationMS, log.FirstTokenMS, log.RequestMode, log.InputTokens, log.OutputTokens, log.TotalTokens, log.CacheHitTokens, log.CacheWriteTokens, log.Error)
 	return err
 }
 
@@ -265,7 +278,7 @@ func listRequestLogsDB(db *sql.DB, limit int) ([]requestLog, error) {
 
 func listRequestLogsPageDB(db *sql.DB, limit, offset int) ([]requestLog, error) {
 	rows, err := db.Query(`
-SELECT id, at, method, path, protocol, model, client_name, client_key_preview, status, duration_ms, first_token_ms,
+SELECT id, at, method, path, protocol, model, client_name, client_key_preview, status, duration_ms, first_token_ms, request_mode,
        input_tokens, output_tokens, total_tokens, cache_hit_tokens, cache_write_tokens, error,
        upstream_name, upstream_provider
 FROM request_logs
@@ -281,7 +294,7 @@ LIMIT ? OFFSET ?
 		var log requestLog
 		var at string
 		if err := rows.Scan(&log.ID, &at, &log.Method, &log.Path, &log.Protocol, &log.Model, &log.ClientName, &log.ClientKeyPreview,
-			&log.Status, &log.DurationMS, &log.FirstTokenMS, &log.InputTokens, &log.OutputTokens, &log.TotalTokens, &log.CacheHitTokens, &log.CacheWriteTokens, &log.Error,
+			&log.Status, &log.DurationMS, &log.FirstTokenMS, &log.RequestMode, &log.InputTokens, &log.OutputTokens, &log.TotalTokens, &log.CacheHitTokens, &log.CacheWriteTokens, &log.Error,
 			&log.UpstreamName, &log.UpstreamProvider); err != nil {
 			return nil, err
 		}

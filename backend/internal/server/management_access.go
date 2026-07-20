@@ -31,16 +31,15 @@ func isManagementRequest(r *http.Request) bool {
 func isManagementAPIPath(path string) bool {
 	switch path {
 	case "/api/config",
+		"/api/dashboard",
 		"/api/update",
-		"/api/debug/vision",
 		"/api/client/configure",
 		"/api/client/routes/apply",
 		"/api/client/restore",
 		"/api/settings/detect-clients",
 		"/api/client/codex/history",
 		"/api/logs",
-		"/api/models",
-		"/api/test":
+		"/api/models":
 		return true
 	default:
 		return false

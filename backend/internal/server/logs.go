@@ -27,6 +27,12 @@ type loggingResponseWriter struct {
 	firstTokenMS int64
 }
 
+type sseLogState struct {
+	IsSSE     bool
+	Completed bool
+	Failed    bool
+}
+
 func newLoggingResponseWriter(w http.ResponseWriter, started time.Time) *loggingResponseWriter {
 	return &loggingResponseWriter{ResponseWriter: w, status: http.StatusOK, started: started}
 }
@@ -193,8 +199,10 @@ func (a *app) appendRequestLog(log requestLog) {
 }
 
 func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, status int, started time.Time, firstTokenValues ...int64) {
+	requestPayload := decodeJSONMap(body)
 	firstTokenMS := firstInt64FromSlice(firstTokenValues)
-	if status >= 400 || !isSSELogBody(responseBody) {
+	sseState := inspectSSELogBody(responseBody)
+	if status >= 400 || !sseState.IsSSE {
 		firstTokenMS = 0
 	}
 	log := requestLog{
@@ -205,10 +213,11 @@ func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, st
 		Status:       status,
 		DurationMS:   time.Since(started).Milliseconds(),
 		FirstTokenMS: firstTokenMS,
+		RequestMode:  requestStreamMode(r, requestPayload),
 	}
 	log.UpstreamName, log.UpstreamProvider = a.upstreamLogIdentity()
-	if payload := decodeJSONMap(body); payload != nil {
-		log.Model = a.effectiveRequestLogModel(r, payload)
+	if requestPayload != nil {
+		log.Model = a.effectiveRequestLogModel(r, requestPayload)
 	}
 	if response := decodeJSONMap(responseBody); response != nil {
 		fillUsageFromPayload(&log, response)
@@ -218,6 +227,23 @@ func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, st
 		log.Error = errorTextFromPayload(response)
 	} else {
 		fillUsageFromSSE(&log, responseBody)
+		if status < 400 && isOpenAIResponsesPath(r.URL.Path) {
+			switch {
+			case sseState.Failed:
+				status = http.StatusBadGateway
+				if log.Error == "" {
+					log.Error = "上游 Responses 响应流失败"
+				}
+			case !sseState.Completed && log.TotalTokens == 0:
+				if r.Context().Err() != nil {
+					status = 499
+					log.Error = "客户端在响应完成前取消请求，Token 用量不可用"
+				} else {
+					status = http.StatusBadGateway
+					log.Error = "上游 Responses 响应流未正常完成，Token 用量不可用"
+				}
+			}
+		}
 		if log.Error == "" && status >= 400 {
 			log.Error = statusText(status)
 		}
@@ -225,18 +251,43 @@ func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, st
 	if status >= 400 && log.Error == "" {
 		log.Error = statusText(status)
 	}
+	log.Status = status
 	a.appendRequestLog(log)
 }
 
 func isSSELogBody(body []byte) bool {
+	return inspectSSELogBody(body).IsSSE
+}
+
+func inspectSSELogBody(body []byte) sseLogState {
+	var state sseLogState
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if strings.HasPrefix(line, "event:") {
+			state.IsSSE = true
 			continue
 		}
-		return strings.HasPrefix(line, "data:")
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		state.IsSSE = true
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "[DONE]" {
+			state.Completed = true
+			continue
+		}
+		var payload map[string]any
+		if data == "" || json.Unmarshal([]byte(data), &payload) != nil {
+			continue
+		}
+		switch strings.ToLower(firstString(payload["type"])) {
+		case "response.completed", "response.done":
+			state.Completed = true
+		case "error", "response.failed", "response.incomplete":
+			state.Failed = true
+		}
 	}
-	return false
+	return state
 }
 
 func (a *app) upstreamLogIdentity() (string, string) {
@@ -293,6 +344,29 @@ func decodeJSONMap(body []byte) map[string]any {
 
 func requestModel(payload map[string]any) string {
 	return firstString(payload["model"])
+}
+
+func requestStreamMode(r *http.Request, payload map[string]any) string {
+	path := ""
+	if r != nil && r.URL != nil {
+		path = r.URL.Path
+	}
+	if strings.Contains(path, ":streamGenerateContent") {
+		return "stream"
+	}
+	if stream, exists := payload["stream"].(bool); exists {
+		if stream {
+			return "stream"
+		}
+		return "sync"
+	}
+	if isOllamaChatPath(path) || isOllamaGeneratePath(path) {
+		return "stream"
+	}
+	if r != nil && strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
+		return "stream"
+	}
+	return "sync"
 }
 
 func (a *app) effectiveRequestLogModel(r *http.Request, payload map[string]any) string {
@@ -358,19 +432,28 @@ func responseTextFromPayload(payload map[string]any) string {
 }
 
 func errorTextFromPayload(payload map[string]any) string {
+	if response, _ := payload["response"].(map[string]any); response != nil {
+		if text := errorTextFromPayload(response); text != "" {
+			return text
+		}
+	}
 	errValue, ok := payload["error"]
-	if !ok {
-		return ""
+	if ok {
+		switch v := errValue.(type) {
+		case string:
+			return v
+		case map[string]any:
+			return firstString(v["message"], v["type"], v["code"])
+		default:
+			b, _ := json.Marshal(v)
+			return string(b)
+		}
 	}
-	switch v := errValue.(type) {
-	case string:
-		return v
-	case map[string]any:
-		return firstString(v["message"], v["type"], v["code"])
-	default:
-		b, _ := json.Marshal(v)
-		return string(b)
+	switch strings.ToLower(firstString(payload["type"])) {
+	case "error", "response.failed", "response.incomplete":
+		return firstString(payload["message"], payload["code"], payload["type"])
 	}
+	return ""
 }
 
 func statusText(status int) string {

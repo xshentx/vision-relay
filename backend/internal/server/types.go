@@ -158,6 +158,7 @@ type requestLog struct {
 	Status           int       `json:"status"`
 	DurationMS       int64     `json:"duration_ms"`
 	FirstTokenMS     int64     `json:"first_token_ms"`
+	RequestMode      string    `json:"request_mode"`
 	InputTokens      int64     `json:"input_tokens"`
 	OutputTokens     int64     `json:"output_tokens"`
 	TotalTokens      int64     `json:"total_tokens"`
