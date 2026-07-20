@@ -20,46 +20,95 @@ func openBrowser(rawURL string) error {
 	}
 }
 
-func runClientWindow(rawURL string) {
+func runClientWindow(rawURL string, runEnded func()) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	w := webview.New(false)
-	defer w.Destroy()
+	defer finishClientWindowRun(runEnded, w.Destroy)
 	w.SetTitle(appDisplayName)
 	w.SetSize(1180, 820, webview.HintNone)
 	w.Navigate(rawURL)
 	w.Run()
 }
 
-func runTrayApp(rawURL string, shutdown func()) {
+func finishClientWindowRun(runEnded, destroy func()) {
+	// Clear the logical open state before destroying the WebView. An activation
+	// arriving after the native run loop has stopped can then queue the next
+	// window instead of trying to focus a vanished HWND.
+	if runEnded != nil {
+		runEnded()
+	}
+	destroy()
+}
+
+type clientWindowState struct {
+	mu     sync.Mutex
+	open   bool
+	queued bool
+}
+
+func (s *clientWindowState) requestOpen() (focusExisting, enqueue bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.open {
+		return true, false
+	}
+	if s.queued {
+		return false, false
+	}
+	s.queued = true
+	return false, true
+}
+
+func (s *clientWindowState) beginOpen() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queued = false
+	if s.open {
+		return false
+	}
+	s.open = true
+	return true
+}
+
+func (s *clientWindowState) markClosed() {
+	s.mu.Lock()
+	s.open = false
+	s.mu.Unlock()
+}
+
+func runTrayApp(rawURL string, activation <-chan struct{}, shutdown func()) {
 	openCh := make(chan struct{}, 1)
-	var windowMu sync.Mutex
-	windowOpen := false
+	windowState := &clientWindowState{}
 
 	openWindow := func() {
-		select {
-		case openCh <- struct{}{}:
-		default:
+		focusExisting, enqueue := windowState.requestOpen()
+		if focusExisting {
+			focusClientWindow()
+			return
+		}
+		if enqueue {
+			openCh <- struct{}{}
 		}
 	}
 
 	go func() {
 		for range openCh {
-			windowMu.Lock()
-			if windowOpen {
-				windowMu.Unlock()
+			if !windowState.beginOpen() {
+				focusClientWindow()
 				continue
 			}
-			windowOpen = true
-			windowMu.Unlock()
-
-			runClientWindow(rawURL)
-
-			windowMu.Lock()
-			windowOpen = false
-			windowMu.Unlock()
+			runClientWindow(rawURL, windowState.markClosed)
 		}
 	}()
+
+	if activation != nil {
+		go func() {
+			for range activation {
+				openWindow()
+			}
+		}()
+	}
 
 	systray.Run(func() {
 		systray.SetIcon(appIcon)

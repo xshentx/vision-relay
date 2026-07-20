@@ -12,7 +12,32 @@ import (
 	"time"
 )
 
+type desktopInstanceAcquirer func(chan<- struct{}) (bool, func(), error)
+
 func Run() {
+	runDesktopInstance(acquireDesktopInstance, runPrimaryInstance)
+}
+
+// runDesktopInstance is the hard startup boundary for normal launches. A
+// duplicate launch may only signal the primary window; it must not continue to
+// config, database, Codex auth, session history, routing, or UI initialization.
+func runDesktopInstance(acquire desktopInstanceAcquirer, startPrimary func(chan struct{})) {
+	desktopActivation := make(chan struct{}, 1)
+	primary, releaseInstance, err := acquire(desktopActivation)
+	if err != nil {
+		log.Printf("single-instance initialization failed: %v", err)
+		return
+	}
+	if !primary {
+		return
+	}
+	if releaseInstance != nil {
+		defer releaseInstance()
+	}
+	startPrimary(desktopActivation)
+}
+
+func runPrimaryInstance(desktopActivation chan struct{}) {
 	cleanupUpdateHelper()
 	cfg := defaultConfig()
 	addrFlag := flag.String("addr", "", "listen address, for example 127.0.0.1:8787")
@@ -91,6 +116,16 @@ func Run() {
 		cfg.OpenBrowser = true
 	}
 
+	if cfg.UnifyCodexSessionHistory {
+		if homeDir, homeErr := os.UserHomeDir(); homeErr != nil {
+			log.Printf("Codex unified history reconciliation warning: %v", homeErr)
+		} else if result, reconcileErr := reconcileCodexUnifiedHistory(cfg, homeDir); reconcileErr != nil {
+			log.Printf("Codex unified history reconciliation warning: %v", reconcileErr)
+		} else if result.ConfigUpdated || result.Sessions > 0 || result.Threads > 0 {
+			log.Printf("Codex unified history reconciled (config_updated=%t, tracked_sessions=%d, tracked_threads=%d)", result.ConfigUpdated, result.Sessions, result.Threads)
+		}
+	}
+
 	a := &app{
 		cfg:        cfg,
 		configPath: configPath,
@@ -100,6 +135,7 @@ func Run() {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/desktop/activate", desktopActivationHandler(desktopActivation))
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/update", a.handleUpdate)
 	mux.HandleFunc("/api/update/progress", a.handleUpdateProgress)
@@ -112,7 +148,7 @@ func Run() {
 	mux.HandleFunc("/api/logs", a.handleLogs)
 	mux.HandleFunc("/api/models", a.handleListModels)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "application": appSlug})
 	})
 	mux.HandleFunc("/", a.handleRoute)
 
@@ -128,10 +164,10 @@ func Run() {
 		if existingVisionRelayHealthy(localURL) {
 			log.Printf("%s already running on %s", appSlug, localURL)
 			if cfg.OpenWindow {
-				runClientWindow(localURL)
-				return
-			}
-			if cfg.OpenBrowser {
+				if activateErr := activateExistingDesktop(localURL); activateErr != nil {
+					log.Printf("existing window activation warning: %v", activateErr)
+				}
+			} else if cfg.OpenBrowser {
 				_ = openBrowser(localURL)
 			}
 			return
@@ -140,6 +176,17 @@ func Run() {
 	}
 	log.Printf("%s listening on %s", appSlug, localURL)
 	log.Printf("database: %s", dbPath)
+	if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
+		results, routeErrors := a.configureEnabledClientRoutes(localURL, homeDir)
+		if len(results) > 0 {
+			log.Printf("synchronized %d enabled client route(s)", len(results))
+		}
+		for _, routeErr := range routeErrors {
+			log.Printf("client route synchronization warning: %s", routeErr)
+		}
+	} else {
+		log.Printf("client route synchronization warning: %v", homeErr)
+	}
 	if cfg.OpenBrowser {
 		go func() {
 			time.Sleep(500 * time.Millisecond)
@@ -156,7 +203,7 @@ func Run() {
 	}()
 
 	if cfg.OpenWindow {
-		runTrayApp(localURL, func() {
+		runTrayApp(localURL, desktopActivation, func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			_ = server.Shutdown(ctx)
@@ -181,13 +228,4 @@ func localManagementURL(addr string) string {
 		host = "127.0.0.1"
 	}
 	return "http://" + net.JoinHostPort(host, port) + "/"
-}
-func existingVisionRelayHealthy(localURL string) bool {
-	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(localURL + "healthz")
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }

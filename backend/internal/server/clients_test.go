@@ -45,6 +45,95 @@ func TestNormalizeClientRouteEnabled(t *testing.T) {
 	}
 }
 
+func TestConfigureEnabledClientRoutesRepairsCodexProvider(t *testing.T) {
+	home := t.TempDir()
+	codexDir := filepath.Join(home, ".codex")
+	t.Setenv("CODEX_HOME", codexDir)
+	if err := os.MkdirAll(codexDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(codexDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(`model_provider = "openai"
+
+[model_providers.custom]
+base_url = "http://old.invalid/v1"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := defaultConfig()
+	cfg.ClientRouteEnabled = map[string]bool{clientCodex: true}
+	cfg.ClientConfigPaths = map[string]string{clientCodex: configPath}
+	cfg.TextModelMappings = []textModelMapping{{Name: "gpt-test", Model: "upstream-test"}}
+	a := &app{cfg: cfg}
+
+	results, applyErrors := a.configureEnabledClientRoutes("http://127.0.0.1:8787/", home)
+	if len(applyErrors) != 0 {
+		t.Fatalf("route synchronization errors = %#v", applyErrors)
+	}
+	if len(results) != 1 || results[0].Client != clientCodex {
+		t.Fatalf("route synchronization results = %#v", results)
+	}
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := string(raw)
+	if !strings.Contains(config, `model_provider = "custom"`) ||
+		!strings.Contains(config, `base_url = "http://127.0.0.1:8787/v1"`) ||
+		strings.Contains(config, `model_provider = "openai"`) ||
+		strings.Count(config, "[model_providers.custom]") != 1 {
+		t.Fatalf("enabled Codex route was not repaired:\n%s", config)
+	}
+}
+
+func TestStartupRouteSyncPreservesCodexOfficialAuthAndSessionHistory(t *testing.T) {
+	home := t.TempDir()
+	codexDir := filepath.Join(home, ".codex")
+	sessionDir := filepath.Join(codexDir, "sessions")
+	t.Setenv("CODEX_HOME", codexDir)
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	configPath := filepath.Join(codexDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("model_provider = \"openai\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	authPath := filepath.Join(codexDir, "auth.json")
+	historyPath := filepath.Join(sessionDir, "session.jsonl")
+	authBefore := []byte(`{"tokens":{"access_token":"official-login"}}`)
+	historyBefore := []byte("{\"session\":\"unified-history\"}\n")
+	if err := os.WriteFile(authPath, authBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(historyPath, historyBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := defaultConfig()
+	cfg.PreserveCodexOfficialAuthOnSwitch = boolPtr(true)
+	cfg.UnifyCodexSessionHistory = true
+	cfg.ClientRouteEnabled = map[string]bool{clientCodex: true}
+	cfg.ClientConfigPaths = map[string]string{clientCodex: configPath}
+	cfg.TextModelMappings = []textModelMapping{{Name: "gpt-test", Model: "upstream-test"}}
+	a := &app{cfg: cfg}
+
+	results, applyErrors := a.configureEnabledClientRoutes("http://127.0.0.1:8787/", home)
+	if len(applyErrors) != 0 {
+		t.Fatalf("route synchronization errors = %#v", applyErrors)
+	}
+	if len(results) != 1 || results[0].Client != clientCodex {
+		t.Fatalf("route synchronization results = %#v", results)
+	}
+	assertFileBytes(t, authPath, authBefore)
+	assertFileBytes(t, historyPath, historyBefore)
+	got := a.currentConfig()
+	if !preserveCodexOfficialAuth(got) || !got.UnifyCodexSessionHistory {
+		t.Fatalf("Codex enhancement settings changed during route synchronization: %#v", got)
+	}
+}
+
 func TestHandleClientConfigureAppliesDesktopAndCLIPrograms(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
@@ -173,12 +262,13 @@ func TestWriteClientConfigs(t *testing.T) {
 	codexProject := string(codexProjectRaw)
 	if !strings.Contains(codexProject, `model = "z-ai/glm-5.2"`) ||
 		!strings.Contains(codexProject, `model_catalog_json = "vision-relay-model.json"`) ||
-		!strings.Contains(codexProject, `model_provider = "custom"`) ||
-		!strings.Contains(codexProject, `[model_providers.custom]`) ||
-		!strings.Contains(codexProject, `requires_openai_auth = true`) ||
-		!strings.Contains(codexProject, `sandbox = "unelevated"`) ||
-		!strings.Contains(codexProject, `base_url = "http://127.0.0.1:8787/v1"`) {
+		!strings.Contains(codexProject, `sandbox = "unelevated"`) {
 		t.Fatalf("bad codex project config:\n%s", codexProject)
+	}
+	for _, forbidden := range []string{"model_provider =", "[model_providers.", "requires_openai_auth =", "experimental_bearer_token =", "base_url ="} {
+		if strings.Contains(codexProject, forbidden) {
+			t.Fatalf("project config must not contain user-only Codex setting %q:\n%s", forbidden, codexProject)
+		}
 	}
 	catalogRaw, err := os.ReadFile(filepath.Join(projectDir, ".codex", "vision-relay-model.json"))
 	if err != nil {
@@ -1020,11 +1110,13 @@ func TestWriteCodexConfigReplacesPreviousRelayBlock(t *testing.T) {
 	project := string(projectRaw)
 	if !strings.Contains(project, `model = "new-model"`) ||
 		!strings.Contains(project, `model_catalog_json = "vision-relay-model.json"`) ||
-		!strings.Contains(project, `model_provider = "custom"`) ||
-		!strings.Contains(project, `requires_openai_auth = true`) ||
-		!strings.Contains(project, `sandbox = "unelevated"`) ||
-		!strings.Contains(project, `base_url = "http://new/v1"`) {
+		!strings.Contains(project, `sandbox = "unelevated"`) {
 		t.Fatalf("project codex model was not updated:\n%s", project)
+	}
+	for _, forbidden := range []string{"model_provider =", "[model_providers.", "requires_openai_auth =", "experimental_bearer_token =", "base_url ="} {
+		if strings.Contains(project, forbidden) {
+			t.Fatalf("project config must not contain user-only Codex setting %q:\n%s", forbidden, project)
+		}
 	}
 }
 
@@ -1083,8 +1175,8 @@ func TestWriteCodexConfigRepairsMisplacedRelayBlockAndDuplicateWindows(t *testin
 		t.Fatal(err)
 	}
 	project := string(projectRaw)
-	if strings.Count(project, "[windows]") != 1 || strings.Count(project, "model_provider =") != 1 || strings.Count(project, "model_catalog_json =") != 1 {
-		t.Fatalf("project config should be written idempotently:\n%s", project)
+	if strings.Count(project, "[windows]") != 1 || strings.Count(project, "model_provider =") != 0 || strings.Count(project, "model_catalog_json =") != 1 || strings.Contains(project, "[model_providers.") {
+		t.Fatalf("project config should be written idempotently without user-only provider settings:\n%s", project)
 	}
 }
 
@@ -1131,19 +1223,35 @@ func TestWriteCodexConfigTakesOverCCSwitchCustomProviderWithoutDuplicateKeys(t *
 	if _, err := writeCodexConfig(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{filepath.Join(codexDir, "config.toml"), filepath.Join(projectCodexDir, "config.toml")} {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
+	userPath := filepath.Join(codexDir, "config.toml")
+	userRaw, err := os.ReadFile(userPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := string(userRaw)
+	for _, key := range []string{"model =", "model_provider =", "model_catalog_json =", "disable_response_storage =", "model_reasoning_effort =", "web_search =", "[model_providers.custom]", "[windows]"} {
+		if strings.Count(user, key) != 1 {
+			t.Fatalf("%s should occur once in %s:\n%s", key, userPath, user)
 		}
-		after := string(raw)
-		for _, key := range []string{"model =", "model_provider =", "model_catalog_json =", "disable_response_storage =", "model_reasoning_effort =", "web_search =", "[model_providers.custom]", "[windows]"} {
-			if strings.Count(after, key) != 1 {
-				t.Fatalf("%s should occur once in %s:\n%s", key, path, after)
-			}
+	}
+	if strings.Contains(user, "15721") || strings.Contains(user, "cc-switch-model-catalog.json") || !strings.Contains(user, `base_url = "http://127.0.0.1:8787/v1"`) {
+		t.Fatalf("cc-switch provider was not replaced in %s:\n%s", userPath, user)
+	}
+
+	projectPath := filepath.Join(projectCodexDir, "config.toml")
+	projectRaw, err := os.ReadFile(projectPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := string(projectRaw)
+	for _, key := range []string{"model =", "model_catalog_json =", "disable_response_storage =", "model_reasoning_effort =", "web_search =", "[windows]"} {
+		if strings.Count(project, key) != 1 {
+			t.Fatalf("%s should occur once in %s:\n%s", key, projectPath, project)
 		}
-		if strings.Contains(after, "15721") || strings.Contains(after, "cc-switch-model-catalog.json") || !strings.Contains(after, `base_url = "http://127.0.0.1:8787/v1"`) {
-			t.Fatalf("cc-switch provider was not replaced in %s:\n%s", path, after)
+	}
+	for _, forbidden := range []string{"model_provider =", "[model_providers.", "requires_openai_auth =", "experimental_bearer_token =", "base_url =", "15721"} {
+		if strings.Contains(project, forbidden) {
+			t.Fatalf("project config retained user-only provider setting %q:\n%s", forbidden, project)
 		}
 	}
 }

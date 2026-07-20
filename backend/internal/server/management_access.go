@@ -30,7 +30,8 @@ func isManagementRequest(r *http.Request) bool {
 
 func isManagementAPIPath(path string) bool {
 	switch path {
-	case "/api/config",
+	case "/api/desktop/activate",
+		"/api/config",
 		"/api/dashboard",
 		"/api/update",
 		"/api/update/progress",

@@ -185,27 +185,32 @@ func (a *app) handleClientRoutesApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.currentConfig()
-	routes := normalizeClientRouteEnabled(cfg.ClientRouteEnabled)
-	origin := requestOrigin(r, cfg)
-	results := make([]clientRouteResult, 0, len(clientRouteOrder))
-	applyErrors := make([]string, 0)
-	for _, client := range clientRouteOrder {
-		if !routes[client] {
-			continue
-		}
-		result, configureErr := a.configureClientRoute(client, "", origin, home)
-		if configureErr != nil {
-			applyErrors = append(applyErrors, clientKeyName(client)+": "+configureErr.Error())
-			continue
-		}
-		results = append(results, result)
-	}
+	results, applyErrors := a.configureEnabledClientRoutes(requestOrigin(r, cfg), home)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               len(applyErrors) == 0,
 		"clients":          results,
 		"errors":           applyErrors,
 		"restart_required": len(results) > 0,
 	})
+}
+
+func (a *app) configureEnabledClientRoutes(origin, home string) ([]clientRouteResult, []string) {
+	cfg := a.currentConfig()
+	routes := normalizeClientRouteEnabled(cfg.ClientRouteEnabled)
+	results := make([]clientRouteResult, 0, len(clientRouteOrder))
+	applyErrors := make([]string, 0)
+	for _, client := range clientRouteOrder {
+		if !routes[client] {
+			continue
+		}
+		result, err := a.configureClientRoute(client, "", origin, home)
+		if err != nil {
+			applyErrors = append(applyErrors, clientKeyName(client)+": "+err.Error())
+			continue
+		}
+		results = append(results, result)
+	}
+	return results, applyErrors
 }
 
 func (a *app) configureClientRoute(client, workDir, origin, home string) (clientRouteResult, error) {
@@ -767,9 +772,26 @@ func writeCodexProjectConfig(ctx clientConfigContext) (string, error) {
 	}
 	lines = removeCodexRelayProjectConfig(lines)
 	lines = upsertWindowsSandbox(lines, "unelevated")
-	block := append(codexRelayConfigBlock(ctx, model), "")
+	block := append(codexProjectConfigBlock(ctx, model), "")
 	content := strings.TrimRight(strings.Join(append(block, lines...), "\n"), "\n") + "\n"
 	return path, writeConfigFile(path, []byte(content))
+}
+
+// codexProjectConfigBlock contains only settings that Codex permits in a
+// trusted project layer. Provider selection, provider definitions, and auth
+// must remain in the user-level config.toml; current Codex versions ignore
+// those keys in .codex/config.toml and emit a startup warning.
+func codexProjectConfigBlock(ctx clientConfigContext, model string) []string {
+	block := []string{
+		"# Added by Vision Relay. Provider and authentication stay in the user config.",
+		fmt.Sprintf("model = %q", model),
+		fmt.Sprintf("model_catalog_json = %q", codexModelCatalogFilename()),
+		`disable_response_storage = true`,
+	}
+	if effort := codexDefaultModelReasoningEffort(ctx); effort != "none" {
+		block = append(block, fmt.Sprintf("model_reasoning_effort = %q", effort))
+	}
+	return append(block, `web_search = "disabled"`)
 }
 
 func codexConfigModel(ctx clientConfigContext) string {
@@ -1182,7 +1204,7 @@ func restoreCodexAuth(homeDir string) error {
 }
 
 func codexAccountBlockFromLines(lines []string) []string {
-	if codexLinesContainRelayRootConfig(lines) {
+	if rootValueFromLines(lines, "model_provider") == codexProviderID && codexLinesContainRelayRootConfig(lines) {
 		return nil
 	}
 	providerID := ""

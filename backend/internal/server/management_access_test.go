@@ -50,7 +50,7 @@ func TestManagementAccessControl(t *testing.T) {
 }
 
 func TestManagementPathClassification(t *testing.T) {
-	for _, path := range []string{"/api/config", "/api/dashboard", "/api/models"} {
+	for _, path := range []string{"/api/desktop/activate", "/api/config", "/api/dashboard", "/api/models"} {
 		if !isManagementAPIPath(path) {
 			t.Fatalf("%s should be a management path", path)
 		}

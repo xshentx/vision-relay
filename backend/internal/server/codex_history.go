@@ -53,6 +53,22 @@ type codexHistoryResult struct {
 	Databases     int    `json:"databases"`
 }
 
+func reconcileCodexUnifiedHistory(cfg config, homeDir string) (codexHistoryResult, error) {
+	if !cfg.UnifyCodexSessionHistory {
+		return codexHistoryResult{}, nil
+	}
+	configUpdated, err := prepareCodexUnifiedOfficialConfig(homeDir)
+	if err != nil {
+		return codexHistoryResult{}, err
+	}
+	result, err := migrateCodexHistory(homeDir)
+	if err != nil {
+		return codexHistoryResult{}, err
+	}
+	result.ConfigUpdated = configUpdated
+	return result, nil
+}
+
 func (a *app) handleCodexHistory(w http.ResponseWriter, r *http.Request) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -106,8 +122,25 @@ func prepareCodexUnifiedOfficialConfig(homeDir string) (bool, error) {
 		return false, err
 	}
 	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
-	if codexLinesContainRelayRootConfig(lines) || rootValueFromLines(lines, "model_provider") != "openai" {
+	if rootValueFromLines(lines, "model_provider") != "openai" {
 		return false, nil
+	}
+	if codexLinesContainRelayRootConfig(lines) {
+		// Codex can switch the root provider back to openai while leaving the old
+		// Vision Relay block behind. Treat that as an official configuration and
+		// rebuild only the generated account block instead of requiring an off/on
+		// toggle to repair it.
+		accountBlock := codexAccountBlockFromLines(lines)
+		if len(accountBlock) == 0 {
+			return false, nil
+		}
+		accountBlock = codexUnifiedOpenAIAccountBlock(accountBlock)
+		lines = removeCodexRelayConfig(lines)
+		content := strings.TrimRight(strings.Join(append(append(accountBlock, ""), lines...), "\n"), "\n") + "\n"
+		if err := writeConfigFile(path, []byte(content)); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
 	lines = removeTomlSection(lines, "model_providers.custom")
 	inRoot := true
@@ -199,22 +232,33 @@ func codexHistoryStatus(homeDir string) (codexHistoryResult, error) {
 }
 
 func migrateCodexHistory(homeDir string) (codexHistoryResult, error) {
-	if result, err := codexHistoryStatus(homeDir); err != nil {
-		return codexHistoryResult{}, err
-	} else if result.HasBackup {
-		return result, nil
-	}
 	codexDir := codexConfigDir(homeDir)
-	backupDir := filepath.Join(codexHistoryBackupRoot(codexDir), time.Now().Format("20060102-150405.000000000"))
-	manifest := codexHistoryManifest{
-		Version:   codexHistoryManifestVersion,
-		CreatedAt: time.Now(),
-		CodexDir:  codexDir,
-	}
-	manifestPath := filepath.Join(backupDir, "manifest.json")
-	if err := writeCodexHistoryManifest(manifestPath, manifest); err != nil {
+	manifestPath, manifest, err := latestPendingCodexHistoryManifest(homeDir)
+	if err != nil {
 		return codexHistoryResult{}, err
 	}
+
+	createdManifest := manifestPath == ""
+	backupDir := ""
+	if createdManifest {
+		backupDir = filepath.Join(codexHistoryBackupRoot(codexDir), time.Now().Format("20060102-150405.000000000"))
+		manifest = codexHistoryManifest{
+			Version:   codexHistoryManifestVersion,
+			CreatedAt: time.Now(),
+			CodexDir:  codexDir,
+		}
+		manifestPath = filepath.Join(backupDir, "manifest.json")
+		if err := writeCodexHistoryManifest(manifestPath, manifest); err != nil {
+			return codexHistoryResult{}, err
+		}
+	} else {
+		// Keep the original pre-migration backups intact. Newly discovered official
+		// sessions get their own incremental snapshots and are appended to the same
+		// restore ledger, so an enabled setting can be reconciled repeatedly.
+		backupDir = filepath.Join(filepath.Dir(manifestPath), "increments", time.Now().Format("20060102-150405.000000000"))
+	}
+
+	changedAny := false
 	for _, rootName := range []string{"sessions", "archived_sessions"} {
 		root := filepath.Join(codexDir, rootName)
 		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -226,6 +270,7 @@ func migrateCodexHistory(homeDir string) (codexHistoryResult, error) {
 			}
 			backup, changed, err := migrateCodexSessionFile(codexDir, backupDir, path)
 			if changed {
+				changedAny = true
 				manifest.Sessions = append(manifest.Sessions, backup)
 				if manifestErr := writeCodexHistoryManifest(manifestPath, manifest); manifestErr != nil {
 					return manifestErr
@@ -243,6 +288,7 @@ func migrateCodexHistory(homeDir string) (codexHistoryResult, error) {
 	for index, dbPath := range codexStateDBPaths(codexDir) {
 		backup, changed, err := migrateCodexStateDB(backupDir, dbPath, index)
 		if changed {
+			changedAny = true
 			manifest.Databases = append(manifest.Databases, backup)
 			if manifestErr := writeCodexHistoryManifest(manifestPath, manifest); manifestErr != nil {
 				return codexHistoryResult{}, manifestErr
@@ -252,9 +298,12 @@ func migrateCodexHistory(homeDir string) (codexHistoryResult, error) {
 			return codexHistoryResult{}, err
 		}
 	}
-	if len(manifest.Sessions) == 0 && len(manifest.Databases) == 0 {
+	if !changedAny {
+		if createdManifest {
+			_ = os.RemoveAll(backupDir)
+			return codexHistoryResult{}, nil
+		}
 		_ = os.RemoveAll(backupDir)
-		return codexHistoryResult{}, nil
 	}
 	return codexHistoryResultFromManifest(manifestPath, manifest), nil
 }

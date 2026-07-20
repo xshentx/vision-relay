@@ -227,6 +227,46 @@ func TestPrepareCodexUnifiedOfficialConfigOnlyChangesOfficialProvider(t *testing
 		t.Fatalf("restoring provider removed unrelated config:\n%s", after)
 	}
 
+	staleRelayConfig := strings.Join([]string{
+		`# Added by Vision Relay. Edit from the Client Access page.`,
+		`model = "gpt-current"`,
+		`model_catalog_json = "vision-relay-model.json"`,
+		`model_provider = "openai"`,
+		`disable_response_storage = true`,
+		``,
+		`[model_providers.custom]`,
+		`name = "Vision Relay"`,
+		`base_url = "http://127.0.0.1:8787/v1"`,
+		``,
+		`[projects.'C:\\work']`,
+		`trust_level = "trusted"`,
+	}, "\n")
+	if err := os.WriteFile(configPath, []byte(staleRelayConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err = prepareCodexUnifiedOfficialConfig(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("official provider with stale relay config was not repaired")
+	}
+	raw, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after = string(raw)
+	for _, want := range []string{`model = "gpt-current"`, `model_provider = "custom"`, `name = "OpenAI"`, `[projects.'C:\\work']`} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("repaired config missing %s:\n%s", want, after)
+		}
+	}
+	for _, unwanted := range []string{`vision-relay-model.json`, `base_url = "http://127.0.0.1:8787/v1"`, `name = "Vision Relay"`} {
+		if strings.Contains(after, unwanted) {
+			t.Fatalf("repaired official config retained %s:\n%s", unwanted, after)
+		}
+	}
+
 	thirdPartyConfig := strings.Join([]string{
 		`# Added by Vision Relay. Edit from the Client Access page.`,
 		`model_provider = "custom"`,
@@ -258,6 +298,44 @@ func TestPrepareCodexUnifiedOfficialConfigOnlyChangesOfficialProvider(t *testing
 	}
 	if restored {
 		t.Fatal("third-party config must not be restored as official")
+	}
+}
+
+func TestReconcileCodexUnifiedHistoryAppliesPersistedEnabledSetting(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	codexDir := filepath.Join(homeDir, ".codex")
+	sessionPath := filepath.Join(codexDir, "sessions", "session.jsonl")
+	if err := os.MkdirAll(filepath.Dir(sessionPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte("model = \"gpt-5.5\"\nmodel_provider = \"openai\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sessionPath, []byte(`{"type":"session_meta","payload":{"id":"official-session","model_provider":"openai"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := reconcileCodexUnifiedHistory(config{UnifyCodexSessionHistory: true}, homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.ConfigUpdated || result.Sessions != 1 || !result.HasBackup {
+		t.Fatalf("unexpected reconciliation result: %#v", result)
+	}
+	configRaw, err := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(configRaw), `model_provider = "custom"`) || !strings.Contains(string(configRaw), codexUnifiedHistoryMarker) {
+		t.Fatalf("persisted enabled setting did not prepare official config:\n%s", configRaw)
+	}
+	sessionRaw, err := os.ReadFile(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providers := codexSessionProviders(t, sessionRaw); providers["official-session"] != "custom" {
+		t.Fatalf("persisted enabled setting did not migrate official history: %#v", providers)
 	}
 }
 
@@ -312,10 +390,11 @@ func TestCodexHistoryMigrationRestoresOnlyRecordedIDs(t *testing.T) {
 		t.Fatalf("official session was not migrated: %s", afterMigration)
 	}
 	newCustomLine := `{"type":"session_meta","payload":{"id":"new-custom","model_provider":"custom"}}`
+	laterOfficialLine := `{"type":"session_meta","payload":{"id":"later-official","model_provider":"openai"}}`
 	if file, err := os.OpenFile(sessionPath, os.O_APPEND|os.O_WRONLY, 0o600); err != nil {
 		t.Fatal(err)
 	} else {
-		if _, err := file.WriteString(newCustomLine + "\n"); err != nil {
+		if _, err := file.WriteString(newCustomLine + "\n" + laterOfficialLine + "\n"); err != nil {
 			file.Close()
 			t.Fatal(err)
 		}
@@ -327,7 +406,7 @@ func TestCodexHistoryMigrationRestoresOnlyRecordedIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO threads(id, model_provider) VALUES ('new-custom-thread', 'custom')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO threads(id, model_provider) VALUES ('new-custom-thread', 'custom'), ('later-official-thread', 'openai')`); err != nil {
 		db.Close()
 		t.Fatal(err)
 	}
@@ -335,11 +414,26 @@ func TestCodexHistoryMigrationRestoresOnlyRecordedIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	incremental, err := migrateCodexHistory(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incremental.ManifestPath != result.ManifestPath || incremental.Sessions != 2 || incremental.Threads != 2 {
+		t.Fatalf("unexpected incremental migration result: %#v", incremental)
+	}
+	afterIncremental, err := os.ReadFile(sessionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if providers := codexSessionProviders(t, afterIncremental); providers["later-official"] != "custom" {
+		t.Fatalf("later official session was not incrementally migrated: %#v", providers)
+	}
+
 	restored, err := restoreCodexHistory(homeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.HasBackup || restored.Sessions != 1 || restored.Threads != 1 {
+	if restored.HasBackup || restored.Sessions != 2 || restored.Threads != 2 {
 		t.Fatalf("unexpected restore result: %#v", restored)
 	}
 	afterRestore, err := os.ReadFile(sessionPath)
@@ -347,7 +441,7 @@ func TestCodexHistoryMigrationRestoresOnlyRecordedIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	providers := codexSessionProviders(t, afterRestore)
-	if providers["official-session"] != "openai" || providers["existing-custom"] != "custom" || providers["new-custom"] != "custom" {
+	if providers["official-session"] != "openai" || providers["later-official"] != "openai" || providers["existing-custom"] != "custom" || providers["new-custom"] != "custom" {
 		t.Fatalf("sessions were not precisely restored: %#v", providers)
 	}
 	db, err = sql.Open("sqlite", dbPath)
@@ -357,6 +451,7 @@ func TestCodexHistoryMigrationRestoresOnlyRecordedIDs(t *testing.T) {
 	defer db.Close()
 	for id, want := range map[string]string{
 		"official-thread":        "openai",
+		"later-official-thread":  "openai",
 		"existing-custom-thread": "custom",
 		"new-custom-thread":      "custom",
 	} {
