@@ -1,5 +1,172 @@
 ﻿(() => {
   const {createApp, reactive} = Vue;
+  const selectBindings = new WeakMap();
+  const emptySelectValue = "__vision_relay_empty_option__";
+
+  function componentSelectValue(value) {
+    return value === "" ? emptySelectValue : value;
+  }
+
+  function nativeSelectValue(value) {
+    return value === emptySelectValue ? "" : value;
+  }
+
+  function readSelectOptions(select) {
+    return [...select.options].map((option, index) => ({
+      key: `${option.value}\u0000${index}`,
+      value: componentSelectValue(option.value),
+      label: option.textContent || option.label || option.value,
+      disabled: option.disabled
+    }));
+  }
+
+  function readSelectValue(select) {
+    if (select.multiple) {
+      return [...select.selectedOptions].map((option) => componentSelectValue(option.value));
+    }
+    return componentSelectValue(select.value);
+  }
+
+  function enhanceSelect(select) {
+    if (!(select instanceof HTMLSelectElement) || selectBindings.has(select)) return;
+
+    const originalAriaHidden = select.getAttribute("aria-hidden");
+    const originalTabIndex = select.getAttribute("tabindex");
+    const mount = document.createElement("span");
+    mount.className = "vr-component-select";
+    if (select.dataset.selectCompact === "true" || select.closest(".model-mapping-row")) {
+      mount.classList.add("compact");
+    }
+    if (select.multiple) mount.classList.add("multiple");
+    select.insertAdjacentElement("afterend", mount);
+    select.classList.add("vr-native-select");
+    select.setAttribute("aria-hidden", "true");
+    select.tabIndex = -1;
+
+    const state = reactive({
+      value: readSelectValue(select),
+      options: readSelectOptions(select),
+      disabled: select.disabled,
+      multiple: select.multiple,
+      filterable: select.multiple || select.dataset.selectSearch === "true",
+      placeholder: select.dataset.selectPlaceholder || "请选择",
+      appendTo: select.closest("dialog") || document.body
+    });
+
+    const sync = () => {
+      state.options = readSelectOptions(select);
+      state.value = readSelectValue(select);
+      state.disabled = select.disabled;
+      state.multiple = select.multiple;
+      state.filterable = select.multiple || select.dataset.selectSearch === "true";
+    };
+
+    const commit = (value) => {
+      if (select.multiple) {
+        const values = new Set(Array.isArray(value) ? value.map((item) => nativeSelectValue(String(item))) : []);
+        [...select.options].forEach((option) => {
+          option.selected = values.has(option.value);
+        });
+      } else {
+        select.value = value == null ? "" : nativeSelectValue(String(value));
+      }
+      select.dispatchEvent(new Event("input", {bubbles: true}));
+      select.dispatchEvent(new Event("change", {bubbles: true}));
+    };
+
+    const selectApp = createApp({
+      setup() {
+        return {state, commit, sync};
+      },
+      template: `
+        <el-select
+          v-model="state.value"
+          class="vr-el-select"
+          popper-class="vr-component-select-popper"
+          :multiple="state.multiple"
+          :filterable="state.filterable"
+          :disabled="state.disabled"
+          :placeholder="state.placeholder"
+          :append-to="state.appendTo"
+          :collapse-tags="false"
+          @visible-change="sync"
+          @change="commit"
+        >
+          <el-option
+            v-for="option in state.options"
+            :key="option.key"
+            :label="option.label"
+            :value="option.value"
+            :disabled="option.disabled"
+          />
+        </el-select>
+      `
+    });
+    selectApp.use(ElementPlus);
+    selectApp.mount(mount);
+
+    let queued = false;
+    const queueSync = () => {
+      if (queued) return;
+      queued = true;
+      queueMicrotask(() => {
+        queued = false;
+        sync();
+      });
+    };
+    const observer = new MutationObserver(queueSync);
+    observer.observe(select, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["disabled", "label", "selected", "value"]
+    });
+    select.addEventListener("change", sync);
+    selectBindings.set(select, {
+      sync,
+      observer,
+      selectApp,
+      mount,
+      originalAriaHidden,
+      originalTabIndex
+    });
+  }
+
+  function enhanceSelects(root = document) {
+    if (root instanceof HTMLSelectElement) enhanceSelect(root);
+    root.querySelectorAll?.("select").forEach(enhanceSelect);
+  }
+
+  function destroySelect(select) {
+    const binding = selectBindings.get(select);
+    if (!binding) return;
+
+    binding.observer.disconnect();
+    select.removeEventListener("change", binding.sync);
+    binding.selectApp.unmount();
+    binding.mount.remove();
+    select.classList.remove("vr-native-select");
+    if (binding.originalAriaHidden == null) {
+      select.removeAttribute("aria-hidden");
+    } else {
+      select.setAttribute("aria-hidden", binding.originalAriaHidden);
+    }
+    if (binding.originalTabIndex == null) {
+      select.removeAttribute("tabindex");
+    } else {
+      select.setAttribute("tabindex", binding.originalTabIndex);
+    }
+    selectBindings.delete(select);
+  }
+
+  function destroySelects(root) {
+    if (root instanceof HTMLSelectElement) destroySelect(root);
+    root.querySelectorAll?.("select").forEach(destroySelect);
+  }
+
+  function syncSelect(select) {
+    selectBindings.get(select)?.sync();
+  }
 
   const state = reactive({
     visible: false,
@@ -55,6 +222,8 @@
 
       window.VisionRelayUI = {
         confirm: confirmDialog,
+        enhanceSelects,
+        syncSelect,
         notify(message, type = "info") {
           ElementPlus.ElMessage({
             message: String(message || ""),
@@ -122,4 +291,17 @@
 
   app.use(ElementPlus);
   app.mount("#componentLayer");
+
+  enhanceSelects();
+  const selectObserver = new MutationObserver((records) => {
+    records.forEach((record) => {
+      record.removedNodes.forEach((node) => {
+        if (node instanceof Element && !node.isConnected) destroySelects(node);
+      });
+      record.addedNodes.forEach((node) => {
+        if (node instanceof Element) enhanceSelects(node);
+      });
+    });
+  });
+  selectObserver.observe(document.body, {childList: true, subtree: true});
 })();

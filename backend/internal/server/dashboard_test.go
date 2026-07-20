@@ -73,12 +73,47 @@ func TestDashboardSeriesSeparatesSameModelAcrossSuppliers(t *testing.T) {
 func TestDashboardPeriodRangeUsesCalendarBoundaries(t *testing.T) {
 	location := time.FixedZone("CST", 8*60*60)
 	now := time.Date(2026, time.July, 20, 12, 30, 0, 0, location)
-	start, end := dashboardPeriodRange("month", now)
-	if start.Day() != 1 || start.Month() != time.July || end.Day() != 1 || end.Month() != time.August {
-		t.Fatalf("unexpected month range: %s - %s", start, end)
+	start, end := dashboardPeriodRange("30d", now)
+	if start != time.Date(2026, time.June, 21, 0, 0, 0, 0, location) ||
+		end != time.Date(2026, time.July, 21, 0, 0, 0, 0, location) {
+		t.Fatalf("unexpected 30-day range: %s - %s", start, end)
 	}
-	if got := len(newDashboardBuckets("month", start, end)); got != 31 {
-		t.Fatalf("month bucket count = %d, want 31", got)
+	if got := len(newDashboardBuckets("30d", start, end)); got != 30 {
+		t.Fatalf("30-day bucket count = %d, want 30", got)
+	}
+}
+
+func TestDashboardAllPeriodUsesMonthlyBucketsFromFirstMatchingLog(t *testing.T) {
+	location := time.FixedZone("CST", 8*60*60)
+	now := time.Date(2026, time.July, 20, 12, 30, 0, 0, location)
+	logs := []requestLog{
+		{At: time.Date(2025, time.December, 3, 9, 0, 0, 0, location), UpstreamName: "Other"},
+		{At: time.Date(2026, time.January, 15, 9, 0, 0, 0, location), UpstreamName: "GPT"},
+		{At: time.Date(2026, time.July, 20, 9, 0, 0, 0, location), UpstreamName: "GPT"},
+	}
+	query := dashboardQuery{Period: "all", Supplier: "GPT"}
+	start := dashboardAllPeriodStart(logs, query, now)
+	_, end := dashboardPeriodRange("all", now)
+	if start != time.Date(2026, time.January, 1, 0, 0, 0, 0, location) {
+		t.Fatalf("all-period start = %s, want 2026-01-01", start)
+	}
+	buckets := newDashboardBuckets("all", start, end)
+	if len(buckets) != 7 || buckets[0].Key != "2026-01" || buckets[6].Key != "2026-07" {
+		t.Fatalf("unexpected all-period buckets: %#v", buckets)
+	}
+	if got := dashboardBucketIndex("all", start, logs[2].At); got != 6 {
+		t.Fatalf("all-period bucket index = %d, want 6", got)
+	}
+}
+
+func TestNormalizedDashboardPeriodSupportsCurrentOptions(t *testing.T) {
+	for _, period := range []string{"day", "7d", "30d", "all"} {
+		if got := normalizedDashboardPeriod(period); got != period {
+			t.Fatalf("normalized period = %q, want %q", got, period)
+		}
+	}
+	if got := normalizedDashboardPeriod("month"); got != "day" {
+		t.Fatalf("legacy month period = %q, want day fallback", got)
 	}
 }
 
@@ -125,7 +160,7 @@ func TestDashboardDataUsesSQLiteRangeAndLifetimeQueries(t *testing.T) {
 	defer db.Close()
 	now := time.Now()
 	for _, log := range []requestLog{
-		{At: now.Add(-time.Hour), UpstreamName: "GPT", Model: "current", Status: 200, InputTokens: 4, OutputTokens: 2, TotalTokens: 6},
+		{At: now.Add(-time.Minute), UpstreamName: "GPT", Model: "current", Status: 200, InputTokens: 4, OutputTokens: 2, TotalTokens: 6},
 		{At: now.AddDate(0, 0, -10), UpstreamName: "GPT", Model: "older", Status: 200, InputTokens: 3, OutputTokens: 1, TotalTokens: 4},
 	} {
 		if err := insertRequestLogDB(db, log); err != nil {
@@ -144,5 +179,49 @@ func TestDashboardDataUsesSQLiteRangeAndLifetimeQueries(t *testing.T) {
 	}
 	if len(options.Models) != 2 || len(options.Suppliers) != 1 {
 		t.Fatalf("unexpected options: %#v", options)
+	}
+}
+
+func TestBuildDashboardAllResponseDBAggregatesWithoutLoadingRawLogs(t *testing.T) {
+	db, err := openAppDB(filepath.Join(t.TempDir(), "dashboard-all.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	currentMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	previousMonthStart := currentMonthStart.AddDate(0, -1, 0)
+	for _, log := range []requestLog{
+		{At: previousMonthStart.Add(12 * time.Hour), UpstreamName: "GPT", Model: "gpt-5.6", Status: 502, DurationMS: 500, InputTokens: 40, OutputTokens: 10, TotalTokens: 50},
+		{At: todayStart.Add(12 * time.Hour), UpstreamName: "GPT", Model: "gpt-5.6", Status: 200, DurationMS: 1000, FirstTokenMS: 200, InputTokens: 70, OutputTokens: 30, TotalTokens: 100, CacheHitTokens: 20},
+		{At: todayStart.Add(13 * time.Hour), UpstreamName: "Claude", Model: "claude-opus", Status: 200, TotalTokens: 999},
+	} {
+		if err := insertRequestLogDB(db, log); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	query := dashboardQuery{Period: "all", Supplier: "GPT"}
+	start, end := dashboardPeriodRange(query.Period, now)
+	response, err := buildDashboardAllResponseDB(db, query, now, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Summary.LifetimeTokens != 150 || response.Summary.PeriodTokens != 150 || response.Summary.TodayTokens != 100 {
+		t.Fatalf("unexpected token summary: %#v", response.Summary)
+	}
+	if response.Summary.Requests != 2 || response.Summary.Failures != 1 || response.Summary.AverageMS != 750 || response.Summary.AverageFirstMS != 200 {
+		t.Fatalf("unexpected request summary: %#v", response.Summary)
+	}
+	if len(response.Series) != 2 || response.Series[0].TotalTokens != 50 || response.Series[1].TotalTokens != 100 {
+		t.Fatalf("unexpected monthly series: %#v", response.Series)
+	}
+	if len(response.Models) != 1 || response.Models[0].TotalTokens != 150 || response.Models[0].Requests != 2 {
+		t.Fatalf("unexpected model usage: %#v", response.Models)
+	}
+	if len(response.Options.Suppliers) != 2 || len(response.Options.Models) != 1 {
+		t.Fatalf("unexpected filter options: %#v", response.Options)
 	}
 }

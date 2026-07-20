@@ -102,6 +102,7 @@ func Run() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/config", a.handleConfig)
 	mux.HandleFunc("/api/update", a.handleUpdate)
+	mux.HandleFunc("/api/update/progress", a.handleUpdateProgress)
 	mux.HandleFunc("/api/client/configure", a.handleClientConfigure)
 	mux.HandleFunc("/api/client/routes/apply", a.handleClientRoutesApply)
 	mux.HandleFunc("/api/client/restore", a.handleClientRestore)

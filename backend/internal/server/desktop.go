@@ -26,7 +26,6 @@ func runClientWindow(rawURL string) {
 	w := webview.New(false)
 	defer w.Destroy()
 	w.SetTitle(appDisplayName)
-	setNativeWindowIcon(w.Window())
 	w.SetSize(1180, 820, webview.HintNone)
 	w.Navigate(rawURL)
 	w.Run()

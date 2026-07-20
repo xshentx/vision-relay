@@ -84,11 +84,16 @@ func TestLocalAPIHasNoTokenManagement(t *testing.T) {
 	for _, expected := range []string{
 		`<strong class="log-model">${escapeHTML(log.model || "未知模型")}</strong>`,
 		`<span class="log-supplier">供应商 ${escapeHTML(formatUpstream(log))}</span>`,
-		`<span class="log-mode ${formatRequestMode(log).className}">${formatRequestMode(log).label}</span>`,
-		`<div class="log-token-grid">`,
+		`<span class="log-mode ${requestMode.className}">${requestMode.label}</span>`,
+		`<time class="log-time"`,
+		`<div class="log-details">`,
+		`<code class="log-endpoint">`,
+		`<div class="log-metrics">`,
 		`formatRequestMode(log)`,
+		`return {className: "unknown", label: "未知"};`,
+		`formatLogTimestamp(log.at)`,
 		`formatFirstTokenDuration(log.first_token_ms)`,
-		`<span class="log-duration-label">总耗时</span>`,
+		`renderLogMetric("总耗时", formatLogDuration(log.duration_ms))`,
 		`formatLogDuration(log.duration_ms)`,
 	} {
 		if !strings.Contains(script, expected) {
@@ -107,7 +112,7 @@ func TestLocalAPIHasNoTokenManagement(t *testing.T) {
 		t.Fatal(err)
 	}
 	style := string(styleRaw)
-	for _, expected := range []string{".log-item::before", ".log-item.failed::before", ".log-mode.stream", ".log-token-grid", ".log-duration-icon"} {
+	for _, expected := range []string{".log-item::before", ".log-item.failed::before", ".log-mode.stream", ".log-mode.sync", ".log-details", ".log-metrics", ".layout > .standard-page.active"} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("request log style %q is missing", expected)
 		}
@@ -330,7 +335,17 @@ func TestUpdateUIIsEmbedded(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := string(indexRaw)
-	for _, id := range []string{"update", "checkUpdate", "installUpdate", "currentVersion", "latestVersion"} {
+	for _, id := range []string{
+		"update",
+		"checkUpdate",
+		"installUpdate",
+		"currentVersion",
+		"latestVersion",
+		"autoCheckUpdates",
+		"updateProgressPanel",
+		"updateProgressBar",
+		"updateProgressPercent",
+	} {
 		if !strings.Contains(index, `id="`+id+`"`) {
 			t.Fatalf("update UI element %q is missing", id)
 		}
@@ -347,8 +362,72 @@ func TestUpdateUIIsEmbedded(t *testing.T) {
 	if !strings.Contains(script, `fetch("/api/update"`) || !strings.Contains(script, `method: "POST"`) {
 		t.Fatal("update UI is not wired to the update API")
 	}
+	for _, expected := range []string{
+		`fetch("/api/update/progress", {cache: "no-store"})`,
+		`updatePromptedVersion !== info.latest_version`,
+		`title: ` + "`发现新版本 ${info.latest_version}`",
+		`renderUpdateProgress`,
+		`scheduleUpdateProgressPoll`,
+		`if (res.status === 409 && result?.progress)`,
+		`renderUpdateProgress(result.progress);`,
+		`let updateInstallAvailable = false;`,
+		`installUpdateButton.disabled = active || !updateInstallAvailable;`,
+		`scheduleUpdateProgressPoll(1000);`,
+		`data.auto_check_updates = programSettings.autoCheckUpdates;`,
+		`programSettings.autoCheckUpdates`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("update progress behavior %q is missing", expected)
+		}
+	}
 	if strings.Contains(index, "???") || strings.Contains(script, "???") {
 		t.Fatal("update UI contains question-mark mojibake")
+	}
+}
+
+func TestSelectsUseComponentEnhancement(t *testing.T) {
+	componentRaw, err := fs.ReadFile(FS, "assets/js/ui-components.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	componentScript := string(componentRaw)
+	for _, expected := range []string{
+		`function enhanceSelect(select)`,
+		`root.querySelectorAll?.("select").forEach(enhanceSelect);`,
+		`<el-select`,
+		`popper-class="vr-component-select-popper"`,
+		`:append-to="state.appendTo"`,
+		`appendTo: select.closest("dialog") || document.body`,
+		`select.dispatchEvent(new Event("change", {bubbles: true}));`,
+		`function destroySelect(select)`,
+		`binding.selectApp.unmount();`,
+		`record.removedNodes.forEach`,
+		`selectObserver.observe(document.body, {childList: true, subtree: true});`,
+	} {
+		if !strings.Contains(componentScript, expected) {
+			t.Fatalf("component select behavior %q is missing", expected)
+		}
+	}
+	if strings.Contains(componentScript, "vr-select-prefix") {
+		t.Fatal("component selects must not render letter prefix icons")
+	}
+
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := string(styleRaw)
+	for _, expected := range []string{
+		`.vr-native-select {`,
+		`.vr-component-select .el-select__wrapper {`,
+		`.vr-component-select-popper .el-select-dropdown__item.is-selected::after {`,
+		`content: "✓";`,
+		`.update-auto-check {`,
+		`margin: 0;`,
+	} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("component select style %q is missing", expected)
+		}
 	}
 }
 
@@ -432,27 +511,30 @@ func TestBusinessPagesUseCommonLayout(t *testing.T) {
 	}
 	index := string(indexRaw)
 	expectedOpenings := map[string]string{
-		"text":     `<section class="page panel standard-page span-12" id="text"`,
-		"vision":   `<section class="page panel standard-page span-12" id="vision"`,
-		"access":   `<section class="page panel standard-page access-page span-12" id="access"`,
-		"settings": `<section class="page panel standard-page settings-page span-12" id="settings"`,
-		"logs":     `<section class="page panel standard-page span-12" id="logs"`,
-		"update":   `<section class="page panel standard-page span-12" id="update"`,
+		"text":     `<section class="page standard-page span-12" id="text"`,
+		"vision":   `<section class="page standard-page span-12" id="vision"`,
+		"access":   `<section class="page standard-page access-page span-12" id="access"`,
+		"settings": `<section class="page standard-page settings-page span-12" id="settings"`,
+		"logs":     `<section class="page standard-page span-12" id="logs"`,
+		"update":   `<section class="page standard-page span-12" id="update"`,
 	}
 	if strings.Contains(index, `id="playground"`) || strings.Contains(index, `data-target-page="playground"`) {
 		t.Fatal("playground page and shortcuts should be removed")
 	}
 	for page, opening := range expectedOpenings {
 		if !strings.Contains(index, opening) {
-			t.Errorf("%s page does not use the common full-width panel layout", page)
+			t.Errorf("%s page does not use the common dashboard-style layout", page)
 		}
 	}
-	if strings.Contains(index, `class="page panel span-7"`) || strings.Contains(index, `class="page-heading`) {
-		t.Fatal("legacy narrow or standalone page layout remains")
+	if strings.Contains(index, `class="page panel standard-page`) || strings.Contains(index, `class="page panel span-7"`) || strings.Contains(index, `class="page-heading`) {
+		t.Fatal("legacy outer page card or narrow layout remains")
 	}
-	for _, heading := range []string{`class="panel-head access-page-heading"`, `class="panel-head settings-page-heading"`} {
+	if strings.Contains(index, `id="visionModelHint"`) || strings.Contains(index, "不要使用 llama-guard") {
+		t.Fatal("obsolete vision model warning remains")
+	}
+	for _, heading := range []string{`class="dashboard-heading access-page-heading"`, `class="dashboard-heading settings-page-heading"`} {
 		if !strings.Contains(index, heading) {
-			t.Errorf("common page heading %q is missing", heading)
+			t.Errorf("dashboard-style page heading %q is missing", heading)
 		}
 	}
 
@@ -508,8 +590,8 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 	for _, expected := range []string{
 		`data-page="settings"`,
 		`data-page-panel="settings"`,
-		`class="page panel standard-page settings-page span-12"`,
-		`class="panel-head settings-page-heading"`,
+		`class="page standard-page settings-page span-12"`,
+		`class="dashboard-heading settings-page-heading"`,
 		`<h3>设置</h3>`,
 		`id="settingsLocalAPIEnabled"`,
 		`id="settingsAPIHost"`,
@@ -668,6 +750,10 @@ func TestDashboardAssetsAreEmbedded(t *testing.T) {
 	for _, expected := range []string{
 		`data-page="dashboard"`,
 		`data-page-panel="dashboard"`,
+		`data-dashboard-period="day">今日</button>`,
+		`data-dashboard-period="7d">近7天</button>`,
+		`data-dashboard-period="30d">近30天</button>`,
+		`data-dashboard-period="all">全部</button>`,
 		`id="dashboardSupplier"`,
 		`id="dashboardModel"`,
 		`id="dashboardTokenChart"`,
@@ -689,6 +775,8 @@ func TestDashboardAssetsAreEmbedded(t *testing.T) {
 		`dashboardRequestController?.abort();`,
 		`if (requestSequence !== dashboardRequestSequence) return;`,
 		`if (err?.name === "AbortError") return;`,
+		`"30d": "近30天统计"`,
+		`all: "全部统计"`,
 		`bucket.models?.[model.series_key]`,
 		`data-dashboard-chart-mode`,
 		`renderDashboardTokenTrend`,

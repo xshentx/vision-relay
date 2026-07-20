@@ -119,12 +119,20 @@ const homeVisionProvider = document.querySelector("#homeVisionProvider");
 const homeTextProfile = document.querySelector("#homeTextProfile");
 const homeVisionProfile = document.querySelector("#homeVisionProfile");
 const homeProxyState = document.querySelector("#homeProxyState");
+const autoCheckUpdates = document.querySelector("#autoCheckUpdates");
 const checkUpdateButton = document.querySelector("#checkUpdate");
 const installUpdateButton = document.querySelector("#installUpdate");
 const currentVersionEl = document.querySelector("#currentVersion");
 const latestVersionEl = document.querySelector("#latestVersion");
 const updatePublishedAt = document.querySelector("#updatePublishedAt");
 const updateState = document.querySelector("#updateState");
+const updateProgressPanel = document.querySelector("#updateProgressPanel");
+const updateProgressTitle = document.querySelector("#updateProgressTitle");
+const updateProgressDetail = document.querySelector("#updateProgressDetail");
+const updateProgressPercent = document.querySelector("#updateProgressPercent");
+const updateProgressBar = document.querySelector("#updateProgressBar");
+const updateProgressBytes = document.querySelector("#updateProgressBytes");
+const updateProgressState = document.querySelector("#updateProgressState");
 const updateNotes = document.querySelector("#updateNotes");
 const releaseLink = document.querySelector("#releaseLink");
 const serviceCard = document.querySelector("#serviceCard");
@@ -142,6 +150,7 @@ let clientRouteEnabled = normalizeClientRoutes({});
 let programSettings = {
   addr: "127.0.0.1:8787",
   localAPIEnabled: true,
+  autoCheckUpdates: true,
   openWindow: true,
   openBrowser: false,
   clientConfigPaths: {},
@@ -165,6 +174,10 @@ let dashboardModelFilter = "";
 let dashboardPayload = null;
 let dashboardRequestSequence = 0;
 let dashboardRequestController = null;
+let updateProgressTimer = 0;
+let updatePromptedVersion = "";
+let lastUpdateProgressState = "idle";
+let updateInstallAvailable = false;
 
 const endpoints = {
   openaiBaseEndpoint: `${location.origin}/v1`,
@@ -260,6 +273,10 @@ function showToast(message, type = "info") {
   }, 3200);
 }
 
+function syncComponentSelect(select) {
+  window.VisionRelayUI?.syncSelect?.(select);
+}
+
 async function confirmAction(options) {
   if (window.VisionRelayUI?.confirm) {
     return await window.VisionRelayUI.confirm(options);
@@ -339,6 +356,7 @@ function syncLocalAPIWarning() {
 function syncProgramSettingsInputs() {
   const address = splitListenAddress(programSettings.addr);
   if (settingsLocalAPIEnabled) settingsLocalAPIEnabled.checked = programSettings.localAPIEnabled;
+  if (autoCheckUpdates) autoCheckUpdates.checked = programSettings.autoCheckUpdates;
   syncLocalAPIWarning();
   if (settingsAPIHost) settingsAPIHost.value = address.host;
   if (settingsAPIPort) settingsAPIPort.value = address.port || "8787";
@@ -375,6 +393,7 @@ async function loadConfig() {
   programSettings = {
     addr: cfg.addr || "127.0.0.1:8787",
     localAPIEnabled: cfg.local_api_enabled !== false,
+    autoCheckUpdates: cfg.auto_check_updates !== false,
     openWindow: cfg.open_window !== false,
     openBrowser: cfg.open_browser === true,
     clientConfigPaths: normalizeClientConfigPaths(cfg.client_config_paths),
@@ -644,6 +663,7 @@ async function persistConfig(successMessage = "配置已自动保存") {
   const data = {};
   data.addr = programSettings.addr;
   data.local_api_enabled = programSettings.localAPIEnabled;
+  data.auto_check_updates = programSettings.autoCheckUpdates;
   data.client_config_paths = normalizeClientConfigPaths(programSettings.clientConfigPaths);
   data.client_program_paths = normalizeClientProgramPaths(programSettings.clientProgramPaths);
   data.client_auto_restart = normalizeClientBehavior(programSettings.clientAutoRestart, true);
@@ -1026,7 +1046,7 @@ function renderDashboard(payload) {
   setDashboardText("dashboardAverageFirst", formatDashboardDuration(summary.average_first_token_ms));
   setDashboardText("dashboardAverageDuration", formatDashboardDuration(summary.average_duration_ms));
   setDashboardText("dashboardUpdatedAt", `更新于 ${new Date(payload.generated_at).toLocaleString()}`);
-  const periodLabels = {day: "当日统计", "7d": "近 7 天统计", month: "本月统计"};
+  const periodLabels = {day: "今日统计", "7d": "近7天统计", "30d": "近30天统计", all: "全部统计"};
   setDashboardText("dashboardPeriodLabel", periodLabels[payload.period] || "周期统计");
   renderDashboardTokenTrend(payload);
   renderDashboardComposition(summary);
@@ -1053,6 +1073,7 @@ function fillDashboardSelect(select, values, allLabel, selectedValue) {
   });
   select.replaceChildren(fragment);
   select.value = selectedValue;
+  syncComponentSelect(select);
 }
 
 function setDashboardText(id, value) {
@@ -1351,32 +1372,31 @@ function renderLogs(logs) {
     const status = Number(log.status || 0);
     const failed = status >= 400 || Boolean(log.error);
     const usageAvailable = hasTokenUsage(log);
+    const requestMode = formatRequestMode(log);
     const statusText = status > 0 ? `${status} ${failed ? "失败" : "成功"}` : "状态未知";
     item.className = `log-item ${failed ? "failed" : "succeeded"}`;
     item.innerHTML = `
       <div class="log-head">
-        <div class="log-identity">
+        <div class="log-primary">
           <strong class="log-model">${escapeHTML(log.model || "未知模型")}</strong>
-          <div class="log-meta">
-            <span class="log-supplier">供应商 ${escapeHTML(formatUpstream(log))}</span>
-            <span class="log-mode ${formatRequestMode(log).className}">${formatRequestMode(log).label}</span>
-            <span class="log-meta-separator" aria-hidden="true">·</span>
-            <span>${escapeHTML(new Date(log.at).toLocaleString())}</span>
-            <span class="log-meta-separator" aria-hidden="true">·</span>
-            <span>${escapeHTML(log.method || "")} ${escapeHTML(log.path || "")}</span>
-          </div>
+          <span class="log-supplier">供应商 ${escapeHTML(formatUpstream(log))}</span>
+          <span class="log-mode ${requestMode.className}">${requestMode.label}</span>
+          <span class="log-meta-separator" aria-hidden="true">·</span>
+          <time class="log-time" datetime="${escapeHTML(log.at || "")}">${escapeHTML(formatLogTimestamp(log.at))}</time>
         </div>
         <em class="${failed ? "log-status error" : "log-status"}">${escapeHTML(statusText)}</em>
       </div>
-      <div class="log-token-grid">
-        ${renderLogMetric("输入", formatTokenUsage(log.input_tokens, usageAvailable))}
-        ${renderLogMetric("输出", formatTokenUsage(log.output_tokens, usageAvailable))}
-        ${renderLogMetric("总计", formatTokenUsage(log.total_tokens, usageAvailable))}
-        ${renderLogMetric("缓存命中", formatTokenUsage(log.cache_hit_tokens, usageAvailable))}
-        ${renderLogMetric("首 Token", formatFirstTokenDuration(log.first_token_ms))}
+      <div class="log-details">
+        <code class="log-endpoint">${escapeHTML(log.method || "")} ${escapeHTML(log.path || "")}</code>
+        <div class="log-metrics">
+          ${renderLogMetric("输入", formatTokenUsage(log.input_tokens, usageAvailable))}
+          ${renderLogMetric("输出", formatTokenUsage(log.output_tokens, usageAvailable))}
+          ${renderLogMetric("缓存", formatTokenUsage(log.cache_hit_tokens, usageAvailable))}
+          ${renderLogMetric("首 Token", formatFirstTokenDuration(log.first_token_ms))}
+          ${renderLogMetric("总耗时", formatLogDuration(log.duration_ms))}
+        </div>
       </div>
       ${log.error ? `<div class="log-error"><span class="log-error-icon" aria-hidden="true">!</span><span>${escapeHTML(log.error)}</span></div>` : ""}
-      <div class="log-duration" title="总耗时"><span class="log-duration-icon" aria-hidden="true"></span><span class="log-duration-label">总耗时</span><strong>${formatLogDuration(log.duration_ms)}</strong></div>
     `;
     logList.appendChild(item);
   });
@@ -1408,6 +1428,20 @@ function formatUpstream(log) {
   const name = String(log.upstream_name || "").trim();
   const provider = String(log.upstream_provider || "").trim();
   return name || provider || "-";
+}
+
+function formatLogTimestamp(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
 }
 
 function formatFirstTokenDuration(value) {
@@ -1652,6 +1686,8 @@ function openProfileModal(kind, mode, profileId = "") {
   modalProfileName.value = profile?.name || (isText ? `文本模型 ${index}` : `视觉模型 ${index}`);
   modalProfileProvider.value = profile?.provider || "openai";
   modalProfileWireAPI.value = isText ? normalizeWireAPI(profile?.wire_api) : "chat_completions";
+  syncComponentSelect(modalProfileProvider);
+  syncComponentSelect(modalProfileWireAPI);
   modalProfileBaseURL.value = profile?.base_url || "";
   modalProfileAPIKey.value = profile?.api_key || "";
   modalProfileModelLabel.textContent = "模型名";
@@ -1750,6 +1786,7 @@ function renderFetchedModels() {
     option.textContent = model.name && model.name !== model.id ? `${model.id} · ${model.name}` : model.id;
     modelSelect.appendChild(option);
   });
+  syncComponentSelect(modelSelect);
   if (fetchedModels.length > 0) {
     modelPickerStatus.textContent = filtered.length
       ? `显示 ${filtered.length} / ${fetchedModels.length} 个模型。`
@@ -1787,7 +1824,7 @@ function renderModelMappingRows() {
         <span>多模态</span>
       </label>
       <label class="model-mapping-supports-reasoning" title="\u9009\u62e9\u8be5\u6a21\u578b\u652f\u6301\u7684\u63a8\u7406\u5f3a\u5ea6">
-        <select data-field="reasoning_effort" aria-label="\u63a8\u7406\u5f3a\u5ea6">
+        <select data-field="reasoning_effort" data-select-compact="true" aria-label="\u63a8\u7406\u5f3a\u5ea6">
           ${reasoningEffortOptions(mapping.reasoning_effort)}
         </select>
       </label>
@@ -1869,6 +1906,7 @@ function resetModelPicker() {
   fetchedModels = [];
   modelSearch.value = "";
   modelSelect.innerHTML = "";
+  syncComponentSelect(modelSelect);
   modelPickerPanel.hidden = true;
   modelPickerStatus.textContent = "点击模型即可填入。";
 }
@@ -2583,17 +2621,35 @@ async function checkForUpdate(showErrors = false) {
     updatePublishedAt.textContent = info.published_at ? new Date(info.published_at).toLocaleString() : "-";
     updateNotes.textContent = info.release_notes?.trim() || updateText("&#26412;&#27425; Release &#26242;&#26080;&#21457;&#34892;&#35828;&#26126;&#12290;");
     if (info.release_url) releaseLink.href = info.release_url;
-    installUpdateButton.disabled = !info.update_available || !info.can_update;
+    updateInstallAvailable = info.update_available === true && info.can_update === true;
+    installUpdateButton.disabled = !updateInstallAvailable;
     if (info.update_available && info.can_update) {
       const size = info.asset_size ? `${updateText("&#65292;&#23433;&#35013;&#21253;")} ${formatBytes(info.asset_size)}` : "";
       updateState.textContent = `${updateText("&#21457;&#29616;&#26032;&#29256;&#26412;")} ${info.latest_version}${size}${updateText("&#65292;&#21487;&#20197;&#19968;&#38190;&#26356;&#26032;&#12290;")}`;
       showToast(`${updateText("&#21457;&#29616;&#26032;&#29256;&#26412;")} ${info.latest_version}`, "success");
+      if (!showErrors && updatePromptedVersion !== info.latest_version) {
+        updatePromptedVersion = info.latest_version;
+        const confirmed = await confirmAction({
+          title: `发现新版本 ${info.latest_version}`,
+          message: `当前版本 ${info.current_version || "dev"}，安装包 ${formatBytes(info.asset_size)}。更新完成后 Vision Relay 会自动重启。`,
+          variant: "success",
+          alertTitle: "配置和日志将完整保留",
+          alertMessage: "下载与校验期间可以继续使用当前程序。",
+          confirmText: "立即更新",
+          cancelText: "稍后提醒"
+        });
+        if (confirmed) {
+          await startUpdateDownload(false);
+        }
+      }
     } else if (info.update_available) {
       updateState.textContent = `${updateText("&#21457;&#29616;&#26032;&#29256;&#26412;")} ${info.latest_version}${updateText("&#65292;&#24403;&#21069;&#36816;&#34892;&#26041;&#24335;&#19981;&#25903;&#25345;&#33258;&#21160;&#26367;&#25442;&#65292;&#35831;&#20174; GitHub &#25163;&#21160;&#19979;&#36733;&#12290;")}`;
     } else {
       updateState.textContent = updateText("&#24403;&#21069;&#24050;&#26159;&#26368;&#26032;&#29256;&#26412;&#12290;");
     }
   } catch (err) {
+    updateInstallAvailable = false;
+    installUpdateButton.disabled = true;
     updateState.textContent = `${updateText("&#26816;&#26597;&#26356;&#26032;&#22833;&#36133;&#65306;")}${err.message || err}`;
     if (showErrors) showToast(updateState.textContent, "error");
   } finally {
@@ -2601,36 +2657,163 @@ async function checkForUpdate(showErrors = false) {
   }
 }
 
-checkUpdateButton.addEventListener("click", () => checkForUpdate(true));
-installUpdateButton.addEventListener("click", async () => {
-  const confirmed = await confirmAction({
-    title: "下载并安装更新？",
-    message: "Vision Relay 将下载最新版本，完成校验后关闭当前程序并自动重启。",
-    variant: "warning",
-    alertTitle: "更新期间请勿关闭程序",
-    alertMessage: "安装完成前请保持网络连接。",
-    confirmText: "下载并重启",
-    cancelText: "稍后更新"
-  });
-  if (!confirmed) return;
+function updateProgressIsActive(state) {
+  return ["checking", "downloading", "verifying", "installing", "restarting"].includes(state);
+}
+
+function renderUpdateProgress(progress) {
+  const state = progress?.state || "idle";
+  const percent = Math.max(0, Math.min(100, Number(progress?.percent || 0)));
+  const downloaded = Number(progress?.downloaded_bytes || 0);
+  const total = Number(progress?.total_bytes || 0);
+  const titles = {
+    checking: "正在检查更新",
+    downloading: "正在下载更新",
+    verifying: "正在校验更新",
+    installing: "正在准备安装",
+    restarting: "即将重启程序",
+    error: "更新失败"
+  };
+  lastUpdateProgressState = state;
+  updateProgressPanel.hidden = state === "idle";
+  updateProgressTitle.textContent = titles[state] || "更新进度";
+  updateProgressDetail.textContent = progress?.version ? `目标版本 ${progress.version}` : "正在连接更新服务…";
+  updateProgressPercent.textContent = `${Math.round(percent)}%`;
+  updateProgressBar.style.width = `${percent}%`;
+  const progressTrack = updateProgressBar.parentElement;
+  progressTrack.setAttribute("aria-valuenow", String(Math.round(percent)));
+  updateProgressBytes.textContent = total > 0
+    ? `${formatBytes(downloaded)} / ${formatBytes(total)}`
+    : "正在准备下载…";
+  updateProgressState.textContent = progress?.error
+    ? `${progress.message || "更新失败"}：${progress.error}`
+    : (progress?.message || "正在准备下载…");
+  updateState.textContent = updateProgressState.textContent;
+
+  const active = updateProgressIsActive(state);
+  installUpdateButton.disabled = active || !updateInstallAvailable;
+  checkUpdateButton.disabled = active;
+  if (state === "error") {
+    installUpdateButton.disabled = !updateInstallAvailable;
+    checkUpdateButton.disabled = false;
+  }
+}
+
+function scheduleUpdateProgressPoll(delay = 300) {
+  clearTimeout(updateProgressTimer);
+  updateProgressTimer = setTimeout(() => {
+    pollUpdateProgress().catch((err) => {
+      console.error(err);
+      if (lastUpdateProgressState === "restarting") {
+        updateState.textContent = "程序正在重启…";
+        return;
+      }
+      if (updateProgressIsActive(lastUpdateProgressState)) {
+        updateState.textContent = `暂时无法读取更新进度：${err.message || err}，正在重试…`;
+        installUpdateButton.disabled = true;
+        checkUpdateButton.disabled = true;
+        scheduleUpdateProgressPoll(1000);
+        return;
+      }
+      updateState.textContent = `读取更新进度失败：${err.message || err}`;
+      installUpdateButton.disabled = !updateInstallAvailable;
+      checkUpdateButton.disabled = false;
+    });
+  }, delay);
+}
+
+async function pollUpdateProgress() {
+  const res = await fetch("/api/update/progress", {cache: "no-store"});
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  const progress = await res.json();
+  renderUpdateProgress(progress);
+  if (updateProgressIsActive(progress.state)) {
+    scheduleUpdateProgressPoll();
+  } else if (progress.state === "error") {
+    showToast(progress.error || progress.message || "更新失败", "error");
+  }
+  return progress;
+}
+
+async function startUpdateDownload(requireConfirmation = true) {
+  if (requireConfirmation) {
+    const confirmed = await confirmAction({
+      title: "下载并安装更新？",
+      message: "Vision Relay 将在后台下载最新版本，完成校验后自动重启。",
+      variant: "warning",
+      alertTitle: "下载期间可以继续使用",
+      alertMessage: "进入安装阶段后程序会自动关闭并重启。",
+      confirmText: "开始更新",
+      cancelText: "稍后更新"
+    });
+    if (!confirmed) return;
+  }
   installUpdateButton.disabled = true;
   checkUpdateButton.disabled = true;
-  updateState.textContent = updateText("&#27491;&#22312;&#19979;&#36733;&#24182;&#26657;&#39564;&#26356;&#26032;&#65292;&#35831;&#21247;&#20851;&#38381;&#31243;&#24207;&hellip;");
+  renderUpdateProgress({state: "checking", message: "正在启动更新任务…"});
   try {
     const res = await fetch("/api/update", {method: "POST"});
-    if (!res.ok) throw new Error(await readErrorMessage(res));
-    const result = await res.json();
-    updateState.textContent = result.message || updateText("&#26356;&#26032;&#24050;&#19979;&#36733;&#65292;&#31243;&#24207;&#21363;&#23558;&#37325;&#21551;&hellip;");
-    showToast(updateText("&#26356;&#26032;&#24050;&#19979;&#36733;&#65292;&#21363;&#23558;&#37325;&#21551;"), "success");
+    const result = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (res.status === 409 && result?.progress) {
+        renderUpdateProgress(result.progress);
+        scheduleUpdateProgressPoll(120);
+        return;
+      }
+      throw new Error(result?.error?.message || `HTTP ${res.status}`);
+    }
+    renderUpdateProgress(result.progress || {state: "checking", message: result.message});
+    scheduleUpdateProgressPoll(120);
   } catch (err) {
     updateState.textContent = `${updateText("&#26356;&#26032;&#22833;&#36133;&#65306;")}${err.message || err}`;
     showToast(updateState.textContent, "error");
-    installUpdateButton.disabled = false;
+    installUpdateButton.disabled = !updateInstallAvailable;
     checkUpdateButton.disabled = false;
   }
+}
+
+checkUpdateButton.addEventListener("click", () => checkForUpdate(true));
+autoCheckUpdates?.addEventListener("change", async () => {
+  const previous = programSettings.autoCheckUpdates;
+  programSettings.autoCheckUpdates = autoCheckUpdates.checked;
+  autoCheckUpdates.disabled = true;
+  try {
+    await persistConfig("");
+    showToast(programSettings.autoCheckUpdates ? "已开启自动检测更新" : "已关闭自动检测更新", "success");
+    if (programSettings.autoCheckUpdates) {
+      await checkForUpdate(false);
+    } else {
+      latestVersionEl.textContent = "未检测";
+      updatePublishedAt.textContent = "-";
+      updateState.textContent = "自动检测更新已关闭，可点击“检查更新”手动检查。";
+    }
+  } catch (err) {
+    console.error(err);
+    programSettings.autoCheckUpdates = previous;
+    autoCheckUpdates.checked = previous;
+    showToast(`保存自动检测设置失败：${err.message || err}`, "error");
+  } finally {
+    autoCheckUpdates.disabled = false;
+  }
+});
+installUpdateButton.addEventListener("click", () => {
+  startUpdateDownload(true).catch((err) => {
+    console.error(err);
+    showToast(`启动更新失败：${err.message || err}`, "error");
+  });
 });
 
-loadConfig().then(() => checkForUpdate(false)).catch((err) => {
+loadConfig().then(async () => {
+  const progress = await pollUpdateProgress();
+  if (!updateProgressIsActive(progress.state) && programSettings.autoCheckUpdates) {
+    await checkForUpdate(false);
+  } else if (!updateProgressIsActive(progress.state)) {
+    currentVersionEl.textContent = "未检测";
+    latestVersionEl.textContent = "未检测";
+    updatePublishedAt.textContent = "-";
+    updateState.textContent = "自动检测更新已关闭，可点击“检查更新”手动检查。";
+  }
+}).catch((err) => {
   console.error(err);
   setStatus("加载失败");
   setServiceOnline(false);

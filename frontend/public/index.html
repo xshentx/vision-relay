@@ -121,8 +121,8 @@
       </section>
 
       <form id="configForm" class="layout">
-        <section class="page panel standard-page span-12" id="text" data-page-panel="text">
-          <div class="panel-head">
+        <section class="page standard-page span-12" id="text" data-page-panel="text">
+          <div class="dashboard-heading">
             <div>
               <h3>文本模型</h3>
               <p>保存多个文本上游，切换当前客户端请求最终转发到哪个文本模型。</p>
@@ -132,8 +132,8 @@
           <div class="profile-list" id="textProfileList" aria-label="文本模型列表"></div>
         </section>
 
-        <section class="page panel standard-page span-12" id="vision" data-page-panel="vision">
-          <div class="panel-head">
+        <section class="page standard-page span-12" id="vision" data-page-panel="vision">
+          <div class="dashboard-heading">
             <div>
               <h3>视觉模型</h3>
               <p>图片会先交给这里选中的视觉模型解析，再把解析结果交给文本模型。</p>
@@ -148,11 +148,10 @@
             </span>
           </label>
           <div class="profile-list" id="visionProfileList" aria-label="视觉模型列表"></div>
-          <div class="hint" id="visionModelHint">视觉模型需要能描述图片内容。不要使用 llama-guard、safety、moderation 这类安全分类模型，否则只会返回 safe/unsafe。</div>
         </section>
 
-        <section class="page panel standard-page access-page span-12" id="access" data-page-panel="access">
-          <div class="panel-head access-page-heading">
+        <section class="page standard-page access-page span-12" id="access" data-page-panel="access">
+          <div class="dashboard-heading access-page-heading">
             <div><h3>客户端接入</h3><p>统一管理 Codex、OpenCode、Claude、OpenClaw 与兼容 API 的连接配置。</p></div>
             <span class="configuration-status"><i></i>配置已同步</span>
           </div>
@@ -192,8 +191,8 @@
           </article>
         </section>
 
-        <section class="page panel standard-page settings-page span-12" id="settings" data-page-panel="settings">
-          <div class="panel-head settings-page-heading">
+        <section class="page standard-page settings-page span-12" id="settings" data-page-panel="settings">
+          <div class="dashboard-heading settings-page-heading">
             <div><h3>设置</h3><p>管理本地 API，以及客户端配置文件和程序位置。</p></div>
             <div class="panel-actions"><button class="primary-action" id="saveProgramSettings" type="button">保存设置</button></div>
           </div>
@@ -313,9 +312,10 @@
 
           <div class="dashboard-filters panel">
             <div class="dashboard-periods" role="group" aria-label="统计周期">
-              <button class="dashboard-period active" type="button" data-dashboard-period="day">当日</button>
-              <button class="dashboard-period" type="button" data-dashboard-period="7d">7 天</button>
-              <button class="dashboard-period" type="button" data-dashboard-period="month">当月</button>
+              <button class="dashboard-period active" type="button" data-dashboard-period="day">今日</button>
+              <button class="dashboard-period" type="button" data-dashboard-period="7d">近7天</button>
+              <button class="dashboard-period" type="button" data-dashboard-period="30d">近30天</button>
+              <button class="dashboard-period" type="button" data-dashboard-period="all">全部</button>
             </div>
             <label><span>供应商</span><select id="dashboardSupplier"><option value="">全部供应商</option></select></label>
             <label><span>模型</span><select id="dashboardModel"><option value="">全部模型</option></select></label>
@@ -324,7 +324,7 @@
           <div class="dashboard-metrics" aria-label="Token 使用摘要">
             <article class="dashboard-metric primary"><span>累计 Token</span><strong id="dashboardLifetimeTokens">0</strong><small>当前筛选条件的历史总量</small></article>
             <article class="dashboard-metric"><span>今日 Token</span><strong id="dashboardTodayTokens">0</strong><small>本地时间当日用量</small></article>
-            <article class="dashboard-metric"><span>周期 Token</span><strong id="dashboardPeriodTokens">0</strong><small id="dashboardPeriodLabel">当日统计</small></article>
+            <article class="dashboard-metric"><span>周期 Token</span><strong id="dashboardPeriodTokens">0</strong><small id="dashboardPeriodLabel">今日统计</small></article>
             <article class="dashboard-metric input"><span>输入</span><strong id="dashboardInputTokens">0</strong><small>所选周期</small></article>
             <article class="dashboard-metric output"><span>输出</span><strong id="dashboardOutputTokens">0</strong><small>所选周期</small></article>
             <article class="dashboard-metric cache"><span>缓存命中</span><strong id="dashboardCacheTokens">0</strong><small>所选周期</small></article>
@@ -378,11 +378,11 @@
             </article>
           </div>
         </section>
-        <section class="page panel standard-page span-12" id="logs" data-page-panel="logs">
-          <div class="panel-head">
+        <section class="page standard-page span-12" id="logs" data-page-panel="logs">
+          <div class="dashboard-heading">
             <div>
               <h3>使用日志</h3>
-              <p>记录客户端请求、使用的供应商、模型、Token 用量、缓存命中、首 token 和耗时。</p>
+              <p>保留请求关键信息，同时压缩纵向空间。</p>
             </div>
             <div class="panel-actions">
               <button class="secondary" id="refreshLogs" type="button">刷新</button>
@@ -408,13 +408,22 @@
           </div>
         </section>
 
-        <section class="page panel standard-page span-12" id="update" data-page-panel="update">
-          <div class="panel-head">
+        <section class="page standard-page span-12" id="update" data-page-panel="update">
+          <div class="dashboard-heading">
             <div>
               <h3>更新</h3>
               <p>&#33258;&#21160;&#26816;&#26597; GitHub Releases&#65292;&#19979;&#36733;&#26368;&#26032;&#29256;&#24182;&#23433;&#20840;&#26367;&#25442;&#24403;&#21069;&#31243;&#24207;&#12290;</p>
             </div>
-            <button class="secondary" id="checkUpdate" type="button">&#26816;&#26597;&#26356;&#26032;</button>
+            <div class="update-head-actions">
+              <label class="update-auto-check">
+                <span>自动检测更新</span>
+                <span class="switch-control">
+                  <input id="autoCheckUpdates" type="checkbox" checked>
+                  <span aria-hidden="true"></span>
+                </span>
+              </label>
+              <button class="secondary" id="checkUpdate" type="button">&#26816;&#26597;&#26356;&#26032;</button>
+            </div>
           </div>
           <div class="update-card">
             <div class="update-version-row">
@@ -423,6 +432,22 @@
               <div><span>&#21457;&#24067;&#26102;&#38388;</span><strong id="updatePublishedAt">-</strong></div>
             </div>
             <div class="update-state" id="updateState">&#27491;&#22312;&#36830;&#25509; GitHub &#26816;&#26597;&#26356;&#26032;&hellip;</div>
+            <div class="update-progress-panel" id="updateProgressPanel" hidden>
+              <div class="update-progress-head">
+                <div>
+                  <strong id="updateProgressTitle">正在下载更新</strong>
+                  <span id="updateProgressDetail">准备下载…</span>
+                </div>
+                <strong id="updateProgressPercent">0%</strong>
+              </div>
+              <div class="update-progress-track" role="progressbar" aria-label="更新下载进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <span id="updateProgressBar"></span>
+              </div>
+              <div class="update-progress-meta">
+                <span id="updateProgressBytes">0 B / 0 B</span>
+                <span id="updateProgressState">正在准备下载…</span>
+              </div>
+            </div>
             <div class="update-notes" id="updateNotes">&#26242;&#26080;&#21457;&#34892;&#35828;&#26126;</div>
             <div class="panel-actions update-actions">
               <button id="installUpdate" type="button" disabled>&#19979;&#36733;&#26356;&#26032;&#24182;&#37325;&#21551;</button>
@@ -504,7 +529,7 @@
         </section>
         <div class="model-picker-panel" id="modelPickerPanel" hidden>
           <input id="modelSearch" placeholder="搜索模型">
-          <select id="modelSelect" size="6" multiple></select>
+          <select id="modelSelect" size="6" multiple data-select-search="true" data-select-placeholder="选择要添加的模型"></select>
           <div class="model-picker-actions">
             <button class="secondary small-action" id="addFetchedModels" type="button">添加模型</button>
           </div>

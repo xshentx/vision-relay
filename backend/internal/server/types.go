@@ -42,6 +42,7 @@ type config struct {
 	ClientAutoStart                   map[string]bool      `json:"client_auto_start"`
 	ClientPathsDetected               bool                 `json:"client_paths_detected"`
 	ClientPathDetectionVersion        int                  `json:"client_path_detection_version"`
+	AutoCheckUpdates                  *bool                `json:"auto_check_updates"`
 	OpenWindow                        bool                 `json:"open_window"`
 	OpenBrowser                       bool                 `json:"open_browser"`
 }
@@ -142,6 +143,8 @@ type app struct {
 	logMu                   sync.Mutex
 	logs                    []requestLog
 	nextLogID               int64
+	updateMu                sync.RWMutex
+	updateStatus            updateProgress
 }
 
 type requestLog struct {

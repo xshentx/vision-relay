@@ -45,6 +45,7 @@ func defaultConfig() config {
 		ClientProgramPaths:                map[string]string{},
 		ClientAutoRestart:                 defaultClientAutoRestart(),
 		ClientAutoStart:                   defaultClientAutoStart(),
+		AutoCheckUpdates:                  boolPtr(true),
 		OpenWindow:                        env("OPEN_WINDOW", "true") != "false",
 		OpenBrowser:                       env("OPEN_BROWSER", "false") == "true",
 	}
@@ -193,6 +194,9 @@ func mergeConfig(base, loaded config) config {
 	}
 	base.ClientPathsDetected = loaded.ClientPathsDetected
 	base.ClientPathDetectionVersion = loaded.ClientPathDetectionVersion
+	if loaded.AutoCheckUpdates != nil {
+		base.AutoCheckUpdates = loaded.AutoCheckUpdates
+	}
 	base.OpenWindow = loaded.OpenWindow
 	base.OpenBrowser = loaded.OpenBrowser
 	base = normalizeSeparateModelProfiles(base)
@@ -280,6 +284,9 @@ func (a *app) setConfig(cfg config) error {
 	cfg.ClientAutoStart = normalizeClientBehavior(cfg.ClientAutoStart, false)
 	cfg.ClientPathsDetected = true
 	cfg.ClientPathDetectionVersion = currentClientPathDetectionVersion
+	if cfg.AutoCheckUpdates == nil {
+		cfg.AutoCheckUpdates = boolPtr(true)
+	}
 	cfg.TextProvider = normalizeProvider(cfg.TextProvider)
 	cfg.VisionProvider = normalizeProvider(cfg.VisionProvider)
 	cfg = normalizeSeparateModelProfiles(cfg)
