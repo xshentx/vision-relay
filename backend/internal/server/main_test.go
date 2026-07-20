@@ -1529,6 +1529,24 @@ func TestResponsesStreamFailureIsNotLoggedAsHTTP200(t *testing.T) {
 	}
 }
 
+func TestResponsesIncompleteEventPreservesHTTP200(t *testing.T) {
+	a := &app{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`))
+	body := []byte("event: response.incomplete\n" +
+		"data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n")
+
+	state := inspectSSELogBody(body)
+	if !state.IsSSE || !state.Completed || state.Failed {
+		t.Fatalf("response.incomplete was not treated as a successful terminal event: %#v", state)
+	}
+	a.logCompletedRequest(req, nil, body, http.StatusOK, time.Now())
+
+	logs := a.currentLogs()
+	if len(logs) != 1 || logs[0].Status != http.StatusOK || logs[0].Error != "" {
+		t.Fatalf("response.incomplete was logged as a failure: %#v", logs)
+	}
+}
+
 func TestIncompleteResponsesStreamWithoutUsageIsNotLoggedAsHTTP200(t *testing.T) {
 	a := &app{}
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`))

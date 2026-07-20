@@ -273,6 +273,7 @@ func WriteStreamingResponsesFromChatCompletion(w http.ResponseWriter, resp *http
 	var text strings.Builder
 	var usage any
 	started := false
+	completed := false
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxStreamEventSize)
 	for scanner.Scan() {
@@ -285,11 +286,16 @@ func WriteStreamingResponsesFromChatCompletion(w http.ResponseWriter, resp *http
 			continue
 		}
 		if data == "[DONE]" {
+			completed = true
 			break
 		}
 		var chunk map[string]any
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
+		}
+		if upstreamError, _ := chunk["error"].(map[string]any); upstreamError != nil {
+			writeResponsesStreamFailure(w, flusher, responseID, model, created, firstString(upstreamError["message"], "upstream stream failed"))
+			return
 		}
 		if id := firstString(chunk["id"]); id != "" && strings.HasPrefix(id, "resp_") {
 			responseID = id
@@ -304,6 +310,9 @@ func WriteStreamingResponsesFromChatCompletion(w http.ResponseWriter, resp *http
 		}
 		if chunkUsage, ok := chunk["usage"]; ok && chunkUsage != nil {
 			usage = chatUsageToResponses(chunkUsage)
+		}
+		if chatChunkFinishReason(chunk) != "" {
+			completed = true
 		}
 		if !started {
 			writeResponseSSE(w, flusher, map[string]any{
@@ -352,6 +361,14 @@ func WriteStreamingResponsesFromChatCompletion(w http.ResponseWriter, resp *http
 			"content_index": 0,
 			"delta":         delta,
 		})
+	}
+	if err := scanner.Err(); err != nil {
+		writeResponsesStreamFailure(w, flusher, responseID, model, created, err.Error())
+		return
+	}
+	if !completed {
+		writeResponsesStreamFailure(w, flusher, responseID, model, created, "upstream stream ended before completion")
+		return
 	}
 	finalText := text.String()
 	if usage == nil {
@@ -556,6 +573,33 @@ func chatChunkTextDelta(chunk map[string]any) string {
 		return contentToText(message["content"])
 	}
 	return ""
+}
+
+func chatChunkFinishReason(chunk map[string]any) string {
+	choices, _ := chunk["choices"].([]any)
+	if len(choices) == 0 {
+		return ""
+	}
+	choice, _ := choices[0].(map[string]any)
+	return firstString(choice["finish_reason"])
+}
+
+func writeResponsesStreamFailure(w http.ResponseWriter, flusher http.Flusher, responseID, model string, created int64, message string) {
+	writeResponseSSE(w, flusher, map[string]any{
+		"type": "response.failed",
+		"response": map[string]any{
+			"id":         responseID,
+			"object":     "response",
+			"created_at": created,
+			"status":     "failed",
+			"model":      model,
+			"error": map[string]any{
+				"type":    "server_error",
+				"code":    "upstream_stream_error",
+				"message": message,
+			},
+		},
+	})
 }
 
 func writeResponseSSE(w http.ResponseWriter, flusher http.Flusher, event map[string]any) {

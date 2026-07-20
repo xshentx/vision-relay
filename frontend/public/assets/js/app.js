@@ -1314,6 +1314,7 @@ function dashboardAxisMaximum(value) {
 function formatCompactNumber(value) {
   const number = Number(value || 0);
   const absolute = Math.abs(number);
+  if (absolute >= 1000000000) return `${formatScaledNumber(number / 1000000000)}B`;
   if (absolute >= 1000000) return `${formatScaledNumber(number / 1000000)}M`;
   if (absolute >= 1000) return `${formatScaledNumber(number / 1000)}K`;
   return String(Math.round(number));

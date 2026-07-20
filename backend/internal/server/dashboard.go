@@ -229,8 +229,9 @@ func dashboardBucketIndex(period string, start, at time.Time) int {
 	if period == "day" {
 		return local.Hour()
 	}
-	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, start.Location())
-	return int(date.Sub(start).Hours() / 24)
+	startDate := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+	return int(date.Sub(startDate) / (24 * time.Hour))
 }
 
 func dashboardLogMatches(log requestLog, query dashboardQuery) bool {

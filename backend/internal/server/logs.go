@@ -283,7 +283,9 @@ func inspectSSELogBody(body []byte) sseLogState {
 		switch strings.ToLower(firstString(payload["type"])) {
 		case "response.completed", "response.done":
 			state.Completed = true
-		case "error", "response.failed", "response.incomplete":
+		case "response.incomplete":
+			state.Completed = true
+		case "error", "response.failed":
 			state.Failed = true
 		}
 	}
@@ -450,7 +452,7 @@ func errorTextFromPayload(payload map[string]any) string {
 		}
 	}
 	switch strings.ToLower(firstString(payload["type"])) {
-	case "error", "response.failed", "response.incomplete":
+	case "error", "response.failed":
 		return firstString(payload["message"], payload["code"], payload["type"])
 	}
 	return ""

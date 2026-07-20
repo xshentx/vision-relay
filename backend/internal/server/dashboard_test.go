@@ -82,6 +82,18 @@ func TestDashboardPeriodRangeUsesCalendarBoundaries(t *testing.T) {
 	}
 }
 
+func TestDashboardBucketIndexUsesCalendarDaysAcrossDST(t *testing.T) {
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, time.March, 7, 0, 0, 0, 0, location)
+	at := time.Date(2026, time.March, 9, 12, 0, 0, 0, location)
+	if got := dashboardBucketIndex("7d", start, at); got != 2 {
+		t.Fatalf("bucket index across DST = %d, want 2", got)
+	}
+}
+
 func TestHandleDashboardReturnsJSONAndRejectsWrites(t *testing.T) {
 	now := time.Now()
 	a := &app{logs: []requestLog{{At: now, UpstreamName: "GPT", Model: "gpt-5.6", Status: 200, InputTokens: 4, OutputTokens: 2, TotalTokens: 6}}}

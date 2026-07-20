@@ -698,6 +698,7 @@ func TestDashboardAssetsAreEmbedded(t *testing.T) {
 		`formatNumber(value)} Token`,
 		`dashboard-request-bar`,
 		`formatNumber(values[index])} 次`,
+		`number / 1000000000)}B`,
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("dashboard behavior %q is missing", expected)
