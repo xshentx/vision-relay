@@ -41,7 +41,8 @@ func isManagementAPIPath(path string) bool {
 		"/api/settings/detect-clients",
 		"/api/client/codex/history",
 		"/api/logs",
-		"/api/models":
+		"/api/models",
+		"/api/model-test":
 		return true
 	default:
 		return false

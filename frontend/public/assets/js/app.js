@@ -87,12 +87,28 @@ const profileModalHelp = document.querySelector("#profileModalHelp");
 const profileModalSubmit = document.querySelector("#profileModalSubmit");
 const closeProfileModal = document.querySelector("#closeProfileModal");
 const cancelProfileModal = document.querySelector("#cancelProfileModal");
+const modelTestLayer = document.querySelector("#modelTestLayer");
+const modelTestBackdrop = document.querySelector("#modelTestBackdrop");
+const closeModelTest = document.querySelector("#closeModelTest");
+const modelTestProviderName = document.querySelector("#modelTestProviderName");
+const modelTestProviderDetail = document.querySelector("#modelTestProviderDetail");
+const modelTestModel = document.querySelector("#modelTestModel");
+const modelTestPrompt = document.querySelector("#modelTestPrompt");
+const runModelTest = document.querySelector("#runModelTest");
+const modelTestResult = document.querySelector("#modelTestResult");
+const modelTestResultTitle = document.querySelector("#modelTestResultTitle");
+const modelTestStatus = document.querySelector("#modelTestStatus");
+const modelTestMeta = document.querySelector("#modelTestMeta");
+const modelTestOutput = document.querySelector("#modelTestOutput");
 const modalProfileName = document.querySelector("#modalProfileName");
 const modalProfileProvider = document.querySelector("#modalProfileProvider");
 const modalProfileWireAPIWrap = document.querySelector("#modalProfileWireAPIWrap");
 const modalProfileWireAPI = document.querySelector("#modalProfileWireAPI");
 const modalProfileBaseURL = document.querySelector("#modalProfileBaseURL");
 const modalProfileAPIKey = document.querySelector("#modalProfileAPIKey");
+const toggleModalProfileAPIKey = document.querySelector("#toggleModalProfileAPIKey");
+const modalProfileAPIKeyEye = document.querySelector("#modalProfileAPIKeyEye");
+const modalProfileAPIKeyEyeOff = document.querySelector("#modalProfileAPIKeyEyeOff");
 const modalProfileModelWrap = document.querySelector("#modalProfileModelWrap");
 const modalProfileModelLabel = document.querySelector("#modalProfileModelLabel");
 const modalProfileModel = document.querySelector("#modalProfileModel");
@@ -162,6 +178,10 @@ let programSettings = {
 let profileModalKind = "text";
 let profileModalMode = "create";
 let profileModalEditId = "";
+let modelTestProfileId = "";
+let modelTestController = null;
+let modelTestCloseTimer = 0;
+let modelTestPreviousFocus = null;
 let profileDragState = null;
 let fetchedModels = [];
 let modalModelMappings = [];
@@ -275,6 +295,176 @@ function showToast(message, type = "info") {
 
 function syncComponentSelect(select) {
   window.VisionRelayUI?.syncSelect?.(select);
+}
+
+function modelTestModels(profile) {
+  const seen = new Set();
+  const mappings = normalizeModelMappings(profile?.model_mappings || profile?.model_overrides || profile?.model_override || []);
+  return mappings.reduce((models, mapping) => {
+    const model = String(mapping.model || mapping.name || "").trim();
+    if (!model || seen.has(model)) return models;
+    seen.add(model);
+    const name = String(mapping.name || "").trim();
+    models.push({value: model, label: name && name !== model ? `${name} - ${model}` : model});
+    return models;
+  }, []);
+}
+
+function modelTestWireLabel(profile) {
+  switch (String(profile?.provider || "openai").toLowerCase()) {
+    case "anthropic": return "Anthropic Messages";
+    case "gemini": return "Gemini generateContent";
+    case "ollama": return "Ollama Chat";
+    default: return formatWireAPI(profile?.wire_api);
+  }
+}
+
+function setModelTestMeta(items = []) {
+  modelTestMeta.innerHTML = "";
+  items.filter((item) => item?.value !== undefined && item?.value !== null && String(item.value).trim() !== "").forEach((item) => {
+    const badge = document.createElement("span");
+    badge.textContent = `${item.label} ${item.value}`;
+    modelTestMeta.appendChild(badge);
+  });
+  modelTestMeta.hidden = modelTestMeta.childElementCount === 0;
+}
+
+function setModelTestResult(state, {title, status, output, meta = []}) {
+  modelTestResult.className = `model-test-result is-${state}`;
+  modelTestResultTitle.textContent = title;
+  modelTestStatus.textContent = status;
+  modelTestOutput.textContent = output;
+  setModelTestMeta(meta);
+}
+
+function resetModelTestResult() {
+  setModelTestResult("idle", {
+    title: "\u7b49\u5f85\u6d4b\u8bd5",
+    status: "\u5c1a\u672a\u6d4b\u8bd5",
+    output: "\u9009\u62e9\u6a21\u578b\u540e\u70b9\u51fb\u201c\u5f00\u59cb\u6d4b\u8bd5\u201d\uff0c\u8fd9\u91cc\u4f1a\u663e\u793a\u6a21\u578b\u56de\u590d\u3001HTTP \u72b6\u6001\u548c\u54cd\u5e94\u8017\u65f6\u3002"
+  });
+}
+
+function openModelTestDrawer(profile) {
+  if (!profile || !modelTestLayer) return;
+  clearTimeout(modelTestCloseTimer);
+  modelTestController?.abort();
+  modelTestController = null;
+  modelTestPreviousFocus = document.activeElement;
+  modelTestProfileId = profile.id;
+  modelTestProviderName.textContent = profile.name || "\u672a\u547d\u540d\u4f9b\u5e94\u5546";
+  modelTestProviderDetail.textContent = `${profile.provider || "openai"} - ${modelTestWireLabel(profile)} - ${profile.base_url || "\u672a\u8bbe\u7f6e Base URL"}`;
+  const models = modelTestModels(profile);
+  modelTestModel.innerHTML = "";
+  if (models.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "\u8be5\u4f9b\u5e94\u5546\u5c1a\u672a\u914d\u7f6e\u6a21\u578b";
+    modelTestModel.appendChild(option);
+  } else {
+    models.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = item.label;
+      modelTestModel.appendChild(option);
+    });
+  }
+  modelTestModel.disabled = models.length === 0;
+  runModelTest.disabled = models.length === 0;
+  runModelTest.classList.remove("is-loading");
+  runModelTest.textContent = "\u5f00\u59cb\u6d4b\u8bd5";
+  modelTestPrompt.value = "hi";
+  resetModelTestResult();
+  syncComponentSelect(modelTestModel);
+  modelTestLayer.hidden = false;
+  document.body.classList.add("model-test-open");
+  requestAnimationFrame(() => {
+    modelTestLayer.classList.add("open");
+    (models.length ? modelTestModel : modelTestPrompt).focus();
+  });
+}
+
+function closeModelTestDrawer() {
+  if (!modelTestLayer || modelTestLayer.hidden) return;
+  modelTestController?.abort();
+  modelTestController = null;
+  modelTestLayer.classList.remove("open");
+  document.body.classList.remove("model-test-open");
+  clearTimeout(modelTestCloseTimer);
+  modelTestCloseTimer = setTimeout(() => {
+    modelTestLayer.hidden = true;
+    modelTestProfileId = "";
+    if (modelTestPreviousFocus instanceof HTMLElement) modelTestPreviousFocus.focus();
+  }, 250);
+}
+
+async function executeModelTest() {
+  const model = String(modelTestModel.value || "").trim();
+  const prompt = String(modelTestPrompt.value || "").trim() || "hi";
+  if (!modelTestProfileId || !model) {
+    showToast("\u8bf7\u5148\u4e3a\u4f9b\u5e94\u5546\u914d\u7f6e\u4e00\u4e2a\u53ef\u6d4b\u8bd5\u6a21\u578b", "error");
+    return;
+  }
+  modelTestPrompt.value = prompt;
+  modelTestController?.abort();
+  const controller = new AbortController();
+  modelTestController = controller;
+  runModelTest.disabled = true;
+  runModelTest.classList.add("is-loading");
+  runModelTest.textContent = "\u6d4b\u8bd5\u4e2d";
+  setModelTestResult("running", {
+    title: "\u6b63\u5728\u8bf7\u6c42\u6a21\u578b",
+    status: "\u6d4b\u8bd5\u4e2d",
+    output: `\u6b63\u5728\u5411 ${model} \u53d1\u9001\u63d0\u793a\u8bcd\uff0c\u8bf7\u7a0d\u5019\u2026`,
+    meta: [{label: "\u6a21\u578b", value: model}]
+  });
+  try {
+    const res = await fetch("/api/model-test", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({profile_id: modelTestProfileId, model, prompt}),
+      signal: controller.signal
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const error = new Error(payload?.error?.message || `HTTP ${res.status}`);
+      error.payload = payload;
+      error.httpStatus = res.status;
+      throw error;
+    }
+    setModelTestResult("success", {
+      title: "\u6a21\u578b\u54cd\u5e94\u6210\u529f",
+      status: `HTTP ${payload.status || res.status}`,
+      output: payload.output || "\u8bf7\u6c42\u6210\u529f\uff0c\u4f46\u54cd\u5e94\u4e2d\u6ca1\u6709\u53ef\u663e\u793a\u7684\u6587\u672c\u5185\u5bb9\u3002",
+      meta: [
+        {label: "\u8017\u65f6", value: `${Number(payload.duration_ms || 0)} ms`},
+        {label: "\u6a21\u578b", value: payload.model || model},
+        {label: "\u63a5\u53e3", value: payload.wire_api || "-"},
+        {label: "\u8bf7\u6c42 ID", value: payload.request_id || ""}
+      ]
+    });
+  } catch (err) {
+    if (err.name === "AbortError") return;
+    const payload = err.payload || {};
+    const status = Number(payload.upstream_status || err.httpStatus || 0);
+    setModelTestResult("error", {
+      title: "\u6a21\u578b\u6d4b\u8bd5\u5931\u8d25",
+      status: status ? `HTTP ${status}` : "\u8bf7\u6c42\u5931\u8d25",
+      output: err.message || "\u65e0\u6cd5\u8fde\u63a5\u6a21\u578b\u4f9b\u5e94\u5546",
+      meta: [
+        {label: "\u8017\u65f6", value: payload.duration_ms !== undefined ? `${Number(payload.duration_ms)} ms` : ""},
+        {label: "\u6a21\u578b", value: model},
+        {label: "\u8bf7\u6c42 ID", value: payload.request_id || ""}
+      ]
+    });
+  } finally {
+    if (modelTestController === controller) {
+      modelTestController = null;
+      runModelTest.disabled = false;
+      runModelTest.classList.remove("is-loading");
+      runModelTest.textContent = "\u518d\u6b21\u6d4b\u8bd5";
+    }
+  }
 }
 
 async function confirmAction(options) {
@@ -591,6 +781,26 @@ closeProfileModal.addEventListener("click", () => {
   closeModal();
 });
 
+closeModelTest?.addEventListener("click", closeModelTestDrawer);
+modelTestBackdrop?.addEventListener("click", closeModelTestDrawer);
+runModelTest?.addEventListener("click", () => {
+  executeModelTest().catch((err) => {
+    console.error(err);
+    showToast(`\u6a21\u578b\u6d4b\u8bd5\u5931\u8d25\uff1a${err.message || err}`, "error");
+  });
+});
+modelTestPrompt?.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+    event.preventDefault();
+    executeModelTest().catch(console.error);
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && modelTestLayer && !modelTestLayer.hidden) {
+    closeModelTestDrawer();
+  }
+});
+
 cancelProfileModal.addEventListener("click", () => {
   closeModal();
 });
@@ -606,6 +816,10 @@ modalProfileProvider.addEventListener("change", () => {
 
 modalProfileBaseURL.addEventListener("input", resetModelPicker);
 modalProfileAPIKey.addEventListener("input", resetModelPicker);
+toggleModalProfileAPIKey.addEventListener("click", () => {
+  setModalProfileAPIKeyVisible(modalProfileAPIKey.type === "password");
+  modalProfileAPIKey.focus({preventScroll: true});
+});
 
 fetchModels.addEventListener("click", () => {
   fetchProviderModels().catch((err) => {
@@ -1531,11 +1745,15 @@ function renderProfileList(container, profiles, activeId, kind) {
         </div>
       </div>
       <div class="profile-actions">
+        ${kind === "text" ? '<button class="secondary small-action profile-test" type="button" data-action="test">\u6a21\u578b\u6d4b\u8bd5</button>' : ""}
         <button class="secondary small-action profile-switch" type="button" data-action="switch"${profile.id === activeId ? " disabled" : ""}>使用</button>
         <button class="secondary small-action" type="button" data-action="edit">编辑</button>
         <button class="danger small-action" type="button" data-action="delete">删除</button>
       </div>
     `;
+    row.querySelector('[data-action="test"]')?.addEventListener("click", () => {
+      openModelTestDrawer(profile);
+    });
     row.querySelector('[data-action="switch"]').addEventListener("click", (event) => {
       if (profile.id === activeId) return;
       event.currentTarget.disabled = true;
@@ -1668,6 +1886,16 @@ async function deleteProfile(kind, id) {
   }
 }
 
+function setModalProfileAPIKeyVisible(visible) {
+  modalProfileAPIKey.type = visible ? "text" : "password";
+  toggleModalProfileAPIKey.setAttribute("aria-pressed", String(visible));
+  const action = visible ? "隐藏 API Key" : "显示完整 API Key";
+  toggleModalProfileAPIKey.setAttribute("aria-label", action);
+  toggleModalProfileAPIKey.title = action;
+  modalProfileAPIKeyEye.hidden = visible;
+  modalProfileAPIKeyEyeOff.hidden = !visible;
+}
+
 function openProfileModal(kind, mode, profileId = "") {
   profileModalKind = kind;
   profileModalMode = mode;
@@ -1689,6 +1917,7 @@ function openProfileModal(kind, mode, profileId = "") {
   syncComponentSelect(modalProfileProvider);
   syncComponentSelect(modalProfileWireAPI);
   modalProfileBaseURL.value = profile?.base_url || "";
+  setModalProfileAPIKeyVisible(false);
   modalProfileAPIKey.value = profile?.api_key || "";
   modalProfileModelLabel.textContent = "模型名";
   modalProfileModel.placeholder = isText ? "可填多个，换行或逗号分隔；留空则使用客户端请求里的 model" : "例如 gpt-4o-mini";
@@ -1816,7 +2045,6 @@ function renderModelMappingRows() {
     const row = document.createElement("div");
     row.className = "model-mapping-row";
     row.innerHTML = `
-      <input data-field="name" value="${escapeAttr(mapping.name || "")}" placeholder="例如：DeepSeek V4 Flash">
       <input data-field="model" value="${escapeAttr(mapping.model || "")}" placeholder="例如：deepseek-v4-flash">
       <input data-field="context_window" type="number" min="0" step="1" value="${escapeAttr(mapping.context_window || "")}" placeholder="例如：128000">
       <label class="model-mapping-supports-images" title="勾选后图片直接发送给该文本模型">
@@ -1850,20 +2078,23 @@ function addModelMappingRow(mapping = {}, focus = true) {
   renderModelMappingRows();
   if (focus) {
     const rows = modelMappingRows.querySelectorAll(".model-mapping-row");
-    rows[rows.length - 1]?.querySelector('[data-field="name"]')?.focus();
+    rows[rows.length - 1]?.querySelector('[data-field="model"]')?.focus();
   }
 }
 
 function updateModelMappingFromRows() {
   if (!modelMappingRows) return;
   modalModelMappings = [...modelMappingRows.querySelectorAll(".model-mapping-row")]
-    .map((row) => normalizeModelMapping({
-      name: row.querySelector('[data-field="name"]')?.value,
-      model: row.querySelector('[data-field="model"]')?.value,
-      context_window: row.querySelector('[data-field="context_window"]')?.value,
-      supports_images: row.querySelector('[data-field="supports_images"]')?.checked === true,
-      reasoning_effort: row.querySelector('[data-field="reasoning_effort"]')?.value
-    }));
+    .map((row) => {
+      const model = row.querySelector('[data-field="model"]')?.value;
+      return normalizeModelMapping({
+        name: model,
+        model,
+        context_window: row.querySelector('[data-field="context_window"]')?.value,
+        supports_images: row.querySelector('[data-field="supports_images"]')?.checked === true,
+        reasoning_effort: row.querySelector('[data-field="reasoning_effort"]')?.value
+      });
+    });
 }
 
 function addSelectedModelsToModal(showMessage) {
@@ -1877,10 +2108,10 @@ function addSelectedModelsToModal(showMessage) {
   }
   if (profileModalKind === "text") {
     updateModelMappingFromRows();
-    const existing = new Set(modalModelMappings.map((mapping) => mapping.model || mapping.name).filter(Boolean));
+    const existing = new Set(modalModelMappings.map((mapping) => mapping.model).filter(Boolean));
     selected.forEach((model) => {
       if (!existing.has(model)) {
-        modalModelMappings.push(normalizeModelMapping({name: model, model}));
+        modalModelMappings.push(normalizeModelMapping({model}));
         existing.add(model);
       }
     });
@@ -2055,8 +2286,8 @@ function firstModelOverride(value) {
 function normalizeModelMapping(value) {
   const mapping = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   const scalar = typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
-  const name = String(mapping.name || mapping.display_name || scalar).trim();
-  const model = String(mapping.model || scalar).trim();
+  const model = String(mapping.model || mapping.name || mapping.display_name || scalar).trim();
+  const name = model;
   const contextWindow = Number(value?.context_window || value?.contextWindow || 0);
   const configuredReasoningEffort = normalizeReasoningEffort(mapping.reasoning_effort);
   const reasoningEffort = configuredReasoningEffort || (typeof mapping.supports_reasoning === "boolean"
@@ -2108,7 +2339,7 @@ function normalizeModelMappings(value) {
   return raw
     .map(normalizeModelMapping)
     .filter((mapping) => {
-      const key = mapping.name || mapping.model;
+      const key = mapping.model;
       if (!mapping.model || !key || seen.has(key)) return false;
       seen.add(key);
       return true;

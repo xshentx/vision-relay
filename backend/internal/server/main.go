@@ -147,6 +147,7 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	mux.HandleFunc("/api/dashboard", a.handleDashboard)
 	mux.HandleFunc("/api/logs", a.handleLogs)
 	mux.HandleFunc("/api/models", a.handleListModels)
+	mux.HandleFunc("/api/model-test", a.handleModelTest)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "application": appSlug})
 	})

@@ -24,6 +24,7 @@ func TestManagementAccessControl(t *testing.T) {
 		{name: "remote management page is rejected", path: "/", remoteAddr: "192.0.2.10:5000", host: "127.0.0.1:8787", wantStatus: http.StatusForbidden},
 		{name: "non-loopback host is rejected", path: "/api/config", remoteAddr: "127.0.0.1:5000", host: "relay.example:8787", wantStatus: http.StatusForbidden},
 		{name: "cross-origin management request is rejected", path: "/api/config", remoteAddr: "127.0.0.1:5000", host: "127.0.0.1:8787", origin: "https://attacker.example", wantStatus: http.StatusForbidden},
+		{name: "cross-origin model test is rejected", path: "/api/model-test", remoteAddr: "127.0.0.1:5000", host: "127.0.0.1:8787", origin: "https://attacker.example", wantStatus: http.StatusForbidden},
 		{name: "local same-origin management request is allowed", path: "/api/config", remoteAddr: "127.0.0.1:5000", host: "127.0.0.1:8787", origin: "http://127.0.0.1:8787", wantStatus: http.StatusOK},
 		{name: "native proxy API remains remotely accessible", path: "/api/chat", remoteAddr: "192.0.2.10:5000", host: "relay.example:8787", wantStatus: http.StatusOK},
 		{name: "same-origin browser proxy API is allowed", path: "/api/chat", remoteAddr: "127.0.0.1:5000", host: "127.0.0.1:8787", origin: "http://127.0.0.1:8787", wantStatus: http.StatusOK, wantCORS: "http://127.0.0.1:8787"},
@@ -50,7 +51,7 @@ func TestManagementAccessControl(t *testing.T) {
 }
 
 func TestManagementPathClassification(t *testing.T) {
-	for _, path := range []string{"/api/desktop/activate", "/api/config", "/api/dashboard", "/api/models"} {
+	for _, path := range []string{"/api/desktop/activate", "/api/config", "/api/dashboard", "/api/models", "/api/model-test"} {
 		if !isManagementAPIPath(path) {
 			t.Fatalf("%s should be a management path", path)
 		}

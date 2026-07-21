@@ -460,6 +460,59 @@
     </main>
   </div>
 
+  <div class="model-test-layer" id="modelTestLayer" hidden>
+    <button class="model-test-backdrop" id="modelTestBackdrop" type="button" aria-label="关闭模型测试"></button>
+    <aside class="model-test-drawer" role="dialog" aria-modal="true" aria-labelledby="modelTestTitle">
+      <header class="model-test-head">
+        <div>
+          <span class="model-test-eyebrow">供应商连通性检查</span>
+          <h3 id="modelTestTitle">模型测试</h3>
+          <p>直接请求所选供应商，不会切换当前路由。</p>
+        </div>
+        <button class="icon-button" id="closeModelTest" type="button" aria-label="关闭">×</button>
+      </header>
+
+      <div class="model-test-body">
+        <section class="model-test-provider" aria-label="当前测试供应商">
+          <span class="model-test-provider-icon" aria-hidden="true">T</span>
+          <div>
+            <strong id="modelTestProviderName">未选择供应商</strong>
+            <span id="modelTestProviderDetail">请选择一个供应商进行测试</span>
+          </div>
+          <span class="model-test-direct">直连测试</span>
+        </section>
+
+        <div class="model-test-fields">
+          <label>
+            测试模型
+            <select id="modelTestModel" aria-label="选择测试模型"></select>
+          </label>
+          <label>
+            提示词
+            <textarea id="modelTestPrompt" rows="5" maxlength="65536" placeholder="输入测试提示词">hi</textarea>
+          </label>
+        </div>
+
+        <div class="model-test-run-line">
+          <span><i aria-hidden="true"></i> 不会影响当前路由和已启用的供应商</span>
+          <button class="primary-action" id="runModelTest" type="button">开始测试</button>
+        </div>
+
+        <section class="model-test-result is-idle" id="modelTestResult" aria-live="polite">
+          <div class="model-test-result-head">
+            <div>
+              <span class="model-test-result-kicker">测试结果</span>
+              <strong id="modelTestResultTitle">等待测试</strong>
+            </div>
+            <span class="model-test-status" id="modelTestStatus">尚未测试</span>
+          </div>
+          <div class="model-test-meta" id="modelTestMeta" hidden></div>
+          <pre id="modelTestOutput">选择模型后点击“开始测试”，这里会显示模型回复、HTTP 状态和响应耗时。</pre>
+        </section>
+      </div>
+    </aside>
+  </div>
+
   <dialog class="modal" id="profileModal">
     <form class="modal-card" id="profileModalForm">
       <div class="modal-head">
@@ -497,7 +550,20 @@
         </label>
         <label>
           API Key
-          <input id="modalProfileAPIKey" type="password" autocomplete="off" placeholder="上游模型 Key">
+          <div class="secret-input">
+            <input id="modalProfileAPIKey" type="password" autocomplete="off" placeholder="上游模型 Key">
+            <button class="secret-visibility-toggle" id="toggleModalProfileAPIKey" type="button" aria-label="显示完整 API Key" aria-controls="modalProfileAPIKey" aria-pressed="false" title="显示完整 API Key">
+              <svg id="modalProfileAPIKeyEye" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path>
+                <circle cx="12" cy="12" r="2.75"></circle>
+              </svg>
+              <svg id="modalProfileAPIKeyEyeOff" viewBox="0 0 24 24" aria-hidden="true" hidden>
+                <path d="m3 3 18 18"></path>
+                <path d="M10.6 6.1A10.4 10.4 0 0 1 12 6c6 0 9.5 6 9.5 6a17.6 17.6 0 0 1-2.1 2.8M6.2 6.2C3.8 8 2.5 12 2.5 12s3.5 6 9.5 6c1.4 0 2.7-.3 3.8-.7"></path>
+                <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"></path>
+              </svg>
+            </button>
+          </div>
         </label>
         <label id="modalProfileModelWrap">
           <span id="modalProfileModelLabel">模型名</span>
@@ -518,8 +584,7 @@
             </div>
           </div>
           <div class="model-mapping-grid">
-            <span>菜单显示名</span>
-            <span>实际请求模型</span>
+            <span>请求模型</span>
             <span>上下文窗口</span>
             <span>支持多模态</span>
             <span>推理强度</span>

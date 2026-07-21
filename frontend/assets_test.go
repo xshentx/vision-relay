@@ -811,3 +811,165 @@ func TestDashboardAssetsAreEmbedded(t *testing.T) {
 		}
 	}
 }
+
+func TestModelTestDrawerIsEmbedded(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	for _, expected := range []string{
+		`id="modelTestLayer"`,
+		`id="modelTestModel"`,
+		`id="modelTestPrompt"`,
+		`id="runModelTest"`,
+		`id="modelTestResult"`,
+		`>hi</textarea>`,
+	} {
+		if !strings.Contains(index, expected) {
+			t.Fatalf("model test drawer element %q is missing", expected)
+		}
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		`data-action="test"`,
+		`openModelTestDrawer(profile)`,
+		`fetch("/api/model-test"`,
+		`JSON.stringify({profile_id: modelTestProfileId, model, prompt})`,
+		`modelTestPrompt.value = "hi"`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("model test behavior %q is missing", expected)
+		}
+	}
+
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := string(styleRaw)
+	for _, expected := range []string{".model-test-drawer", ".model-test-layer.open .model-test-drawer", ".model-test-result.is-success"} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("model test style %q is missing", expected)
+		}
+	}
+}
+
+func TestProviderAPIKeyVisibilityToggleIsEmbedded(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	for _, expected := range []string{
+		`id="modalProfileAPIKey" type="password"`,
+		`id="toggleModalProfileAPIKey"`,
+		`aria-controls="modalProfileAPIKey"`,
+		`id="modalProfileAPIKeyEye"`,
+		`id="modalProfileAPIKeyEyeOff"`,
+	} {
+		if !strings.Contains(index, expected) {
+			t.Fatalf("API key visibility markup %q is missing", expected)
+		}
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		`toggleModalProfileAPIKey.addEventListener("click"`,
+		`setModalProfileAPIKeyVisible(modalProfileAPIKey.type === "password")`,
+		`modalProfileAPIKey.type = visible ? "text" : "password"`,
+		`setModalProfileAPIKeyVisible(false);`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("API key visibility behavior %q is missing", expected)
+		}
+	}
+
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := string(styleRaw)
+	for _, expected := range []string{
+		`.secret-input`,
+		`.secret-visibility-toggle`,
+		`.secret-visibility-toggle:focus-visible`,
+	} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("API key visibility style %q is missing", expected)
+		}
+	}
+}
+
+func TestModelMappingCapabilityControlsAreAligned(t *testing.T) {
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := strings.ReplaceAll(string(styleRaw), "\r\n", "\n")
+	for _, expected := range []string{
+		`.model-mapping-supports-images,
+.model-mapping-supports-reasoning {`,
+		`  min-height: 44px;
+  margin: 0;`,
+		`.model-mapping-supports-reasoning .vr-component-select.compact .el-select__wrapper {
+  min-height: 44px;
+}`,
+	} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("model mapping alignment style %q is missing", expected)
+		}
+	}
+}
+
+func TestModelMappingUsesRequestModelOnly(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	if !strings.Contains(index, "<span>\u8bf7\u6c42\u6a21\u578b</span>") {
+		t.Fatal("model mapping header should be request model")
+	}
+	for _, obsolete := range []string{"\u83dc\u5355\u663e\u793a\u540d", "\u5b9e\u9645\u8bf7\u6c42\u6a21\u578b"} {
+		if strings.Contains(index, obsolete) {
+			t.Fatalf("obsolete model mapping header %q remains", obsolete)
+		}
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	if strings.Contains(script, `data-field="name"`) {
+		t.Fatal("model mapping should not render a separate display-name field")
+	}
+	for _, expected := range []string{
+		`const model = String(mapping.model || mapping.name || mapping.display_name || scalar).trim();`,
+		`const name = model;`,
+		`rows[rows.length - 1]?.querySelector('[data-field="model"]')?.focus();`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("request-model-only behavior %q is missing", expected)
+		}
+	}
+
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := string(styleRaw)
+	if !strings.Contains(style, `grid-template-columns: minmax(0, 1fr) 140px 100px 110px 34px;`) {
+		t.Fatal("model mapping should use the five-column layout")
+	}
+}

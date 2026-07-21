@@ -19,15 +19,69 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const updateProcessCreationFlags = windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP
+
 func startUpdateHelper(downloaded, target string, pid int, restartArgs []string) error {
 	encoded, _ := json.Marshal(restartArgs)
-	cmd := exec.Command(downloaded,
-		"--apply-update="+target,
-		"--wait-pid="+strconv.Itoa(pid),
-		"--restart-args="+base64.RawURLEncoding.EncodeToString(encoded),
-	)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	return cmd.Start()
+	args := []string{
+		"--apply-update=" + target,
+		"--wait-pid=" + strconv.Itoa(pid),
+		"--restart-args=" + base64.RawURLEncoding.EncodeToString(encoded),
+	}
+	return startDetachedUpdateProcess(downloaded, args, os.Environ(), currentWorkingDirectory())
+}
+
+// startDetachedUpdateProcess keeps the updater and the restarted application
+// independent from the process that launched them. This matters when Vision
+// Relay was itself started by a process that owns a kill-on-close Job Object:
+// a normal child process can otherwise be terminated together with the old
+// application before the update restart becomes visible.
+func startDetachedUpdateProcess(path string, args, env []string, dir string) error {
+	flags := []uint32{
+		updateProcessCreationFlags | windows.CREATE_BREAKAWAY_FROM_JOB,
+		updateProcessCreationFlags,
+	}
+	var startErrors []error
+	for _, creationFlags := range flags {
+		cmd := exec.Command(path, args...)
+		cmd.Dir = dir
+		cmd.Env = env
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: creationFlags,
+		}
+		if err := cmd.Start(); err != nil {
+			startErrors = append(startErrors, err)
+			continue
+		}
+		// Start is intentionally not followed by Wait: both the updater and the
+		// new application must outlive their launcher. Release closes our copy
+		// of the process handle and avoids leaking one until garbage collection.
+		_ = cmd.Process.Release()
+		return nil
+	}
+	return errors.Join(startErrors...)
+}
+
+func currentWorkingDirectory() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+func withUpdateHelperEnvironment(env []string, source string) []string {
+	const key = "VISION_RELAY_UPDATE_HELPER"
+	result := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		name, _, found := strings.Cut(entry, "=")
+		if found && strings.EqualFold(name, key) {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return append(result, key+"="+source)
 }
 
 // RunUpdateHelperIfRequested applies a downloaded update before normal flag parsing.
@@ -56,13 +110,8 @@ func RunUpdateHelperIfRequested() bool {
 }
 
 func applyUpdate(target string, pid int, restartArgs []string) error {
-	if pid > 0 {
-		if process, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid)); err == nil {
-			_, _ = windows.WaitForSingleObject(process, 60_000)
-			windows.CloseHandle(process)
-		} else {
-			time.Sleep(1200 * time.Millisecond)
-		}
+	if err := waitForUpdateTargetExit(pid); err != nil {
+		return err
 	}
 	source, err := os.Executable()
 	if err != nil {
@@ -92,12 +141,37 @@ func applyUpdate(target string, pid int, restartArgs []string) error {
 		restored = true
 		return fmt.Errorf("写入新版本失败: %w", err)
 	}
-	cmd := exec.Command(target, restartArgs...)
-	cmd.Env = append(os.Environ(), "VISION_RELAY_UPDATE_HELPER="+source)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if err := cmd.Start(); err != nil {
+	if err := startDetachedUpdateProcess(
+		target,
+		restartArgs,
+		withUpdateHelperEnvironment(os.Environ(), source),
+		currentWorkingDirectory(),
+	); err != nil {
 		restored = true
 		return fmt.Errorf("重启新版本失败: %w", err)
+	}
+	return nil
+}
+
+func waitForUpdateTargetExit(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	process, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		// The process can disappear between launching the helper and opening its
+		// handle. A short delay also gives Windows time to release executable and
+		// single-instance kernel handles before replacement.
+		time.Sleep(1200 * time.Millisecond)
+		return nil
+	}
+	defer windows.CloseHandle(process)
+	result, err := windows.WaitForSingleObject(process, 60_000)
+	if err != nil {
+		return fmt.Errorf("等待旧版本退出失败: %w", err)
+	}
+	if result != windows.WAIT_OBJECT_0 {
+		return fmt.Errorf("等待旧版本退出超时 (wait result 0x%x)", result)
 	}
 	return nil
 }
