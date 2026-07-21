@@ -51,7 +51,7 @@ func TestManagementAccessControl(t *testing.T) {
 }
 
 func TestManagementPathClassification(t *testing.T) {
-	for _, path := range []string{"/api/desktop/activate", "/api/config", "/api/dashboard", "/api/models", "/api/model-test"} {
+	for _, path := range []string{"/api/desktop/activate", "/api/config", "/api/dashboard", "/api/models", "/api/model-test", "/api/break-armor/status", "/api/break-armor/preview", "/api/break-armor/apply", "/api/break-armor/restore", "/api/break-armor/sessions", "/api/break-armor/session/preview", "/api/break-armor/session/patch", "/api/break-armor/session/backups", "/api/break-armor/session/restore", "/api/break-armor/templates", "/api/break-armor/ai/settings", "/api/break-armor/ai/rewrite", "/api/break-armor/prompt/rewrite"} {
 		if !isManagementAPIPath(path) {
 			t.Fatalf("%s should be a management path", path)
 		}

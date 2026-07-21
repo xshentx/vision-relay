@@ -140,6 +140,7 @@ type app struct {
 	lastVision              visionDebugInfo
 	visionCache             map[string]string
 	clientProgramController clientProgramController
+	breakArmorMu            sync.Mutex // serializes break-armor, session, and client configuration file writes
 	logMu                   sync.Mutex
 	logs                    []requestLog
 	nextLogID               int64

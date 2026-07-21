@@ -1,6 +1,6 @@
 {
   "name": "frontend",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "sync:vendor": "node scripts/sync-vendor.mjs",

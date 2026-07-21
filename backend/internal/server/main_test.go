@@ -1513,7 +1513,7 @@ func TestInspectSSELogBodySupportsNamedResponsesEvents(t *testing.T) {
 	}
 }
 
-func TestResponsesStreamFailureIsNotLoggedAsHTTP200(t *testing.T) {
+func TestResponsesStreamFailureRetainsUpstreamHTTPStatus(t *testing.T) {
 	a := &app{}
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`))
 	body := []byte("event: error\n" +
@@ -1524,7 +1524,7 @@ func TestResponsesStreamFailureIsNotLoggedAsHTTP200(t *testing.T) {
 	if len(logs) != 1 {
 		t.Fatalf("expected one log, got %d", len(logs))
 	}
-	if logs[0].Status != http.StatusBadGateway || logs[0].Error != "stream timed out" {
+	if logs[0].Status != http.StatusOK || logs[0].Error != "stream timed out" {
 		t.Fatalf("stream failure was logged as success: %#v", logs[0])
 	}
 }
@@ -1533,7 +1533,7 @@ func TestResponsesIncompleteEventPreservesHTTP200(t *testing.T) {
 	a := &app{}
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`))
 	body := []byte("event: response.incomplete\n" +
-		"data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n")
+		"data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"usage\":{\"input_tokens\":8,\"output_tokens\":4,\"total_tokens\":12}}}\n\n")
 
 	state := inspectSSELogBody(body)
 	if !state.IsSSE || !state.Completed || state.Failed {
@@ -1542,21 +1542,71 @@ func TestResponsesIncompleteEventPreservesHTTP200(t *testing.T) {
 	a.logCompletedRequest(req, nil, body, http.StatusOK, time.Now())
 
 	logs := a.currentLogs()
-	if len(logs) != 1 || logs[0].Status != http.StatusOK || logs[0].Error != "" {
-		t.Fatalf("response.incomplete was logged as a failure: %#v", logs)
+	if len(logs) != 1 || logs[0].Status != http.StatusOK || logs[0].Error != "" || logs[0].TotalTokens != 12 {
+		t.Fatalf("response.incomplete was logged incorrectly: %#v", logs)
 	}
 }
 
-func TestIncompleteResponsesStreamWithoutUsageIsNotLoggedAsHTTP200(t *testing.T) {
+func TestResponsesStreamWithoutTerminalUsageIsNotLogged(t *testing.T) {
 	a := &app{}
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`))
 	body := []byte("event: response.created\n" +
 		"data: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n")
+	a.logCompletedRequest(req, nil, body, http.StatusOK, time.Now(), 6300)
+
+	logs := a.currentLogs()
+	if len(logs) != 0 {
+		t.Fatalf("unfinished Responses stream should not be logged: %#v", logs)
+	}
+}
+
+func TestResponsesCompletedWithoutUsageIsNotLogged(t *testing.T) {
+	a := &app{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`))
+	body := []byte("event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output_text\":\"ok\"}}\n\n")
 	a.logCompletedRequest(req, nil, body, http.StatusOK, time.Now())
 
 	logs := a.currentLogs()
-	if len(logs) != 1 || logs[0].Status != http.StatusBadGateway || logs[0].Error == "" {
-		t.Fatalf("incomplete stream was logged as success: %#v", logs)
+	if len(logs) != 0 {
+		t.Fatalf("Responses stream without usage should not be logged: %#v", logs)
+	}
+}
+
+func TestCanceledIncompleteResponsesStreamIsNotLogged(t *testing.T) {
+	a := &app{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`)).WithContext(ctx)
+	body := []byte("event: response.output_text.delta\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n")
+	a.logCompletedRequest(req, nil, body, http.StatusOK, time.Now())
+
+	logs := a.currentLogs()
+	if len(logs) != 0 {
+		t.Fatalf("canceled incomplete Responses stream should not be logged: %#v", logs)
+	}
+}
+
+func TestEmptyUpstreamResponseIsNotLogged(t *testing.T) {
+	a := &app{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"test"}`))
+	a.logCompletedRequest(req, nil, nil, http.StatusOK, time.Now())
+	if logs := a.currentLogs(); len(logs) != 0 {
+		t.Fatalf("empty upstream response should not be logged: %#v", logs)
+	}
+}
+
+func TestResponsesNullErrorIsIgnored(t *testing.T) {
+	a := &app{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"test","stream":true}`))
+	body := []byte("event: response.completed\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"error\":null,\"usage\":{\"input_tokens\":10,\"output_tokens\":2,\"total_tokens\":12}}}\n\n")
+	a.logCompletedRequest(req, nil, body, http.StatusOK, time.Now())
+
+	logs := a.currentLogs()
+	if len(logs) != 1 || logs[0].Status != http.StatusOK || logs[0].Error != "" || logs[0].TotalTokens != 12 {
+		t.Fatalf("null error was treated as a request failure: %#v", logs)
 	}
 }
 
@@ -1665,6 +1715,70 @@ func TestRequestLogSchemaMigratesRequestMode(t *testing.T) {
 	}
 	if len(modes) != 2 || modes[0] != "stream" || modes[1] != "unknown" {
 		t.Fatalf("unexpected migrated request modes: %#v", modes)
+	}
+}
+
+func TestRepairLegacyRequestLogsRemovesIncompleteStreamsAndPreservesFailures(t *testing.T) {
+	db, err := openAppDB(filepath.Join(t.TempDir(), appSlug+".db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	base := requestLog{
+		At: time.Now(), Method: http.MethodPost, Path: "/v1/responses", Protocol: "Responses",
+		Status: http.StatusOK, RequestMode: "stream",
+	}
+	base.Model = "null-error"
+	base.TotalTokens = 12
+	base.Error = "null"
+	if err := insertRequestLogDB(db, base); err != nil {
+		t.Fatal(err)
+	}
+	base.Model = "missing-usage"
+	base.TotalTokens = 0
+	base.Error = ""
+	if err := insertRequestLogDB(db, base); err != nil {
+		t.Fatal(err)
+	}
+	base.Model = "upstream-failure"
+	base.Status = http.StatusBadGateway
+	base.Error = "stream timed out"
+	if err := insertRequestLogDB(db, base); err != nil {
+		t.Fatal(err)
+	}
+	base.Model = "incomplete-stream"
+	base.Status = http.StatusBadGateway
+	base.Error = "\u5ba2\u6237\u7aef\u5728\u54cd\u5e94\u5b8c\u6210\u524d\u53d6\u6d88\u8bf7\u6c42\uff0cToken \u7528\u91cf\u4e0d\u53ef\u7528"
+	if err := insertRequestLogDB(db, base); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repairLegacyRequestLogs(db); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := listRequestLogsDB(db, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("got %d logs, want 2", len(logs))
+	}
+	byModel := map[string]requestLog{}
+	for _, log := range logs {
+		byModel[log.Model] = log
+	}
+	if log := byModel["null-error"]; log.Status != http.StatusOK || log.Error != "" {
+		t.Fatalf("textual null error was not cleared: %#v", log)
+	}
+	if _, ok := byModel["missing-usage"]; ok {
+		t.Fatalf("historical empty usage log was not removed: %#v", byModel["missing-usage"])
+	}
+	if log := byModel["upstream-failure"]; log.Status != http.StatusBadGateway || log.Error != "stream timed out" {
+		t.Fatalf("explicit upstream stream failure was not preserved: %#v", log)
+	}
+	if _, ok := byModel["incomplete-stream"]; ok {
+		t.Fatalf("historical incomplete stream log was not removed: %#v", byModel["incomplete-stream"])
 	}
 }
 func TestDatabaseStoresConfigAndLogsWithoutBodies(t *testing.T) {

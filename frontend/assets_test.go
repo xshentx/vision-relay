@@ -973,3 +973,98 @@ func TestModelMappingUsesRequestModelOnly(t *testing.T) {
 		t.Fatal("model mapping should use the five-column layout")
 	}
 }
+
+func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	start := strings.Index(index, `<section class="page standard-page span-12 break-armor-page"`)
+	if start < 0 {
+		t.Fatal("break armor page is missing")
+	}
+	endOffset := strings.Index(index[start+1:], `<section class="page`)
+	if endOffset < 0 {
+		t.Fatal("break armor page boundary is missing")
+	}
+	feature := index[start : start+1+endOffset]
+	for _, expected := range []string{
+		`data-page="break-armor"`,
+		`<span>一键破甲</span><small class="nav-test-badge">测试</small>`,
+		`<h3>一键破甲 <span class="break-armor-test-badge">测试功能</span></h3>`,
+		`data-break-armor-client="codex"`,
+		`data-break-armor-client="claude"`,
+		`data-break-armor-client="opencode"`,
+		`data-break-armor-panel="codex"`,
+		`data-break-armor-panel="claude"`,
+		`data-break-armor-panel="opencode"`,
+		`class="nav-test-badge">测试</small>`,
+		`class="break-armor-test-badge">测试功能</span>`,
+		"破甲状态与备份独立管理；Codex 全局模式也只管理破甲字段，不覆盖或恢复供应商、模型与路由。",
+		`data-break-armor-view-tab="sessions"`,
+		`data-break-armor-view-tab="templates"`,
+		`data-break-armor-mode="codex"`,
+		`id="breakArmorSessionList"`,
+		`id="breakArmorTemplateList"`,
+		">\u4e00\u952e\u7834\u7532 Codex</button>",
+		">\u4e00\u952e\u7834\u7532 Claude</button>",
+		">\u4e00\u952e\u7834\u7532 OpenCode</button>",
+	} {
+		if !strings.Contains(index, expected) {
+			t.Fatalf("break armor markup %q is missing", expected)
+		}
+	}
+	for _, forbidden := range []string{"\u90e8\u7f72", "\u91cd\u65b0\u90e8\u7f72", "\u5df2\u542f\u7528", "\u672a\u542f\u7528", "AI 改写", "AI 智能改写", `data-break-armor-view-tab="ai"`} {
+		if strings.Contains(feature, forbidden) {
+			t.Fatalf("break armor page contains forbidden wording %q", forbidden)
+		}
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		`fetch("/api/break-armor/status"`,
+		`fetch("/api/break-armor/preview"`,
+		`fetch("/api/break-armor/apply"`,
+		`fetch("/api/break-armor/restore"`,
+		`/api/break-armor/sessions`,
+		`/api/break-armor/session/preview`,
+		`/api/break-armor/session/patch`,
+		`/api/break-armor/session/backups`,
+		`/api/break-armor/session/restore`,
+		`/api/break-armor/templates`,
+		`injection_mode`,
+		`[data-break-armor-client]`,
+		`[data-break-armor-panel]`,
+		`title: "与一键配置完全隔离"`,
+		`detail: "不读取、不写入、不恢复供应商、模型与路由配置"`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("break armor behavior %q is missing", expected)
+		}
+	}
+
+	for _, forbidden := range []string{`/api/break-armor/ai/settings`, `/api/break-armor/ai/rewrite`, `/api/break-armor/prompt/rewrite`, `breakArmorAI`, `rewriteBreakArmorSessionAI`} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("removed AI rewrite behavior %q is still embedded", forbidden)
+		}
+	}
+
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := string(styleRaw)
+	for _, expected := range []string{".break-armor-page", ".break-armor-test-badge", ".nav-test-badge", ".break-armor-tabs", ".break-armor-flow", ".break-armor-code", ".break-armor-function-tabs", ".break-armor-session-grid", ".break-armor-template-grid", ".break-armor-backup-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end;", ".break-armor-backup-row > label { min-width:0; margin:0; }", ".break-armor-backup-row > label > .vr-component-select { margin-bottom:0; }", ".break-armor-backup-row > button { min-height:44px; margin:0; }", ".break-armor-mode-note { border-color:#bae6fd; color:#36556f; background:#f0f9ff; font-size:13px; font-weight:600; }", ".break-armor-mode-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; font-weight:800; }"} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("break armor style %q is missing", expected)
+		}
+	}
+	if strings.Contains(style, ".break-armor-ai-grid") {
+		t.Fatal("removed AI rewrite style is still embedded")
+	}
+}

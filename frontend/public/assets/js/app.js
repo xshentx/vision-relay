@@ -154,6 +154,26 @@ const releaseLink = document.querySelector("#releaseLink");
 const serviceCard = document.querySelector("#serviceCard");
 const clientTabButtons = [...document.querySelectorAll("[data-client-tab]")];
 const clientTabPanels = [...document.querySelectorAll("[data-client-panel]")];
+const breakArmorTabs = [...document.querySelectorAll("[data-break-armor-client]")];
+const breakArmorPanels = [...document.querySelectorAll("[data-break-armor-panel]")];
+const breakArmorTemplateInputs = [...document.querySelectorAll("[data-break-armor-template]")];
+const breakArmorApplyButtons = [...document.querySelectorAll("[data-break-armor-apply]")];
+const breakArmorRestoreButtons = [...document.querySelectorAll("[data-break-armor-restore]")];
+const breakArmorOverallState = document.querySelector("#breakArmorOverallState");
+const breakArmorViewTabs = [...document.querySelectorAll("[data-break-armor-view-tab]")];
+const breakArmorViews = [...document.querySelectorAll("[data-break-armor-view]")];
+const breakArmorSessionClientButtons = [...document.querySelectorAll("[data-break-armor-session-client]")];
+const breakArmorSessionList = document.querySelector("#breakArmorSessionList");
+const breakArmorSessionSearch = document.querySelector("#breakArmorSessionSearch");
+const breakArmorSessionSummary = document.querySelector("#breakArmorSessionSummary");
+const breakArmorSessionTitle = document.querySelector("#breakArmorSessionTitle");
+const breakArmorSessionMeta = document.querySelector("#breakArmorSessionMeta");
+const breakArmorSessionCounts = document.querySelector("#breakArmorSessionCounts");
+const breakArmorSessionChanges = document.querySelector("#breakArmorSessionChanges");
+const breakArmorSessionBefore = document.querySelector("#breakArmorSessionBefore");
+const breakArmorSessionAfter = document.querySelector("#breakArmorSessionAfter");
+const breakArmorBackupSelect = document.querySelector("#breakArmorBackupSelect");
+const breakArmorTemplateList = document.querySelector("#breakArmorTemplateList");
 
 let textProfiles = [];
 let activeTextProfileId = "";
@@ -198,6 +218,15 @@ let updateProgressTimer = 0;
 let updatePromptedVersion = "";
 let lastUpdateProgressState = "idle";
 let updateInstallAvailable = false;
+let breakArmorStatuses = {};
+let breakArmorPreviewTimers = {};
+let breakArmorCurrentView = "prompt";
+let breakArmorSessionClient = "codex";
+let breakArmorSessions = [];
+let breakArmorSelectedSession = null;
+let breakArmorSessionPreview = null;
+let breakArmorTemplates = [];
+let breakArmorSelectedTemplate = null;
 
 const endpoints = {
   openaiBaseEndpoint: `${location.origin}/v1`,
@@ -223,6 +252,12 @@ navItems.forEach((item) => {
       loadDashboard().catch((err) => {
         console.error(err);
         showToast(`加载看板失败：${err.message || err}`, "error");
+      });
+    }
+    if (item.dataset.page === "break-armor") {
+      loadBreakArmorView(breakArmorCurrentView).catch((err) => {
+        console.error(err);
+        showToast(`加载破甲功能失败：${err.message || err}`, "error");
       });
     }
     if (item.dataset.page === "logs") {
@@ -255,6 +290,553 @@ clientTabButtons.forEach((button) => {
     });
   });
 });
+
+function switchBreakArmorClient(client) {
+  breakArmorTabs.forEach((tab) => {
+    const active = tab.dataset.breakArmorClient === client;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+  });
+  breakArmorPanels.forEach((panel) => {
+    const active = panel.dataset.breakArmorPanel === client;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+  scheduleBreakArmorPreview(client, 0);
+}
+
+function selectedBreakArmorTemplate(client) {
+  return document.querySelector(`[data-break-armor-template="${client}"]:checked`)?.value || "v5";
+}
+
+function breakArmorRequestBody(client) {
+  return {
+    client,
+    template: selectedBreakArmorTemplate(client),
+    custom_prompt: document.querySelector(`[data-break-armor-custom="${client}"]`)?.value || "",
+    mode: document.querySelector(`[data-break-armor-mode="${client}"]`)?.value || "",
+    injection_mode: document.querySelector(`[data-break-armor-injection="${client}"]`)?.value || ""
+  };
+}
+
+function renderBreakArmorStatus(status) {
+  if (!status?.client) return;
+  breakArmorStatuses[status.client] = status;
+  const text = status.broken ? "已破甲" : "未破甲";
+  document.querySelectorAll(`[data-break-armor-status="${status.client}"], [data-break-armor-tab-status="${status.client}"]`).forEach((el) => {
+    el.textContent = text;
+    el.classList.toggle("is-broken", status.broken === true);
+  });
+  const restore = document.querySelector(`[data-break-armor-restore="${status.client}"]`);
+  if (restore) restore.disabled = !status.backup_available;
+  const backup = document.querySelector(`[data-break-armor-backup="${status.client}"]`);
+  if (backup) {
+    backup.textContent = status.backup_available
+      ? `最近备份：${status.latest_backup || "可用"} · 修改只影响 ${status.name}`
+      : `最近备份：尚无 · 首次破甲时自动创建 · 修改只影响 ${status.name}`;
+  }
+  renderBreakArmorChecks(status);
+}
+
+function renderBreakArmorChecks(status) {
+  const list = document.querySelector(`[data-break-armor-checklist="${status.client}"]`);
+  if (!list) return;
+  const items = [
+    {
+      ok: status.installed,
+      title: `${status.name} ${status.installed ? "已检测到" : "程序位置待设置"}`,
+      detail: status.program_path || "可先在设置页填写客户端程序位置"
+    },
+    {
+      ok: status.config_writable,
+      title: status.config_writable ? "破甲工作区可写" : "破甲工作区不可写",
+      detail: status.config_path
+    },
+    {
+      ok: status.route_compatible,
+      title: "与一键配置完全隔离",
+      detail: "不读取、不写入、不恢复供应商、模型与路由配置"
+    },
+    {
+      ok: true,
+      title: status.backup_available ? "恢复点可用" : "快照已准备",
+      detail: status.backup_available ? `最近备份 ${status.latest_backup || "可用"}` : "执行前自动生成时间戳快照"
+    }
+  ];
+  list.innerHTML = items.map((item) => `
+    <div class="break-armor-check${item.ok ? " is-ok" : ""}">
+      <i>${item.ok ? "✓" : "!"}</i>
+      <div><b>${escapeHTML(item.title)}</b><span>${escapeHTML(item.detail)}</span></div>
+    </div>
+  `).join("");
+  const count = items.filter((item) => item.ok).length;
+  const countEl = document.querySelector(`[data-break-armor-check-count="${status.client}"]`);
+  if (countEl) countEl.textContent = `${count} / ${items.length}`;
+}
+
+async function loadBreakArmorStatus() {
+  const res = await fetch("/api/break-armor/status", {cache: "no-store"});
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  const payload = await res.json();
+  const clients = Array.isArray(payload.clients) ? payload.clients : [];
+  const codex = clients.find((item) => item.client === "codex");
+  const codexMode = document.querySelector('[data-break-armor-mode="codex"]');
+  if (codex?.mode && codexMode) {
+    codexMode.value = codex.mode;
+    updateBreakArmorModeNote();
+  }
+  clients.forEach(renderBreakArmorStatus);
+  const brokenCount = clients.filter((item) => item.broken).length;
+  if (breakArmorOverallState) {
+    breakArmorOverallState.textContent = brokenCount > 0
+      ? `环境检查完成 · ${brokenCount} 个客户端已破甲`
+      : "环境检查完成 · 三个客户端彼此独立";
+  }
+  await Promise.all(clients.map((item) => loadBreakArmorPreview(item.client).catch((err) => {
+    const preview = document.querySelector(`[data-break-armor-preview="${item.client}"]`);
+    if (preview) preview.textContent = `预览失败：${err.message || err}`;
+  })));
+  return clients;
+}
+
+async function loadBreakArmorPreview(client) {
+  const body = breakArmorRequestBody(client);
+  if (body.template === "custom" && !body.custom_prompt.trim()) {
+    const preview = document.querySelector(`[data-break-armor-preview="${client}"]`);
+    const diff = document.querySelector(`[data-break-armor-diff="${client}"]`);
+    if (preview) preview.textContent = "请输入自定义破甲模板后生成预览";
+    if (diff) diff.textContent = "等待自定义模板";
+    return null;
+  }
+  const res = await fetch("/api/break-armor/preview", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  const payload = await res.json();
+  renderBreakArmorStatus(payload);
+  const preview = document.querySelector(`[data-break-armor-preview="${client}"]`);
+  const diff = document.querySelector(`[data-break-armor-diff="${client}"]`);
+  if (preview) preview.textContent = payload.config_preview || "暂无配置变化";
+  if (diff) diff.textContent = payload.diff || "暂无差异";
+  return payload;
+}
+
+function scheduleBreakArmorPreview(client, delay = 180) {
+  clearTimeout(breakArmorPreviewTimers[client]);
+  breakArmorPreviewTimers[client] = setTimeout(() => {
+    loadBreakArmorPreview(client).catch((err) => {
+      console.error(err);
+      const preview = document.querySelector(`[data-break-armor-preview="${client}"]`);
+      if (preview) preview.textContent = `预览失败：${err.message || err}`;
+    });
+  }, delay);
+}
+
+async function applyBreakArmorFor(client, button) {
+  const status = breakArmorStatuses[client];
+  const template = selectedBreakArmorTemplate(client);
+  const customPrompt = document.querySelector(`[data-break-armor-custom="${client}"]`)?.value.trim() || "";
+  if (template === "custom" && !customPrompt) {
+    showToast("请先填写自定义破甲模板", "error");
+    return;
+  }
+  const confirmed = await confirmAction({
+    title: `一键破甲 ${status?.name || client}？`,
+    message: "程序会先创建时间戳快照，再写入所选破甲方案。三个客户端的配置与恢复点彼此独立。",
+    variant: "warning",
+    alertTitle: "可随时从备份恢复",
+    alertMessage: status?.config_path || "只修改当前客户端的专属文件",
+    confirmText: `一键破甲 ${status?.name || client}`,
+    cancelText: "取消"
+  });
+  if (!confirmed) return;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "破甲中...";
+  try {
+    const res = await fetch("/api/break-armor/apply", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(breakArmorRequestBody(client))
+    });
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const payload = await res.json();
+    renderBreakArmorStatus(payload.status);
+    showToast(`${payload.status?.name || client} 已破甲`, "success");
+    if (payload.program?.warning) showToast(payload.program.warning, "info");
+    await loadBreakArmorStatus();
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+async function restoreBreakArmorFor(client, button) {
+  const status = breakArmorStatuses[client];
+  const confirmed = await confirmAction({
+    title: `恢复 ${status?.name || client} 原配置？`,
+    message: `将使用 ${status?.latest_backup || "最近的破甲快照"} 恢复当前客户端。`,
+    variant: "warning",
+    alertTitle: "只恢复当前客户端",
+    alertMessage: "其他两个客户端的破甲状态不会改变。",
+    confirmText: "从备份恢复",
+    cancelText: "取消"
+  });
+  if (!confirmed) return;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "恢复中...";
+  try {
+    const res = await fetch("/api/break-armor/restore", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({client, mode: document.querySelector(`[data-break-armor-mode="${client}"]`)?.value || ""})
+    });
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const payload = await res.json();
+    renderBreakArmorStatus(payload.status);
+    showToast(`${payload.status?.name || client} 已恢复原配置`, "success");
+    if (payload.program?.warning) showToast(payload.program.warning, "info");
+    await loadBreakArmorStatus();
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+breakArmorTabs.forEach((tab) => {
+  tab.addEventListener("click", () => switchBreakArmorClient(tab.dataset.breakArmorClient));
+});
+
+breakArmorTemplateInputs.forEach((input) => {
+  input.addEventListener("change", () => {
+    const client = input.dataset.breakArmorTemplate;
+    document.querySelectorAll(`[data-break-armor-template="${client}"]`).forEach((candidate) => {
+      candidate.closest(".break-armor-mode")?.classList.toggle("active", candidate.checked);
+    });
+    const customWrap = document.querySelector(`[data-break-armor-custom-wrap="${client}"]`);
+    if (customWrap) customWrap.hidden = selectedBreakArmorTemplate(client) !== "custom";
+    scheduleBreakArmorPreview(client);
+  });
+});
+
+document.querySelectorAll("[data-break-armor-custom]").forEach((textarea) => {
+  textarea.addEventListener("input", () => scheduleBreakArmorPreview(textarea.dataset.breakArmorCustom, 320));
+});
+
+breakArmorApplyButtons.forEach((button) => {
+  button.addEventListener("click", () => applyBreakArmorFor(button.dataset.breakArmorApply, button).catch((err) => {
+    console.error(err);
+    showToast(`破甲失败：${err.message || err}`, "error");
+  }));
+});
+
+breakArmorRestoreButtons.forEach((button) => {
+  button.addEventListener("click", () => restoreBreakArmorFor(button.dataset.breakArmorRestore, button).catch((err) => {
+    console.error(err);
+    showToast(`恢复失败：${err.message || err}`, "error");
+  }));
+});
+function breakArmorClientName(client) {
+  return ({codex: "Codex", claude: "Claude", opencode: "OpenCode"})[client] || client;
+}
+
+function setBreakArmorView(view) {
+  breakArmorCurrentView = view;
+  breakArmorViewTabs.forEach((button) => button.classList.toggle("active", button.dataset.breakArmorViewTab === view));
+  breakArmorViews.forEach((panel) => {
+    const active = panel.dataset.breakArmorView === view;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+}
+
+async function loadBreakArmorView(view) {
+  setBreakArmorView(view);
+  if (view === "sessions") return loadBreakArmorSessions();
+  if (view === "templates") return loadBreakArmorTemplates();
+  return loadBreakArmorStatus();
+}
+
+function updateBreakArmorModeNote() {
+  const select = document.querySelector('[data-break-armor-mode="codex"]');
+  const note = document.querySelector('[data-break-armor-mode-note="codex"]');
+  if (!select || !note) return;
+  const notes = {
+    profile: 'Profile 只管理 CODEX_HOME/ctf.config.toml 的破甲字段；请使用 <code>codex -p ctf</code>，普通 Codex 与客户端一键配置均不受影响。',
+    global: '全局模式只管理 config.toml 顶层破甲字段；供应商、模型、路由由客户端一键配置继续独立管理，恢复时也只还原破甲字段。',
+    workspace: '工作区模式只写 ~/.codex-ctf-workspace/AGENTS.md，不修改普通 Codex 配置。'
+  };
+  note.innerHTML = notes[select.value] || notes.profile;
+}
+
+function breakArmorSessionRequest() {
+  const selectedChanges = [...document.querySelectorAll('[data-break-armor-change-id]:checked')]
+    .map((input) => input.dataset.breakArmorChangeId).filter(Boolean);
+  return {
+    session_id: breakArmorSelectedSession?.id || "",
+    replacement_text: document.querySelector("#breakArmorSessionReplacement")?.value || "",
+    selected_changes: selectedChanges,
+    clean_reasoning: document.querySelector("#breakArmorCleanReasoning")?.checked !== false
+  };
+}
+
+function renderBreakArmorSessions() {
+  if (!breakArmorSessionList) return;
+  const needle = (breakArmorSessionSearch?.value || "").trim().toLowerCase();
+  const items = breakArmorSessions.filter((item) => [item.title, item.path, item.project_path, item.format].join(" ").toLowerCase().includes(needle));
+  if (breakArmorSessionSummary) breakArmorSessionSummary.textContent = `${items.length} / ${breakArmorSessions.length} 条`;
+  if (!items.length) {
+    breakArmorSessionList.innerHTML = '<div class="break-armor-empty">未检测到匹配会话</div>';
+    return;
+  }
+  breakArmorSessionList.innerHTML = items.map((item) => `
+    <button class="break-armor-session-item${breakArmorSelectedSession?.id === item.id ? " active" : ""}" type="button" data-break-armor-session-id="${escapeHTML(item.id)}">
+      <span><b>${escapeHTML(item.title || "未命名会话")}</b><em>${escapeHTML(item.format || "")}</em></span>
+      <small>${escapeHTML(item.project_path || item.path || "")}</small>
+      <span class="break-armor-session-stats"><i>${item.refusal_count || 0} 拒绝</i><i>${item.reasoning_count || 0} 推理</i>${item.has_backup ? "<i>有备份</i>" : ""}</span>
+    </button>`).join("");
+  breakArmorSessionList.querySelectorAll("[data-break-armor-session-id]").forEach((button) => {
+    button.addEventListener("click", () => selectBreakArmorSession(button.dataset.breakArmorSessionId));
+  });
+}
+
+async function loadBreakArmorSessions() {
+  if (breakArmorSessionSummary) breakArmorSessionSummary.textContent = "正在扫描";
+  const res = await fetch(`/api/break-armor/sessions?client=${encodeURIComponent(breakArmorSessionClient)}`, {cache: "no-store"});
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  const payload = await res.json();
+  breakArmorSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+  if (breakArmorSelectedSession && !breakArmorSessions.some((item) => item.id === breakArmorSelectedSession.id)) clearBreakArmorSessionSelection();
+  renderBreakArmorSessions();
+  if (payload.warning) showToast(`扫描完成：${payload.warning}`, "info");
+  return breakArmorSessions;
+}
+
+function clearBreakArmorSessionSelection() {
+  breakArmorSelectedSession = null;
+  breakArmorSessionPreview = null;
+  if (breakArmorSessionTitle) breakArmorSessionTitle.textContent = "请选择会话";
+  if (breakArmorSessionMeta) breakArmorSessionMeta.textContent = "先在左侧选择一条会话";
+  if (breakArmorSessionCounts) breakArmorSessionCounts.textContent = "0 项";
+  if (breakArmorSessionChanges) breakArmorSessionChanges.innerHTML = '<div class="break-armor-empty">预览后可逐项选择要处理的内容</div>';
+  if (breakArmorSessionBefore) breakArmorSessionBefore.textContent = "等待预览";
+  if (breakArmorSessionAfter) breakArmorSessionAfter.textContent = "等待预览";
+  ["#previewBreakArmorSession", "#patchBreakArmorSession"].forEach((selector) => {
+    const button = document.querySelector(selector); if (button) button.disabled = true;
+  });
+  if (breakArmorBackupSelect) breakArmorBackupSelect.innerHTML = '<option value="">暂无备份</option>';
+  const restore = document.querySelector("#restoreBreakArmorSession"); if (restore) restore.disabled = true;
+}
+
+async function selectBreakArmorSession(id) {
+  breakArmorSelectedSession = breakArmorSessions.find((item) => item.id === id) || null;
+  renderBreakArmorSessions();
+  if (!breakArmorSelectedSession) return clearBreakArmorSessionSelection();
+  if (breakArmorSessionTitle) breakArmorSessionTitle.textContent = breakArmorSelectedSession.title || "未命名会话";
+  if (breakArmorSessionMeta) breakArmorSessionMeta.textContent = `${breakArmorClientName(breakArmorSelectedSession.client)} · ${breakArmorSelectedSession.format} · ${breakArmorSelectedSession.path}`;
+  ["#previewBreakArmorSession", "#patchBreakArmorSession"].forEach((selector) => {
+    const button = document.querySelector(selector); if (button) button.disabled = false;
+  });
+  await Promise.all([previewBreakArmorSession(), loadBreakArmorSessionBackups()]);
+}
+
+function breakArmorChangeLineLabel(change) {
+  const lines = Array.isArray(change?.lines) ? change.lines.filter(Number.isFinite) : [];
+  if (lines.length > 1) return lines.join(" / ");
+  return String(change?.line || "-");
+}
+
+function renderBreakArmorSessionPreview(preview) {
+  breakArmorSessionPreview = preview;
+  const changes = Array.isArray(preview?.changes) ? preview.changes : [];
+  if (breakArmorSessionCounts) breakArmorSessionCounts.textContent = `${preview?.refusal_count || 0} 拒绝 · ${preview?.reasoning_count || 0} 推理`;
+  if (!changes.length) {
+    if (breakArmorSessionChanges) breakArmorSessionChanges.innerHTML = '<div class="break-armor-empty">未检测到需要清理的内容</div>';
+    if (breakArmorSessionBefore) breakArmorSessionBefore.textContent = "无变化";
+    if (breakArmorSessionAfter) breakArmorSessionAfter.textContent = "无变化";
+    return;
+  }
+  if (breakArmorSessionChanges) {
+    breakArmorSessionChanges.innerHTML = changes.map((change) => `
+      <label class="break-armor-change-item">
+        <input type="checkbox" checked data-break-armor-change-id="${escapeHTML(change.id || "")}">
+        <span><b>${change.kind === "reasoning" ? "擦除推理内容" : "替换拒绝回复"} · ${breakArmorChangeLineLabel(change)}</b><small>${escapeHTML((change.original || "加密/结构化推理块").slice(0, 180))}</small></span>
+      </label>`).join("");
+  }
+  if (breakArmorSessionBefore) breakArmorSessionBefore.textContent = changes.map((change) => `[${breakArmorChangeLineLabel(change)}] ${change.original || "Reasoning / Thinking"}`).join("\n\n");
+  if (breakArmorSessionAfter) breakArmorSessionAfter.textContent = changes.map((change) => `[${breakArmorChangeLineLabel(change)}] ${change.replacement || "（擦除）"}`).join("\n\n");
+}
+
+async function previewBreakArmorSession() {
+  if (!breakArmorSelectedSession) return null;
+  const res = await fetch("/api/break-armor/session/preview", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(breakArmorSessionRequest())});
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  const preview = await res.json();
+  renderBreakArmorSessionPreview(preview);
+  return preview;
+}
+
+async function patchBreakArmorSession(button) {
+  if (!breakArmorSelectedSession) return;
+  const selected = [...document.querySelectorAll('[data-break-armor-change-id]:checked')];
+  if (!selected.length) return showToast("请至少选择一项要清理的内容", "error");
+  const confirmed = await confirmAction({title: "备份并清理当前会话？", message: "清理前会自动创建独立备份，并按预览批量替换拒绝回复、擦除所选推理内容。", variant: "warning", alertTitle: "可从任意历史备份恢复", alertMessage: breakArmorSelectedSession.path, confirmText: "备份并清理", cancelText: "取消"});
+  if (!confirmed) return;
+  button.disabled = true;
+  try {
+    const sessionID = breakArmorSelectedSession.id;
+    const res = await fetch("/api/break-armor/session/patch", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(breakArmorSessionRequest())});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    showToast("会话已备份并完成清理", "success");
+    await loadBreakArmorSessions();
+    if (breakArmorSessions.some((item) => item.id === sessionID)) await selectBreakArmorSession(sessionID);
+  } finally { button.disabled = false; }
+}
+
+async function loadBreakArmorSessionBackups() {
+  if (!breakArmorSelectedSession || !breakArmorBackupSelect) return [];
+  const res = await fetch("/api/break-armor/session/backups", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({session_id: breakArmorSelectedSession.id})});
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  const payload = await res.json();
+  const backups = Array.isArray(payload.backups) ? payload.backups : [];
+  breakArmorBackupSelect.innerHTML = backups.length
+    ? '<option value="">选择历史备份</option>' + backups.map((item) => `<option value="${escapeHTML(item.id)}">${escapeHTML(new Date(item.created_at).toLocaleString())} · ${Math.max(1, Math.round((item.size || 0) / 1024))} KB</option>`).join("")
+    : '<option value="">暂无备份</option>';
+  const restore = document.querySelector("#restoreBreakArmorSession"); if (restore) restore.disabled = true;
+  return backups;
+}
+
+async function restoreBreakArmorSession(button) {
+  if (!breakArmorSelectedSession || !breakArmorBackupSelect?.value) return;
+  const confirmed = await confirmAction({title: "恢复所选会话备份？", message: "当前会话文件将恢复到所选历史版本。", variant: "warning", alertTitle: "只影响当前会话", alertMessage: breakArmorSelectedSession.path, confirmText: "恢复所选备份", cancelText: "取消"});
+  if (!confirmed) return;
+  button.disabled = true;
+  try {
+    const sessionID = breakArmorSelectedSession.id;
+    const res = await fetch("/api/break-armor/session/restore", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({session_id: sessionID, backup_id: breakArmorBackupSelect.value})});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    showToast("会话已从历史备份恢复", "success");
+    await loadBreakArmorSessions();
+    if (breakArmorSessions.some((item) => item.id === sessionID)) await selectBreakArmorSession(sessionID);
+  } finally { button.disabled = false; }
+}
+
+function resetBreakArmorTemplateEditor() {
+  breakArmorSelectedTemplate = null;
+  document.querySelector("#breakArmorTemplateID").value = "";
+  document.querySelector("#breakArmorTemplateName").value = "";
+  document.querySelector("#breakArmorTemplatePrompt").value = "";
+  document.querySelector("#breakArmorTemplateName").disabled = false;
+  document.querySelector("#breakArmorTemplatePrompt").disabled = false;
+  document.querySelector("#saveBreakArmorTemplate").disabled = false;
+  document.querySelector("#deleteBreakArmorTemplate").disabled = true;
+}
+
+function renderBreakArmorTemplates() {
+  if (!breakArmorTemplateList) return;
+  document.querySelector("#breakArmorTemplateSummary").textContent = `${breakArmorTemplates.length} 个模板`;
+  breakArmorTemplateList.innerHTML = breakArmorTemplates.map((item) => `
+    <button class="break-armor-template-item${breakArmorSelectedTemplate?.id === item.id ? " active" : ""}" type="button" data-break-armor-template-id="${escapeHTML(item.id)}">
+      <span><b>${escapeHTML(item.name)}</b>${item.builtin ? "<em>内置</em>" : "<em>自定义</em>"}</span><small>${escapeHTML((item.prompt || "").slice(0, 110))}</small>
+    </button>`).join("");
+  breakArmorTemplateList.querySelectorAll("[data-break-armor-template-id]").forEach((button) => button.addEventListener("click", () => selectBreakArmorTemplate(button.dataset.breakArmorTemplateId)));
+}
+
+function selectBreakArmorTemplate(id) {
+  breakArmorSelectedTemplate = breakArmorTemplates.find((item) => item.id === id) || null;
+  renderBreakArmorTemplates();
+  if (!breakArmorSelectedTemplate) return resetBreakArmorTemplateEditor();
+  document.querySelector("#breakArmorTemplateID").value = breakArmorSelectedTemplate.id;
+  document.querySelector("#breakArmorTemplateName").value = breakArmorSelectedTemplate.name || "";
+  document.querySelector("#breakArmorTemplatePrompt").value = breakArmorSelectedTemplate.prompt || "";
+  document.querySelector("#breakArmorTemplateName").disabled = breakArmorSelectedTemplate.builtin === true;
+  document.querySelector("#breakArmorTemplatePrompt").disabled = breakArmorSelectedTemplate.builtin === true;
+  document.querySelector("#saveBreakArmorTemplate").disabled = breakArmorSelectedTemplate.builtin === true;
+  document.querySelector("#deleteBreakArmorTemplate").disabled = breakArmorSelectedTemplate.builtin === true;
+}
+
+async function loadBreakArmorTemplates() {
+  const client = document.querySelector("#breakArmorTemplateClient").value;
+  const res = await fetch(`/api/break-armor/templates?client=${encodeURIComponent(client)}`, {cache: "no-store"});
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  const payload = await res.json();
+  breakArmorTemplates = Array.isArray(payload.templates) ? payload.templates : [];
+  breakArmorSelectedTemplate = breakArmorTemplates.find((item) => item.id === breakArmorSelectedTemplate?.id) || breakArmorTemplates[0] || null;
+  renderBreakArmorTemplates();
+  if (breakArmorSelectedTemplate) selectBreakArmorTemplate(breakArmorSelectedTemplate.id); else resetBreakArmorTemplateEditor();
+  return breakArmorTemplates;
+}
+
+async function saveBreakArmorTemplate(button) {
+  const client = document.querySelector("#breakArmorTemplateClient").value;
+  const name = document.querySelector("#breakArmorTemplateName").value.trim();
+  const prompt = document.querySelector("#breakArmorTemplatePrompt").value.trim();
+  if (!name || !prompt) return showToast("请填写模板名称和内容", "error");
+  button.disabled = true;
+  try {
+    const res = await fetch("/api/break-armor/templates", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({id: document.querySelector("#breakArmorTemplateID").value, client, name, prompt})});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const payload = await res.json();
+    breakArmorSelectedTemplate = payload.template || null;
+    await loadBreakArmorTemplates();
+    showToast("破甲模板已保存", "success");
+  } finally { button.disabled = false; }
+}
+
+async function deleteBreakArmorTemplate(button) {
+  if (!breakArmorSelectedTemplate || breakArmorSelectedTemplate.builtin) return;
+  const confirmed = await confirmAction({title: "删除自定义模板？", message: breakArmorSelectedTemplate.name, variant: "warning", alertTitle: "此操作不会影响已破甲客户端", alertMessage: "只删除模板库中的这一条记录。", confirmText: "删除模板", cancelText: "取消"});
+  if (!confirmed) return;
+  button.disabled = true;
+  try {
+    const res = await fetch("/api/break-armor/templates", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({action: "delete", id: breakArmorSelectedTemplate.id, client: breakArmorSelectedTemplate.client})});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    resetBreakArmorTemplateEditor(); await loadBreakArmorTemplates(); showToast("模板已删除", "success");
+  } finally { button.disabled = false; }
+}
+
+function useBreakArmorTemplate() {
+  if (!breakArmorSelectedTemplate) return showToast("请先选择模板", "error");
+  const client = document.querySelector("#breakArmorTemplateClient").value;
+  if (breakArmorSelectedTemplate.builtin && ["v5", "v35"].includes(breakArmorSelectedTemplate.id)) {
+    const radio = document.querySelector(`[data-break-armor-template="${client}"][value="${breakArmorSelectedTemplate.id}"]`);
+    if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change")); }
+  } else {
+    const radio = document.querySelector(`[data-break-armor-template="${client}"][value="custom"]`);
+    const textarea = document.querySelector(`[data-break-armor-custom="${client}"]`);
+    if (textarea) textarea.value = breakArmorSelectedTemplate.prompt || "";
+    if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change")); }
+  }
+  switchBreakArmorClient(client); setBreakArmorView("prompt");
+  showToast(`已载入 ${breakArmorSelectedTemplate.name}`, "success");
+}
+
+breakArmorViewTabs.forEach((button) => button.addEventListener("click", () => loadBreakArmorView(button.dataset.breakArmorViewTab).catch((err) => showToast(`加载失败：${err.message || err}`, "error"))));
+breakArmorSessionClientButtons.forEach((button) => button.addEventListener("click", () => {
+  breakArmorSessionClient = button.dataset.breakArmorSessionClient;
+  breakArmorSessionClientButtons.forEach((candidate) => candidate.classList.toggle("active", candidate === button));
+  clearBreakArmorSessionSelection();
+  loadBreakArmorSessions().catch((err) => showToast(`扫描会话失败：${err.message || err}`, "error"));
+}));
+document.querySelector('[data-break-armor-mode="codex"]')?.addEventListener("change", () => { updateBreakArmorModeNote(); scheduleBreakArmorPreview("codex", 0); });
+document.querySelector('[data-break-armor-injection="codex"]')?.addEventListener("change", () => scheduleBreakArmorPreview("codex", 0));
+document.querySelector("#refreshBreakArmorSessions")?.addEventListener("click", () => loadBreakArmorSessions().catch((err) => showToast(`扫描会话失败：${err.message || err}`, "error")));
+breakArmorSessionSearch?.addEventListener("input", renderBreakArmorSessions);
+document.querySelector("#previewBreakArmorSession")?.addEventListener("click", () => previewBreakArmorSession().catch((err) => showToast(`预览失败：${err.message || err}`, "error")));
+document.querySelector("#breakArmorSessionReplacement")?.addEventListener("input", () => { if (breakArmorSelectedSession) previewBreakArmorSession().catch(() => {}); });
+document.querySelector("#breakArmorCleanReasoning")?.addEventListener("change", () => { if (breakArmorSelectedSession) previewBreakArmorSession().catch(() => {}); });
+document.querySelector("#patchBreakArmorSession")?.addEventListener("click", (event) => patchBreakArmorSession(event.currentTarget).catch((err) => showToast(`会话清理失败：${err.message || err}`, "error")));
+breakArmorBackupSelect?.addEventListener("change", () => { const button = document.querySelector("#restoreBreakArmorSession"); if (button) button.disabled = !breakArmorBackupSelect.value; });
+document.querySelector("#restoreBreakArmorSession")?.addEventListener("click", (event) => restoreBreakArmorSession(event.currentTarget).catch((err) => showToast(`恢复失败：${err.message || err}`, "error")));
+document.querySelector("#breakArmorTemplateClient")?.addEventListener("change", () => { resetBreakArmorTemplateEditor(); loadBreakArmorTemplates().catch((err) => showToast(`读取模板失败：${err.message || err}`, "error")); });
+document.querySelector("#newBreakArmorTemplate")?.addEventListener("click", resetBreakArmorTemplateEditor);
+document.querySelector("#saveBreakArmorTemplate")?.addEventListener("click", (event) => saveBreakArmorTemplate(event.currentTarget).catch((err) => showToast(`保存模板失败：${err.message || err}`, "error")));
+document.querySelector("#deleteBreakArmorTemplate")?.addEventListener("click", (event) => deleteBreakArmorTemplate(event.currentTarget).catch((err) => showToast(`删除模板失败：${err.message || err}`, "error")));
+document.querySelector("#useBreakArmorTemplate")?.addEventListener("click", useBreakArmorTemplate);
+updateBreakArmorModeNote();
 
 function showPage(page) {
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.page === page));
@@ -476,11 +1058,13 @@ async function confirmAction(options) {
 }
 
 async function readErrorMessage(res) {
+  const raw = await res.text();
+  if (!raw) return `HTTP ${res.status}`;
   try {
-    const payload = await res.json();
-    return payload?.error?.message || `HTTP ${res.status}`;
+    const payload = JSON.parse(raw);
+    return payload?.error?.message || payload?.error || raw;
   } catch {
-    return await res.text() || `HTTP ${res.status}`;
+    return raw;
   }
 }
 

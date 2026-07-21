@@ -4447,3 +4447,681 @@ body.model-test-open {
     width: 100%;
   }
 }
+
+/* Break Armor · Option B step-by-step cockpit */
+.break-armor-page {
+  gap: 0;
+}
+
+.break-armor-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 16px;
+}
+
+.break-armor-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 3px 0 6px;
+  font-size: clamp(24px, 3vw, 34px);
+  letter-spacing: -0.035em;
+}
+
+.break-armor-test-badge,
+.nav-test-badge {
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #c2410c;
+  font-weight: 850;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.break-armor-test-badge {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.nav-test-badge {
+  margin-left: auto;
+  padding: 2px 6px;
+  font-size: 9px;
+}
+
+.break-armor-heading > div > p:last-child {
+  max-width: 720px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.break-armor-state {
+  flex: 0 0 auto;
+  padding: 8px 11px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: var(--blue-ink);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.break-armor-tabs {
+  display: inline-flex;
+  gap: 5px;
+  margin-bottom: 12px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #eef2f6;
+}
+
+.break-armor-tab {
+  min-width: 150px;
+  padding: 10px 14px;
+  border-radius: 7px;
+  background: transparent;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.break-armor-tab > span {
+  margin-left: 6px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.break-armor-tab.active {
+  background: #fff;
+  color: var(--blue-ink);
+  box-shadow: 0 2px 9px rgba(20, 36, 64, 0.1);
+}
+
+.break-armor-tab.active > span,
+.break-armor-tab > span.is-broken {
+  color: var(--green);
+}
+
+.break-armor-panel {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 14px 35px rgba(20, 36, 64, 0.07);
+}
+
+.break-armor-panel:not(.active) {
+  display: none;
+}
+
+.break-armor-cockpit {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(310px, 0.9fr);
+  min-height: 470px;
+}
+
+.break-armor-main {
+  min-width: 0;
+  padding: 26px;
+}
+
+.break-armor-aside {
+  min-width: 0;
+  padding: 24px;
+  border-left: 1px solid var(--line);
+  background: #f8fafc;
+}
+
+.break-armor-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.break-armor-logo {
+  flex: 0 0 54px;
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #111827, #2563eb);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.break-armor-logo.is-claude {
+  background: linear-gradient(135deg, #7c2d12, #ea580c);
+}
+
+.break-armor-logo.is-opencode {
+  background: linear-gradient(135deg, #064e3b, #10b981);
+}
+
+.break-armor-title-line {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.break-armor-title-line h4 {
+  margin: 0 0 3px;
+  font-size: 21px;
+}
+
+.break-armor-identity p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.break-armor-badge {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.break-armor-badge.is-broken {
+  background: #dcfce7;
+  color: #047857;
+}
+
+.break-armor-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin: 24px 0;
+}
+
+.break-armor-flow > div {
+  position: relative;
+  padding: 13px;
+  border: 1px solid #dfe7ee;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.break-armor-flow > div:not(:last-child)::after {
+  content: "›";
+  position: absolute;
+  z-index: 1;
+  top: 22px;
+  right: -8px;
+  color: #94a3b8;
+  font-size: 20px;
+}
+
+.break-armor-flow b,
+.break-armor-flow span {
+  display: block;
+}
+
+.break-armor-flow b {
+  margin-bottom: 5px;
+  font-size: 11px;
+}
+
+.break-armor-flow span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.break-armor-main h5,
+.break-armor-aside h5 {
+  margin: 0;
+  font-size: 12px;
+}
+
+.break-armor-modes {
+  display: grid;
+  gap: 8px;
+  margin: 13px 0;
+}
+
+.break-armor-mode {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid #dfe7ee;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.break-armor-mode.active {
+  border-color: #93b4ff;
+  background: #f2f6ff;
+}
+
+.break-armor-mode input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.break-armor-radio {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  border: 2px solid #94a3b8;
+  border-radius: 50%;
+}
+
+.break-armor-mode.active .break-armor-radio {
+  border: 5px solid var(--blue);
+}
+
+.break-armor-mode b,
+.break-armor-mode small {
+  display: block;
+}
+
+.break-armor-mode b {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.break-armor-mode small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.break-armor-mode em {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 2px 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-style: normal;
+}
+
+.break-armor-mode em.is-green {
+  background: #dcfce7;
+  color: #047857;
+}
+
+.break-armor-mode em.is-amber {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.break-armor-custom {
+  display: grid;
+  gap: 7px;
+  margin: 13px 0;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.break-armor-custom[hidden] {
+  display: none;
+}
+
+.break-armor-custom textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.break-armor-launch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 17px;
+  padding: 14px;
+  border-radius: 8px;
+  background: #17202c;
+  color: #fff;
+}
+
+.break-armor-launch b,
+.break-armor-launch span {
+  display: block;
+}
+
+.break-armor-launch b {
+  font-size: 12px;
+}
+
+.break-armor-launch span {
+  margin-top: 3px;
+  color: #cbd5e1;
+  font-size: 10px;
+}
+
+.break-armor-launch .primary-action {
+  flex: 0 0 auto;
+  background: #3b82f6;
+}
+
+.break-armor-aside-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.break-armor-aside-title > span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #047857;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.break-armor-checklist {
+  display: grid;
+  gap: 12px;
+  margin: 17px 0 21px;
+}
+
+.break-armor-check {
+  display: grid;
+  grid-template-columns: 23px minmax(0, 1fr);
+  gap: 9px;
+}
+
+.break-armor-check > i {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #fee2e2;
+  color: #be123c;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.break-armor-check.is-ok > i {
+  background: #dcfce7;
+  color: #047857;
+}
+
+.break-armor-check b,
+.break-armor-check span {
+  display: block;
+}
+
+.break-armor-check b {
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+
+.break-armor-check span {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.break-armor-code,
+.break-armor-diff pre {
+  overflow: auto;
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 12px;
+  border: 0;
+  border-radius: 8px;
+  background: #111827;
+  color: #d1fae5;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.break-armor-diff {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.break-armor-diff summary {
+  padding: 9px 11px;
+  color: #475569;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.break-armor-diff pre {
+  max-height: 320px;
+  margin: 0;
+  border-radius: 0 0 7px 7px;
+  color: #dbeafe;
+}
+
+.break-armor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.break-armor-footer button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.break-armor-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 9px;
+  background: #eff6ff;
+}
+
+.break-armor-notice strong,
+.break-armor-notice div > span {
+  display: block;
+}
+
+.break-armor-notice strong {
+  color: #1e3a8a;
+  font-size: 12px;
+}
+
+.break-armor-notice div > span {
+  margin-top: 3px;
+  color: #4b6386;
+  font-size: 10px;
+}
+
+.break-armor-notice > span {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: var(--blue-ink);
+  font-size: 9px;
+  font-weight: 850;
+}
+
+@media (max-width: 1180px) {
+  .break-armor-cockpit {
+    grid-template-columns: 1fr;
+  }
+
+  .break-armor-aside {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .break-armor-heading,
+  .break-armor-launch,
+  .break-armor-footer,
+  .break-armor-notice {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .break-armor-state,
+  .break-armor-notice > span {
+    align-self: flex-start;
+  }
+
+  .break-armor-tabs {
+    width: 100%;
+  }
+
+  .break-armor-tab {
+    min-width: 0;
+    flex: 1 1 0;
+    padding-inline: 7px;
+  }
+
+  .break-armor-tab > span {
+    display: none;
+  }
+
+  .break-armor-main,
+  .break-armor-aside {
+    padding: 18px;
+  }
+
+  .break-armor-flow {
+    grid-template-columns: 1fr;
+  }
+
+  .break-armor-flow > div:not(:last-child)::after {
+    display: none;
+  }
+
+  .break-armor-launch .primary-action,
+  .break-armor-footer button {
+    width: 100%;
+  }
+}
+
+/* Break Armor: session cleanup and template tools. */
+.break-armor-function-tabs { display:flex; gap:8px; padding:6px; margin:18px 0; border:1px solid rgba(148,163,184,.18); border-radius:14px; background:rgba(15,23,42,.58); overflow-x:auto; }
+.break-armor-function-tabs button { min-width:112px; padding:10px 16px; border:0; border-radius:10px; color:var(--muted); background:transparent; font-weight:700; cursor:pointer; white-space:nowrap; }
+.break-armor-function-tabs button:hover { color:var(--text); background:rgba(148,163,184,.08); }
+.break-armor-function-tabs button.active { color:#e7fbff; background:linear-gradient(135deg,rgba(6,182,212,.25),rgba(59,130,246,.18)); box-shadow:inset 0 0 0 1px rgba(34,211,238,.28); }
+.break-armor-view[hidden] { display:none !important; }
+.break-armor-view.active { animation:breakArmorViewIn .22s ease; }
+@keyframes breakArmorViewIn { from { opacity:.3; transform:translateY(5px); } to { opacity:1; transform:none; } }
+.break-armor-tool-heading,.break-armor-section-title { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.break-armor-tool-heading { margin:4px 0 18px; }
+.break-armor-tool-heading h4,.break-armor-section-title h5 { margin:0; color:var(--text); }
+.break-armor-tool-heading p { margin:5px 0 0; color:var(--muted); }
+.break-armor-section-title span { display:block; margin-top:4px; color:var(--muted); font-size:12px; }
+.break-armor-segmented { display:flex; gap:4px; padding:4px; border:1px solid rgba(148,163,184,.18); border-radius:11px; background:rgba(2,6,23,.38); }
+.break-armor-segmented button { border:0; border-radius:8px; padding:8px 13px; color:var(--muted); background:transparent; cursor:pointer; font-weight:700; }
+.break-armor-segmented button.active { color:#dffbff; background:rgba(8,145,178,.3); }
+.break-armor-session-grid { display:grid; grid-template-columns:minmax(280px,.72fr) minmax(0,1.7fr); gap:16px; align-items:start; }
+.break-armor-session-list-panel,.break-armor-session-editor,.break-armor-card { border:1px solid rgba(148,163,184,.18); border-radius:16px; background:linear-gradient(150deg,rgba(15,23,42,.88),rgba(8,15,30,.88)); box-shadow:0 16px 44px rgba(2,6,23,.18); }
+.break-armor-session-list-panel,.break-armor-session-editor,.break-armor-card { padding:18px; }
+.break-armor-search { display:block; margin:14px 0 10px; }
+.break-armor-search span,.break-armor-field > span,.break-armor-inline-select span,.break-armor-codex-options label > span,.break-armor-backup-row label > span { display:block; margin-bottom:7px; color:var(--muted); font-size:12px; font-weight:700; }
+.break-armor-search input,.break-armor-field input,.break-armor-field textarea,.break-armor-field select,.break-armor-codex-options select,.break-armor-inline-select select,.break-armor-backup-row select { width:100%; border:1px solid rgba(148,163,184,.22); border-radius:10px; padding:10px 11px; color:var(--text); background:rgba(2,6,23,.52); outline:none; }
+.break-armor-search input:focus,.break-armor-field input:focus,.break-armor-field textarea:focus,.break-armor-codex-options select:focus { border-color:rgba(34,211,238,.55); box-shadow:0 0 0 3px rgba(6,182,212,.09); }
+.break-armor-session-list { display:flex; flex-direction:column; gap:8px; max-height:610px; overflow:auto; padding-right:3px; }
+.break-armor-session-item,.break-armor-template-item { width:100%; border:1px solid rgba(148,163,184,.14); border-radius:12px; padding:12px; color:var(--text); background:rgba(2,6,23,.35); text-align:left; cursor:pointer; }
+.break-armor-session-item:hover,.break-armor-template-item:hover { border-color:rgba(34,211,238,.35); background:rgba(8,145,178,.08); }
+.break-armor-session-item.active,.break-armor-template-item.active { border-color:rgba(34,211,238,.58); background:linear-gradient(135deg,rgba(6,182,212,.15),rgba(59,130,246,.08)); }
+.break-armor-session-item > span:first-child,.break-armor-template-item > span:first-child { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.break-armor-session-item b,.break-armor-template-item b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.break-armor-session-item em,.break-armor-template-item em { flex:none; color:#67e8f9; font-size:10px; font-style:normal; text-transform:uppercase; }
+.break-armor-session-item small,.break-armor-template-item small { display:block; margin-top:7px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.break-armor-session-stats { display:flex !important; justify-content:flex-start !important; gap:6px !important; margin-top:9px; }
+.break-armor-session-stats i { border-radius:999px; padding:3px 7px; color:#cbd5e1; background:rgba(148,163,184,.1); font-size:10px; font-style:normal; }
+.break-armor-session-options { display:flex; gap:14px; align-items:flex-end; margin:16px 0 12px; }
+.break-armor-field { display:block; }
+.break-armor-field.grow { flex:1; }
+.break-armor-field textarea { resize:vertical; min-height:72px; }
+.break-armor-toggle { display:flex; align-items:center; gap:8px; padding:11px 12px; border:1px solid rgba(148,163,184,.16); border-radius:10px; color:var(--muted); white-space:nowrap; }
+.break-armor-toggle input { accent-color:#06b6d4; }
+.break-armor-session-actions,.break-armor-template-actions,.break-armor-template-actions > div { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+.break-armor-change-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:15px 0; }
+.break-armor-change-item { display:flex; align-items:flex-start; gap:9px; min-width:0; padding:11px; border:1px solid rgba(148,163,184,.14); border-radius:11px; background:rgba(2,6,23,.28); }
+.break-armor-change-item input { margin-top:3px; accent-color:#06b6d4; }
+.break-armor-change-item span { min-width:0; }
+.break-armor-change-item b,.break-armor-change-item small { display:block; }
+.break-armor-change-item b { color:#dbeafe; font-size:12px; }
+.break-armor-change-item small { margin-top:5px; color:var(--muted); line-height:1.45; overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+.break-armor-compare { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:14px; }
+.break-armor-compare > div { min-width:0; border:1px solid rgba(148,163,184,.14); border-radius:12px; overflow:hidden; background:rgba(2,6,23,.38); }
+.break-armor-compare h6 { margin:0; padding:9px 12px; color:var(--muted); border-bottom:1px solid rgba(148,163,184,.12); }
+.break-armor-compare pre { min-height:150px; max-height:310px; margin:0; padding:12px; overflow:auto; color:#cbd5e1; white-space:pre-wrap; word-break:break-word; }
+.break-armor-backup-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:10px; margin-top:14px; padding-top:14px; border-top:1px solid rgba(148,163,184,.12); }
+.break-armor-backup-row > label { min-width:0; margin:0; }
+.break-armor-backup-row > label > .vr-component-select { margin-bottom:0; }
+.break-armor-backup-row > button { min-height:44px; margin:0; }
+.break-armor-empty { padding:24px 12px; color:var(--muted); text-align:center; border:1px dashed rgba(148,163,184,.16); border-radius:11px; }
+.break-armor-template-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.break-armor-card .break-armor-field { margin-top:13px; }
+.break-armor-card > .primary-action { margin-top:14px; }
+.break-armor-template-grid { grid-template-columns:minmax(260px,.72fr) minmax(0,1.45fr); align-items:start; }
+.break-armor-template-list { display:flex; flex-direction:column; gap:8px; max-height:560px; margin-top:13px; overflow:auto; }
+.break-armor-template-actions { justify-content:space-between; margin-top:13px; }
+.break-armor-codex-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:15px 0 8px; }
+.break-armor-mode-note { margin-bottom:16px; padding:10px 12px; border:1px solid rgba(34,211,238,.18); border-radius:10px; color:#a5f3fc; background:rgba(8,145,178,.07); font-size:12px; line-height:1.55; }
+.break-armor-mode-note code { color:#67e8f9; }
+.break-armor-inline-select { min-width:185px; margin-bottom:0; }
+.break-armor-inline-select > .vr-component-select { margin-bottom:0; }
+@media (max-width:1050px) { .break-armor-session-grid,.break-armor-template-grid { grid-template-columns:1fr; } .break-armor-session-list { max-height:340px; } }
+@media (max-width:760px) { .break-armor-tool-heading,.break-armor-section-title { align-items:stretch; flex-direction:column; } .break-armor-segmented { overflow-x:auto; } .break-armor-compare,.break-armor-change-list,.break-armor-codex-options { grid-template-columns:1fr; } .break-armor-session-options { align-items:stretch; flex-direction:column; } .break-armor-template-actions { align-items:stretch; flex-direction:column; } .break-armor-backup-row { grid-template-columns:1fr; align-items:stretch; } .break-armor-backup-row > button { width:100%; } }
+
+/* Break Armor light-shell compatibility and overflow guard. */
+.break-armor-mode { position:relative; }
+.break-armor-mode input { width:1px; height:1px; }
+.break-armor-function-tabs { border-color:#dbe4ee; background:#eef2f7; }
+.break-armor-function-tabs button { color:#64748b; }
+.break-armor-function-tabs button:hover { color:#1e3a5f; background:rgba(255,255,255,.65); }
+.break-armor-function-tabs button.active { color:#0f5aa8; background:#fff; box-shadow:0 1px 4px rgba(15,23,42,.08),inset 0 0 0 1px #bfdbfe; }
+.break-armor-segmented { border-color:#dbe4ee; background:#f1f5f9; }
+.break-armor-segmented button { color:#64748b; }
+.break-armor-segmented button.active { color:#0f5aa8; background:#fff; box-shadow:0 1px 3px rgba(15,23,42,.08); }
+.break-armor-session-list-panel,.break-armor-session-editor,.break-armor-card { border-color:#dfe7ee; background:#fff; box-shadow:0 12px 36px rgba(15,23,42,.05); }
+.break-armor-search input,.break-armor-field input,.break-armor-field textarea,.break-armor-field select,.break-armor-codex-options select,.break-armor-inline-select select,.break-armor-backup-row select { border-color:#d8e1ea; color:#0f172a; background:#fff; }
+.break-armor-session-item,.break-armor-template-item { border-color:#e1e8f0; color:#0f172a; background:#fff; }
+.break-armor-session-item:hover,.break-armor-template-item:hover { border-color:#93c5fd; background:#f8fbff; }
+.break-armor-session-item.active,.break-armor-template-item.active { border-color:#93b4ff; background:#f2f6ff; }
+.break-armor-session-stats i { color:#475569; background:#eef2f7; }
+.break-armor-change-item { border-color:#e1e8f0; background:#f8fafc; }
+.break-armor-change-item b { color:#1e293b; }
+.break-armor-compare > div { border-color:#e1e8f0; background:#f8fafc; }
+.break-armor-compare pre { color:#334155; }
+.break-armor-toggle { border-color:#dfe7ee; color:#475569; background:#fff; }
+.break-armor-mode-note { border-color:#bae6fd; color:#36556f; background:#f0f9ff; font-size:13px; font-weight:600; }
+.break-armor-mode-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; font-weight:800; }

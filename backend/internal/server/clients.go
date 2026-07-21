@@ -116,7 +116,12 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	a.breakArmorMu.Lock()
 	result, err := a.configureClientRoute(client, req.WorkDir, requestOrigin(r, a.currentConfig()), home)
+	if err == nil {
+		err = a.setClientRouteEnabled(client, true)
+	}
+	a.breakArmorMu.Unlock()
 	if err != nil {
 		status := http.StatusInternalServerError
 		var validationErr *clientRouteValidationError
@@ -124,10 +129,6 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusBadRequest
 		}
 		writeError(w, status, err)
-		return
-	}
-	if err := a.setClientRouteEnabled(client, true); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	cfg := a.currentConfig()
@@ -185,7 +186,9 @@ func (a *app) handleClientRoutesApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.currentConfig()
+	a.breakArmorMu.Lock()
 	results, applyErrors := a.configureEnabledClientRoutes(requestOrigin(r, cfg), home)
+	a.breakArmorMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               len(applyErrors) == 0,
 		"clients":          results,
@@ -351,12 +354,13 @@ func (a *app) handleClientRestore(w http.ResponseWriter, r *http.Request) {
 	cfg := a.currentConfig()
 	projectDir := clientProjectDir(client, req.WorkDir, home)
 	configPath := configuredClientConfigPath(cfg, client, home)
+	a.breakArmorMu.Lock()
 	path, err := restoreCodexAccountConfigAtPath(home, configPath, projectDir, cfg.UnifyCodexSessionHistory)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	if err == nil {
+		err = a.setClientRouteEnabled(client, false)
 	}
-	if err := a.setClientRouteEnabled(client, false); err != nil {
+	a.breakArmorMu.Unlock()
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}

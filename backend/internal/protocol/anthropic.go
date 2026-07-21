@@ -433,6 +433,36 @@ func WriteAnthropicStreamFromChatCompletion(w http.ResponseWriter, resp *http.Re
 	writeAnthropicSSE(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 }
 
+// WriteAnthropicStreamFromSyncResponse adapts a completed native Anthropic
+// message to Anthropic SSE for a streaming client.
+func WriteAnthropicStreamFromSyncResponse(w http.ResponseWriter, resp *http.Response) {
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		copyHeader(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(body)
+		return
+	}
+	var message map[string]any
+	if err := json.Unmarshal(body, &message); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("invalid upstream anthropic response: %w", err))
+		return
+	}
+	writeAnthropicSyntheticStream(w, resp.Header, message)
+}
+
+// WriteAnthropicStreamFromSyncChatCompletion adapts a completed Chat
+// Completions response to Anthropic SSE.
+func WriteAnthropicStreamFromSyncChatCompletion(w http.ResponseWriter, resp *http.Response) {
+	defer resp.Body.Close()
+	writeAnthropicSyntheticStreamFromChatCompletion(w, resp)
+}
+
 func writeAnthropicSyntheticStreamFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -444,9 +474,11 @@ func writeAnthropicSyntheticStreamFromChatCompletion(w http.ResponseWriter, resp
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
+	writeAnthropicSyntheticStream(w, resp.Header, chatCompletionToAnthropic(chat))
+}
 
-	message := chatCompletionToAnthropic(chat)
-	copyHeader(w.Header(), resp.Header)
+func writeAnthropicSyntheticStream(w http.ResponseWriter, header http.Header, message map[string]any) {
+	copyHeader(w.Header(), header)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)

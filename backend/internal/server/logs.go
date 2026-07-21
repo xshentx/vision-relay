@@ -200,6 +200,9 @@ func (a *app) appendRequestLog(log requestLog) {
 
 func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, status int, started time.Time, firstTokenValues ...int64) {
 	requestPayload := decodeJSONMap(body)
+	if len(bytes.TrimSpace(responseBody)) == 0 {
+		return
+	}
 	firstTokenMS := firstInt64FromSlice(firstTokenValues)
 	sseState := inspectSSELogBody(responseBody)
 	if status >= 400 || !sseState.IsSSE {
@@ -227,25 +230,15 @@ func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, st
 		log.Error = errorTextFromPayload(response)
 	} else {
 		fillUsageFromSSE(&log, responseBody)
-		if status < 400 && isOpenAIResponsesPath(r.URL.Path) {
-			switch {
-			case sseState.Failed:
-				status = http.StatusBadGateway
-				if log.Error == "" {
-					log.Error = "上游 Responses 响应流失败"
-				}
-			case !sseState.Completed && log.TotalTokens == 0:
-				if r.Context().Err() != nil {
-					status = 499
-					log.Error = "客户端在响应完成前取消请求，Token 用量不可用"
-				} else {
-					status = http.StatusBadGateway
-					log.Error = "上游 Responses 响应流未正常完成，Token 用量不可用"
-				}
+	}
+	if status < 400 && isOpenAIResponsesPath(r.URL.Path) && sseState.IsSSE {
+		switch {
+		case sseState.Failed:
+			if log.Error == "" {
+				log.Error = "上游 Responses 响应流失败"
 			}
-		}
-		if log.Error == "" && status >= 400 {
-			log.Error = statusText(status)
+		case !sseState.Completed || !hasTokenUsageLog(log):
+			return
 		}
 	}
 	if status >= 400 && log.Error == "" {
@@ -253,6 +246,10 @@ func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, st
 	}
 	log.Status = status
 	a.appendRequestLog(log)
+}
+
+func hasTokenUsageLog(log requestLog) bool {
+	return log.InputTokens > 0 || log.OutputTokens > 0 || log.TotalTokens > 0 || log.CacheHitTokens > 0 || log.CacheWriteTokens > 0
 }
 
 func isSSELogBody(body []byte) bool {
@@ -440,15 +437,23 @@ func errorTextFromPayload(payload map[string]any) string {
 		}
 	}
 	errValue, ok := payload["error"]
-	if ok {
+	if ok && errValue != nil {
 		switch v := errValue.(type) {
 		case string:
-			return v
+			text := strings.TrimSpace(v)
+			if strings.EqualFold(text, "null") || strings.EqualFold(text, "<nil>") {
+				return ""
+			}
+			return text
 		case map[string]any:
 			return firstString(v["message"], v["type"], v["code"])
 		default:
 			b, _ := json.Marshal(v)
-			return string(b)
+			text := strings.TrimSpace(string(b))
+			if strings.EqualFold(text, "null") {
+				return ""
+			}
+			return text
 		}
 	}
 	switch strings.ToLower(firstString(payload["type"])) {

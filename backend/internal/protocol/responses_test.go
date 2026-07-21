@@ -101,3 +101,59 @@ func TestWriteStreamingResponsesReportsScannerErrors(t *testing.T) {
 		t.Fatalf("scanner error did not fail the stream:\n%s", body)
 	}
 }
+
+func TestWriteStreamingResponsesFromSyncChatCompletion(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{
+			"id":"chatcmpl-sync","model":"test-model","created":123,
+			"choices":[{"message":{"role":"assistant","content":"sync fallback"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}
+		}`)),
+	}
+	recorder := httptest.NewRecorder()
+
+	WriteStreamingResponsesFromSyncChatCompletion(recorder, resp)
+
+	if got := recorder.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("content type = %q, want event stream", got)
+	}
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`"type":"response.created"`,
+		`"type":"response.output_text.delta"`,
+		`"delta":"sync fallback"`,
+		`"type":"response.completed"`,
+		`data: [DONE]`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("sync fallback stream is missing %q:\n%s", expected, body)
+		}
+	}
+}
+
+func TestWriteStreamingResponsesFromSyncResponsePreservesFunctionCall(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{
+			"id":"resp-sync","object":"response","status":"completed","model":"test-model",
+			"output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"shell","arguments":"{\"cmd\":\"pwd\"}"}]
+		}`)),
+	}
+	recorder := httptest.NewRecorder()
+
+	WriteStreamingResponsesFromSyncResponse(recorder, resp)
+
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`"type":"response.function_call_arguments.delta"`,
+		`"type":"response.function_call_arguments.done"`,
+		`"type":"response.completed"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("function-call fallback stream is missing %q:\n%s", expected, body)
+		}
+	}
+}

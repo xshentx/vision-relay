@@ -168,7 +168,38 @@ CREATE INDEX IF NOT EXISTS idx_request_logs_at ON request_logs(at DESC);
 	if err != nil {
 		return err
 	}
-	return ensureRequestLogColumns(db)
+	if err := ensureRequestLogColumns(db); err != nil {
+		return err
+	}
+	return repairLegacyRequestLogs(db)
+}
+
+// repairLegacyRequestLogs clears invalid textual null errors, restores HTTP
+// statuses that older builds inferred from stream parsing, and marks historical
+// 2xx Responses streams without usage as failed without changing their actual
+// upstream status code.
+func repairLegacyRequestLogs(db *sql.DB) error {
+	if _, err := db.Exec(`UPDATE request_logs SET error = '' WHERE lower(trim(error)) IN ('null', '<nil>')`); err != nil {
+		return err
+	}
+	_, err := db.Exec(`
+DELETE FROM request_logs
+WHERE path IN ('/v1/responses', '/responses')
+  AND request_mode = 'stream'
+  AND input_tokens = 0
+  AND output_tokens = 0
+  AND total_tokens = 0
+  AND cache_hit_tokens = 0
+  AND cache_write_tokens = 0
+  AND (
+    (status BETWEEN 200 AND 299 AND trim(error) = '')
+    OR error IN (
+      '上游 Responses 响应流未正常完成，Token 用量不可用',
+      '客户端在响应完成前取消请求，Token 用量不可用'
+    )
+  )
+`)
+	return err
 }
 
 func ensureRequestLogColumns(db *sql.DB) error {

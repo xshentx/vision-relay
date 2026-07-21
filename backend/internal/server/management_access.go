@@ -29,6 +29,9 @@ func isManagementRequest(r *http.Request) bool {
 }
 
 func isManagementAPIPath(path string) bool {
+	if strings.HasPrefix(path, "/api/break-armor/") {
+		return true
+	}
 	switch path {
 	case "/api/desktop/activate",
 		"/api/config",
@@ -40,6 +43,16 @@ func isManagementAPIPath(path string) bool {
 		"/api/client/restore",
 		"/api/settings/detect-clients",
 		"/api/client/codex/history",
+		"/api/break-armor/status",
+		"/api/break-armor/preview",
+		"/api/break-armor/apply",
+		"/api/break-armor/restore",
+		"/api/break-armor/sessions",
+		"/api/break-armor/session/preview",
+		"/api/break-armor/session/patch",
+		"/api/break-armor/session/backups",
+		"/api/break-armor/session/restore",
+		"/api/break-armor/templates",
 		"/api/logs",
 		"/api/models",
 		"/api/model-test":

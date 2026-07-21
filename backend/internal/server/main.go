@@ -116,16 +116,6 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 		cfg.OpenBrowser = true
 	}
 
-	if cfg.UnifyCodexSessionHistory {
-		if homeDir, homeErr := os.UserHomeDir(); homeErr != nil {
-			log.Printf("Codex unified history reconciliation warning: %v", homeErr)
-		} else if result, reconcileErr := reconcileCodexUnifiedHistory(cfg, homeDir); reconcileErr != nil {
-			log.Printf("Codex unified history reconciliation warning: %v", reconcileErr)
-		} else if result.ConfigUpdated || result.Sessions > 0 || result.Threads > 0 {
-			log.Printf("Codex unified history reconciled (config_updated=%t, tracked_sessions=%d, tracked_threads=%d)", result.ConfigUpdated, result.Sessions, result.Threads)
-		}
-	}
-
 	a := &app{
 		cfg:        cfg,
 		configPath: configPath,
@@ -144,6 +134,16 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	mux.HandleFunc("/api/client/restore", a.handleClientRestore)
 	mux.HandleFunc("/api/settings/detect-clients", a.handleClientPathDetection)
 	mux.HandleFunc("/api/client/codex/history", a.handleCodexHistory)
+	mux.HandleFunc("/api/break-armor/status", a.handleBreakArmorStatus)
+	mux.HandleFunc("/api/break-armor/preview", a.handleBreakArmorPreview)
+	mux.HandleFunc("/api/break-armor/apply", a.handleBreakArmorApply)
+	mux.HandleFunc("/api/break-armor/restore", a.handleBreakArmorRestore)
+	mux.HandleFunc("/api/break-armor/sessions", a.handleBreakArmorSessions)
+	mux.HandleFunc("/api/break-armor/session/preview", a.handleBreakArmorSessionPreview)
+	mux.HandleFunc("/api/break-armor/session/patch", a.handleBreakArmorSessionPatch)
+	mux.HandleFunc("/api/break-armor/session/backups", a.handleBreakArmorSessionBackups)
+	mux.HandleFunc("/api/break-armor/session/restore", a.handleBreakArmorSessionRestore)
+	mux.HandleFunc("/api/break-armor/templates", a.handleBreakArmorTemplates)
 	mux.HandleFunc("/api/dashboard", a.handleDashboard)
 	mux.HandleFunc("/api/logs", a.handleLogs)
 	mux.HandleFunc("/api/models", a.handleListModels)
@@ -177,17 +177,7 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	}
 	log.Printf("%s listening on %s", appSlug, localURL)
 	log.Printf("database: %s", dbPath)
-	if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
-		results, routeErrors := a.configureEnabledClientRoutes(localURL, homeDir)
-		if len(results) > 0 {
-			log.Printf("synchronized %d enabled client route(s)", len(results))
-		}
-		for _, routeErr := range routeErrors {
-			log.Printf("client route synchronization warning: %s", routeErr)
-		}
-	} else {
-		log.Printf("client route synchronization warning: %v", homeErr)
-	}
+
 	if cfg.OpenBrowser {
 		go func() {
 			time.Sleep(500 * time.Millisecond)
@@ -202,6 +192,10 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 		}
 		serverErr <- nil
 	}()
+	// Session reconciliation and route synchronization can scan or rewrite a
+	// number of client files. They are maintenance work, not prerequisites for
+	// serving the management UI, so keep them off the critical startup path.
+	go runStartupMaintenance(a, cfg, localURL)
 
 	if cfg.OpenWindow {
 		runTrayApp(localURL, desktopActivation, func() {
@@ -219,6 +213,33 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	}
 }
 
+func runStartupMaintenance(a *app, cfg config, localURL string) {
+	// Give the desktop shell and its first API requests priority over background
+	// filesystem work. Maintenance remains sequential to avoid overlapping its
+	// Codex history and client-route writes.
+	time.Sleep(750 * time.Millisecond)
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("startup maintenance warning: %v", err)
+		return
+	}
+	a.breakArmorMu.Lock()
+	defer a.breakArmorMu.Unlock()
+	if cfg.UnifyCodexSessionHistory {
+		if result, reconcileErr := reconcileCodexUnifiedHistory(cfg, homeDir); reconcileErr != nil {
+			log.Printf("Codex unified history reconciliation warning: %v", reconcileErr)
+		} else if result.ConfigUpdated || result.Sessions > 0 || result.Threads > 0 {
+			log.Printf("Codex unified history reconciled (config_updated=%t, tracked_sessions=%d, tracked_threads=%d)", result.ConfigUpdated, result.Sessions, result.Threads)
+		}
+	}
+	results, routeErrors := a.configureEnabledClientRoutes(localURL, homeDir)
+	if len(results) > 0 {
+		log.Printf("synchronized %d enabled client route(s)", len(results))
+	}
+	for _, routeErr := range routeErrors {
+		log.Printf("client route synchronization warning: %s", routeErr)
+	}
+}
 func localManagementURL(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {

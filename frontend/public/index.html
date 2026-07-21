@@ -29,6 +29,7 @@
         <button class="nav-item" type="button" data-page="vision"><span class="nav-icon">V</span><span>视觉模型</span></button>
         <button class="nav-item" type="button" data-page="access"><span class="nav-icon">↗</span><span>客户端接入</span></button>
         <span class="nav-group-label">观测与调试</span>
+        <button class="nav-item" type="button" data-page="break-armor"><span class="nav-icon">JT</span><span>一键破甲</span><small class="nav-test-badge">测试</small></button>
         <button class="nav-item" type="button" data-page="dashboard"><span class="nav-icon">D</span><span>数据看板</span></button>
         <button class="nav-item" type="button" data-page="logs"><span class="nav-icon">≡</span><span>使用日志</span></button>
         <span class="nav-group-label">系统</span>
@@ -377,6 +378,158 @@
               </div>
             </article>
           </div>
+        </section>
+        <section class="page standard-page span-12 break-armor-page" id="breakArmor" data-page-panel="break-armor">
+          <div class="break-armor-heading">
+            <div>
+              <p class="eyebrow">STEP-BY-STEP TEST COCKPIT</p>
+              <h3>一键破甲 <span class="break-armor-test-badge">测试功能</span></h3>
+              <p>测试功能：选择客户端，确认破甲方案与影响范围，再执行彼此独立的一键破甲。</p>
+            </div>
+            <span class="break-armor-state" id="breakArmorOverallState">正在检查三个客户端</span>
+          </div>
+
+          <div class="break-armor-function-tabs" role="tablist" aria-label="破甲功能">
+            <button class="active" type="button" data-break-armor-view-tab="prompt">提示词破甲</button>
+            <button type="button" data-break-armor-view-tab="sessions">会话清理</button>
+            <button type="button" data-break-armor-view-tab="templates">模板管理</button>
+          </div>
+
+          <div class="break-armor-view active" data-break-armor-view="prompt">
+          <div class="break-armor-tabs" role="tablist" aria-label="破甲客户端">
+            <button class="break-armor-tab active" type="button" role="tab" aria-selected="true" data-break-armor-client="codex">Codex <span data-break-armor-tab-status="codex">未破甲</span></button>
+            <button class="break-armor-tab" type="button" role="tab" aria-selected="false" data-break-armor-client="claude">Claude <span data-break-armor-tab-status="claude">未破甲</span></button>
+            <button class="break-armor-tab" type="button" role="tab" aria-selected="false" data-break-armor-client="opencode">OpenCode <span data-break-armor-tab-status="opencode">未破甲</span></button>
+          </div>
+
+          <div class="break-armor-panel active" data-break-armor-panel="codex">
+            <div class="break-armor-cockpit">
+              <div class="break-armor-main">
+                <div class="break-armor-identity"><span class="break-armor-logo">CX</span><div><div class="break-armor-title-line"><h4>Codex 破甲</h4><span class="break-armor-badge" data-break-armor-status="codex">未破甲</span></div><p>Profile / 全局 / 工作区三种破甲模式；供应商、模型和路由仍由客户端一键配置独立管理。</p></div></div>
+                <div class="break-armor-flow"><div><b>01 · 环境检查</b><span>路径、程序与写入权限</span></div><div><b>02 · 创建快照</b><span>只备份当前破甲模式字段与文件</span></div><div><b>03 · 一键破甲</b><span>写入指令并按设置重启</span></div></div>
+                <div class="break-armor-codex-options">
+                  <label><span>Codex 破甲模式</span><select data-break-armor-mode="codex"><option value="profile">Profile（推荐，codex -p ctf）</option><option value="global">全局（所有新会话）</option><option value="workspace">独立工作区</option></select></label>
+                  <label><span>注入方式</span><select data-break-armor-injection="codex"><option value="replace">替换内置指令文件</option><option value="append">追加 developer_instructions</option></select></label>
+                </div>
+                <div class="break-armor-mode-note" data-break-armor-mode-note="codex">Profile 只写 ~/.codex/ctf.config.toml；请使用 <code>codex -p ctf</code> 启动，不影响普通 Codex 会话。</div>
+                <h5>选择破甲方案</h5>
+                <div class="break-armor-modes">
+                  <label class="break-armor-mode active"><input type="radio" name="breakArmorTemplateCodex" value="v5" checked data-break-armor-template="codex"><span class="break-armor-radio"></span><span><b>v5 稳定版 <em class="is-green">推荐</em></b><small>简洁稳定，适用于大多数本地测试任务。</small></span></label>
+                  <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateCodex" value="v35" data-break-armor-template="codex"><span class="break-armor-radio"></span><span><b>v35 特殊任务版 <em class="is-amber">谨慎</em></b><small>更完整的执行流程与复合任务指令。</small></span></label>
+                  <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateCodex" value="custom" data-break-armor-template="codex"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的一键破甲指令。</small></span></label>
+                </div>
+                <label class="break-armor-custom" data-break-armor-custom-wrap="codex" hidden><span>自定义破甲模板</span><textarea rows="7" data-break-armor-custom="codex" placeholder="输入 Codex 自定义一键破甲指令"></textarea></label>
+                <div class="break-armor-launch"><div><b>准备就绪</b><span>执行前自动创建独立快照</span></div><button class="primary-action" type="button" data-break-armor-apply="codex">一键破甲 Codex</button></div>
+              </div>
+              <aside class="break-armor-aside">
+                <div class="break-armor-aside-title"><h5>执行前检查</h5><span data-break-armor-check-count="codex">0 / 4</span></div>
+                <div class="break-armor-checklist" data-break-armor-checklist="codex"></div>
+                <h5>破甲预览</h5><pre class="break-armor-code"><code data-break-armor-preview="codex">正在生成预览...</code></pre>
+                <details class="break-armor-diff"><summary>查看完整 Diff</summary><pre data-break-armor-diff="codex">正在生成...</pre></details>
+              </aside>
+            </div>
+            <footer class="break-armor-footer"><span data-break-armor-backup="codex">最近备份：尚无 · 修改只影响 Codex</span><button class="danger" type="button" data-break-armor-restore="codex" disabled>从备份恢复</button></footer>
+          </div>
+
+          <div class="break-armor-panel" data-break-armor-panel="claude" hidden>
+            <div class="break-armor-cockpit">
+              <div class="break-armor-main">
+                <div class="break-armor-identity"><span class="break-armor-logo is-claude">CL</span><div><div class="break-armor-title-line"><h4>Claude 破甲</h4><span class="break-armor-badge" data-break-armor-status="claude">未破甲</span></div><p>使用独立工作区 CLAUDE.md，只影响从该工作区启动的 Claude。</p></div></div>
+                <div class="break-armor-flow"><div><b>01 · 环境检查</b><span>路径、程序与写入权限</span></div><div><b>02 · 创建快照</b><span>备份专属 CLAUDE.md</span></div><div><b>03 · 一键破甲</b><span>写入指令并按设置重启</span></div></div>
+                <h5>选择破甲方案</h5>
+                <div class="break-armor-modes">
+                  <label class="break-armor-mode active"><input type="radio" name="breakArmorTemplateClaude" value="v5" checked data-break-armor-template="claude"><span class="break-armor-radio"></span><span><b>v5 稳定版 <em class="is-green">推荐</em></b><small>简洁稳定，适用于大多数本地测试任务。</small></span></label>
+                  <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateClaude" value="v35" data-break-armor-template="claude"><span class="break-armor-radio"></span><span><b>v35 特殊任务版 <em class="is-amber">谨慎</em></b><small>更完整的执行流程与复合任务指令。</small></span></label>
+                  <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateClaude" value="custom" data-break-armor-template="claude"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的一键破甲指令。</small></span></label>
+                </div>
+                <label class="break-armor-custom" data-break-armor-custom-wrap="claude" hidden><span>自定义破甲模板</span><textarea rows="7" data-break-armor-custom="claude" placeholder="输入 Claude 自定义一键破甲指令"></textarea></label>
+                <div class="break-armor-launch"><div><b>准备就绪</b><span>执行前自动创建独立快照</span></div><button class="primary-action" type="button" data-break-armor-apply="claude">一键破甲 Claude</button></div>
+              </div>
+              <aside class="break-armor-aside">
+                <div class="break-armor-aside-title"><h5>执行前检查</h5><span data-break-armor-check-count="claude">0 / 4</span></div>
+                <div class="break-armor-checklist" data-break-armor-checklist="claude"></div>
+                <h5>破甲预览</h5><pre class="break-armor-code"><code data-break-armor-preview="claude">正在生成预览...</code></pre>
+                <details class="break-armor-diff"><summary>查看完整 Diff</summary><pre data-break-armor-diff="claude">正在生成...</pre></details>
+              </aside>
+            </div>
+            <footer class="break-armor-footer"><span data-break-armor-backup="claude">最近备份：尚无 · 修改只影响 Claude</span><button class="danger" type="button" data-break-armor-restore="claude" disabled>从备份恢复</button></footer>
+          </div>
+
+          <div class="break-armor-panel" data-break-armor-panel="opencode" hidden>
+            <div class="break-armor-cockpit">
+              <div class="break-armor-main">
+                <div class="break-armor-identity"><span class="break-armor-logo is-opencode">OC</span><div><div class="break-armor-title-line"><h4>OpenCode 破甲</h4><span class="break-armor-badge" data-break-armor-status="opencode">未破甲</span></div><p>使用独立工作区 AGENTS.md，不改动 Codex 与 Claude 配置。</p></div></div>
+                <div class="break-armor-flow"><div><b>01 · 环境检查</b><span>路径、程序与写入权限</span></div><div><b>02 · 创建快照</b><span>备份专属 AGENTS.md</span></div><div><b>03 · 一键破甲</b><span>写入指令并按设置重启</span></div></div>
+                <h5>选择破甲方案</h5>
+                <div class="break-armor-modes">
+                  <label class="break-armor-mode active"><input type="radio" name="breakArmorTemplateOpenCode" value="v5" checked data-break-armor-template="opencode"><span class="break-armor-radio"></span><span><b>v5 稳定版 <em class="is-green">推荐</em></b><small>简洁稳定，适用于大多数本地测试任务。</small></span></label>
+                  <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateOpenCode" value="v35" data-break-armor-template="opencode"><span class="break-armor-radio"></span><span><b>v35 特殊任务版 <em class="is-amber">谨慎</em></b><small>更完整的执行流程与复合任务指令。</small></span></label>
+                  <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateOpenCode" value="custom" data-break-armor-template="opencode"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的一键破甲指令。</small></span></label>
+                </div>
+                <label class="break-armor-custom" data-break-armor-custom-wrap="opencode" hidden><span>自定义破甲模板</span><textarea rows="7" data-break-armor-custom="opencode" placeholder="输入 OpenCode 自定义一键破甲指令"></textarea></label>
+                <div class="break-armor-launch"><div><b>准备就绪</b><span>执行前自动创建独立快照</span></div><button class="primary-action" type="button" data-break-armor-apply="opencode">一键破甲 OpenCode</button></div>
+              </div>
+              <aside class="break-armor-aside">
+                <div class="break-armor-aside-title"><h5>执行前检查</h5><span data-break-armor-check-count="opencode">0 / 4</span></div>
+                <div class="break-armor-checklist" data-break-armor-checklist="opencode"></div>
+                <h5>破甲预览</h5><pre class="break-armor-code"><code data-break-armor-preview="opencode">正在生成预览...</code></pre>
+                <details class="break-armor-diff"><summary>查看完整 Diff</summary><pre data-break-armor-diff="opencode">正在生成...</pre></details>
+              </aside>
+            </div>
+            <footer class="break-armor-footer"><span data-break-armor-backup="opencode">最近备份：尚无 · 修改只影响 OpenCode</span><button class="danger" type="button" data-break-armor-restore="opencode" disabled>从备份恢复</button></footer>
+          </div>
+
+          </div>
+
+          <div class="break-armor-view" data-break-armor-view="sessions" hidden>
+            <div class="break-armor-tool-heading">
+              <div><h4>会话清理</h4><p>扫描 Codex / Claude JSONL 与 OpenCode SQLite，批量检测拒绝回复并擦除 Reasoning / Thinking 内容。</p></div>
+              <div class="break-armor-segmented" role="tablist" aria-label="会话客户端">
+                <button class="active" type="button" data-break-armor-session-client="codex">Codex</button>
+                <button type="button" data-break-armor-session-client="claude">Claude</button>
+                <button type="button" data-break-armor-session-client="opencode">OpenCode</button>
+              </div>
+            </div>
+            <div class="break-armor-session-grid">
+              <aside class="break-armor-session-list-panel">
+                <div class="break-armor-section-title"><div><h5>检测到的会话</h5><span id="breakArmorSessionSummary">尚未扫描</span></div><button class="secondary" id="refreshBreakArmorSessions" type="button">重新扫描</button></div>
+                <label class="break-armor-search"><span>筛选</span><input id="breakArmorSessionSearch" type="search" placeholder="按标题、目录或格式筛选"></label>
+                <div class="break-armor-session-list" id="breakArmorSessionList"><div class="break-armor-empty">选择客户端后扫描会话</div></div>
+              </aside>
+              <div class="break-armor-session-editor">
+                <div class="break-armor-section-title"><div><h5 id="breakArmorSessionTitle">请选择会话</h5><span id="breakArmorSessionMeta">先在左侧选择一条会话</span></div><span class="break-armor-badge" id="breakArmorSessionCounts">0 项</span></div>
+                <div class="break-armor-session-options">
+                  <label class="break-armor-field grow"><span>替换文本</span><textarea id="breakArmorSessionReplacement" rows="3" placeholder="留空时使用安全默认文本"></textarea></label>
+                  <label class="break-armor-toggle"><input id="breakArmorCleanReasoning" type="checkbox" checked><span>擦除 Reasoning / Thinking</span></label>
+                </div>
+                <div class="break-armor-session-actions">
+                  <button class="secondary" id="previewBreakArmorSession" type="button" disabled>生成清理预览</button>
+                  <button class="primary-action" id="patchBreakArmorSession" type="button" disabled>备份并清理</button>
+                </div>
+                <div class="break-armor-change-list" id="breakArmorSessionChanges"><div class="break-armor-empty">预览后可逐项选择要处理的内容</div></div>
+                <div class="break-armor-compare">
+                  <div><h6>清理前</h6><pre id="breakArmorSessionBefore">等待预览</pre></div>
+                  <div><h6>清理后</h6><pre id="breakArmorSessionAfter">等待预览</pre></div>
+                </div>
+                <div class="break-armor-backup-row"><label><span>历史备份</span><select id="breakArmorBackupSelect"><option value="">暂无备份</option></select></label><button class="danger" id="restoreBreakArmorSession" type="button" disabled>恢复所选备份</button></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="break-armor-view" data-break-armor-view="templates" hidden>
+            <div class="break-armor-tool-heading"><div><h4>提示词模板管理</h4><p>内置 v5 / v35 与自定义模板按客户端独立保存，可直接载入提示词破甲。</p></div><label class="break-armor-inline-select"><span>客户端</span><select id="breakArmorTemplateClient"><option value="codex">Codex</option><option value="claude">Claude</option><option value="opencode">OpenCode</option></select></label></div>
+            <div class="break-armor-template-grid">
+              <aside class="break-armor-card"><div class="break-armor-section-title"><div><h5>模板库</h5><span id="breakArmorTemplateSummary">正在读取</span></div><button class="secondary" id="newBreakArmorTemplate" type="button">新建</button></div><div class="break-armor-template-list" id="breakArmorTemplateList"></div></aside>
+              <article class="break-armor-card">
+                <input id="breakArmorTemplateID" type="hidden">
+                <label class="break-armor-field"><span>模板名称</span><input id="breakArmorTemplateName" type="text" placeholder="例如：团队红队测试"></label>
+                <label class="break-armor-field"><span>模板内容</span><textarea id="breakArmorTemplatePrompt" rows="16" placeholder="输入自定义破甲提示词"></textarea></label>
+                <div class="break-armor-template-actions"><button class="danger" id="deleteBreakArmorTemplate" type="button" disabled>删除模板</button><div><button class="secondary" id="useBreakArmorTemplate" type="button">载入提示词破甲</button><button class="primary-action" id="saveBreakArmorTemplate" type="button">保存模板</button></div></div>
+              </article>
+            </div>
+          </div>
+
+          <div class="break-armor-notice"><div><strong>三个客户端完全独立</strong><span>破甲状态与备份独立管理；Codex 全局模式也只管理破甲字段，不覆盖或恢复供应商、模型与路由。</span></div><span>每客户端独立状态</span></div>
         </section>
         <section class="page standard-page span-12" id="logs" data-page-panel="logs">
           <div class="dashboard-heading">

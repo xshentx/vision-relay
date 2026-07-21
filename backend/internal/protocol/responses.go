@@ -255,6 +255,187 @@ func WriteResponsesFromChatCompletion(w http.ResponseWriter, resp *http.Response
 	writeJSON(w, http.StatusOK, ChatCompletionToResponses(chat))
 }
 
+// WriteStreamingResponsesFromSyncChatCompletion adapts a synchronous Chat
+// Completions response to the Responses SSE protocol. It is used only when an
+// upstream cannot provide a stream before any bytes have reached the client.
+func WriteStreamingResponsesFromSyncChatCompletion(w http.ResponseWriter, resp *http.Response) {
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		writeJSON(w, resp.StatusCode, map[string]any{
+			"error": map[string]any{
+				"message": fmt.Sprintf("upstream chat completions returned %d: %s", resp.StatusCode, trimBody(body)),
+				"type":    "upstream_error",
+			},
+		})
+		return
+	}
+	var chat map[string]any
+	if err := json.Unmarshal(body, &chat); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("invalid upstream chat completions response: %w", err))
+		return
+	}
+	WriteStreamingResponses(w, ChatCompletionToResponses(chat))
+}
+
+// WriteStreamingResponsesFromSyncResponse adapts a synchronous native
+// Responses response to Responses SSE without making another model request.
+func WriteStreamingResponsesFromSyncResponse(w http.ResponseWriter, resp *http.Response) {
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		copyHeader(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(body)
+		return
+	}
+	var response map[string]any
+	if err := json.Unmarshal(body, &response); err != nil {
+		writeError(w, http.StatusBadGateway, fmt.Errorf("invalid upstream responses response: %w", err))
+		return
+	}
+	WriteStreamingResponses(w, response)
+}
+
+// WriteStreamingResponses emits a completed synchronous Responses object as a
+// standards-shaped SSE sequence so a streaming client can consume the fallback
+// transparently.
+func WriteStreamingResponses(w http.ResponseWriter, response map[string]any) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+
+	responseID := firstString(response["id"], "resp_"+strconv.FormatInt(time.Now().UnixNano(), 36))
+	created := firstInt64(response["created_at"], response["created"])
+	if created == 0 {
+		created = time.Now().Unix()
+	}
+	model := firstString(response["model"])
+	createdResponse := map[string]any{
+		"id":         responseID,
+		"object":     "response",
+		"created_at": created,
+		"status":     "in_progress",
+		"model":      model,
+		"output":     []any{},
+	}
+	writeResponseSSE(w, flusher, map[string]any{"type": "response.created", "response": createdResponse})
+
+	output, _ := response["output"].([]any)
+	if len(output) == 0 {
+		text := firstString(response["output_text"])
+		messageID := "msg_" + strings.TrimPrefix(responseID, "resp_")
+		output = []any{map[string]any{
+			"id":     messageID,
+			"type":   "message",
+			"status": "completed",
+			"role":   "assistant",
+			"content": []any{map[string]any{
+				"type":        "output_text",
+				"text":        text,
+				"annotations": []any{},
+			}},
+		}}
+		response["output"] = output
+		if _, ok := response["output_text"]; !ok {
+			response["output_text"] = text
+		}
+	}
+
+	for outputIndex, rawItem := range output {
+		item, _ := rawItem.(map[string]any)
+		if item == nil {
+			continue
+		}
+		itemID := firstString(item["id"], "item_"+strconv.Itoa(outputIndex+1))
+		item["id"] = itemID
+		writeResponseSSE(w, flusher, map[string]any{
+			"type":         "response.output_item.added",
+			"output_index": outputIndex,
+			"item":         responseItemWithStatus(item, "in_progress"),
+		})
+
+		switch firstString(item["type"]) {
+		case "message":
+			content, _ := item["content"].([]any)
+			for contentIndex, rawPart := range content {
+				part, _ := rawPart.(map[string]any)
+				if part == nil || (firstString(part["type"]) != "output_text" && firstString(part["type"]) != "text") {
+					continue
+				}
+				text := firstString(part["text"])
+				finalPart := map[string]any{"type": "output_text", "text": text, "annotations": firstAny(part["annotations"], []any{})}
+				writeResponseSSE(w, flusher, map[string]any{
+					"type": "response.content_part.added", "item_id": itemID, "output_index": outputIndex,
+					"content_index": contentIndex, "part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}},
+				})
+				if text != "" {
+					writeResponseSSE(w, flusher, map[string]any{
+						"type": "response.output_text.delta", "item_id": itemID, "output_index": outputIndex,
+						"content_index": contentIndex, "delta": text,
+					})
+				}
+				writeResponseSSE(w, flusher, map[string]any{
+					"type": "response.output_text.done", "item_id": itemID, "output_index": outputIndex,
+					"content_index": contentIndex, "text": text,
+				})
+				writeResponseSSE(w, flusher, map[string]any{
+					"type": "response.content_part.done", "item_id": itemID, "output_index": outputIndex,
+					"content_index": contentIndex, "part": finalPart,
+				})
+			}
+		case "function_call":
+			arguments := firstString(item["arguments"], "{}")
+			if arguments != "" {
+				writeResponseSSE(w, flusher, map[string]any{
+					"type": "response.function_call_arguments.delta", "item_id": itemID,
+					"output_index": outputIndex, "delta": arguments,
+				})
+			}
+			writeResponseSSE(w, flusher, map[string]any{
+				"type": "response.function_call_arguments.done", "item_id": itemID,
+				"output_index": outputIndex, "arguments": arguments,
+			})
+		}
+
+		writeResponseSSE(w, flusher, map[string]any{
+			"type": "response.output_item.done", "output_index": outputIndex,
+			"item": responseItemWithStatus(item, "completed"),
+		})
+	}
+
+	response["id"] = responseID
+	response["object"] = "response"
+	response["created_at"] = created
+	response["status"] = "completed"
+	if _, ok := response["model"]; !ok {
+		response["model"] = model
+	}
+	writeResponseSSE(w, flusher, map[string]any{"type": "response.completed", "response": response})
+	_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+func responseItemWithStatus(item map[string]any, status string) map[string]any {
+	copyItem := make(map[string]any, len(item)+1)
+	for key, value := range item {
+		copyItem[key] = value
+	}
+	copyItem["status"] = status
+	return copyItem
+}
+
 func WriteStreamingResponsesFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
 	defer resp.Body.Close()
 	copyHeader(w.Header(), resp.Header)
