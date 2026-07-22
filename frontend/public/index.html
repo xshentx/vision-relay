@@ -326,7 +326,7 @@
             <article class="dashboard-metric primary"><span>累计 Token</span><strong id="dashboardLifetimeTokens">0</strong><small>当前筛选条件的历史总量</small></article>
             <article class="dashboard-metric"><span>今日 Token</span><strong id="dashboardTodayTokens">0</strong><small>本地时间当日用量</small></article>
             <article class="dashboard-metric"><span>周期 Token</span><strong id="dashboardPeriodTokens">0</strong><small id="dashboardPeriodLabel">今日统计</small></article>
-            <article class="dashboard-metric input"><span>非缓存输入</span><strong id="dashboardInputTokens">0</strong><small>所选周期，不含缓存命中</small></article>
+            <article class="dashboard-metric input"><span>输入</span><strong id="dashboardInputTokens">0</strong><small>所选周期，包含缓存命中</small></article>
             <article class="dashboard-metric output"><span>输出</span><strong id="dashboardOutputTokens">0</strong><small>所选周期</small></article>
             <article class="dashboard-metric cache"><span>缓存命中</span><strong id="dashboardCacheTokens">0</strong><small>所选周期</small></article>
             <article class="dashboard-metric cache-write"><span>缓存写入</span><strong id="dashboardCacheWriteTokens">0</strong><small>所选周期，独立计费缓存写入</small></article>
@@ -336,7 +336,7 @@
           <div class="dashboard-main-grid">
             <article class="panel dashboard-chart-panel token-trend-panel">
               <div class="dashboard-card-head">
-                <div><h4>Token 用量趋势</h4><p>按时间查看输入、输出、缓存命中或各模型用量。</p></div>
+                <div><h4>Token 用量趋势</h4><p>输入包含缓存命中；缓存曲线是输入中的明细。</p></div>
                 <div class="dashboard-chart-modes" role="group" aria-label="趋势维度">
                   <button class="active" type="button" data-dashboard-chart-mode="type">按类型</button>
                   <button type="button" data-dashboard-chart-mode="model">按模型</button>
@@ -347,7 +347,7 @@
             </article>
 
             <article class="panel dashboard-chart-panel dashboard-composition-panel">
-              <div class="dashboard-card-head"><div><h4>Token 构成</h4><p>所选周期内的用量组成。</p></div></div>
+              <div class="dashboard-card-head"><div><h4>Token 构成</h4><p>输入与输出组成总量；缓存为输入明细。</p></div></div>
               <div class="dashboard-donut-wrap">
                 <div class="dashboard-donut" id="dashboardTokenDonut"><span><strong id="dashboardDonutTotal">0</strong><small>Token</small></span></div>
                 <div class="dashboard-composition-list" id="dashboardCompositionList"></div>
@@ -359,7 +359,7 @@
             <div class="dashboard-card-head"><div><h4>模型用量排行</h4><p>按 Token 总量降序，展示模型和供应商的使用情况。</p></div></div>
             <div class="dashboard-table-wrap">
               <table class="dashboard-table">
-                <thead><tr><th>模型</th><th>供应商</th><th>非缓存输入</th><th>输出</th><th>缓存命中</th><th>缓存写入</th><th>总计</th><th>请求量</th></tr></thead>
+                <thead><tr><th>模型</th><th>供应商</th><th>输入</th><th>输出</th><th>缓存命中</th><th>缓存写入</th><th>总计</th><th>请求量</th></tr></thead>
                 <tbody id="dashboardModelRows"></tbody>
               </table>
             </div>

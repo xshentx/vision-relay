@@ -759,6 +759,8 @@ func TestDashboardAssetsAreEmbedded(t *testing.T) {
 		`id="dashboardTokenChart"`,
 		`id="dashboardRequestChart"`,
 		`id="dashboardModelRows"`,
+		`所选周期，包含缓存命中`,
+		`<th>输入</th>`,
 	} {
 		if !strings.Contains(index, expected) {
 			t.Fatalf("dashboard markup %q is missing", expected)
@@ -781,6 +783,10 @@ func TestDashboardAssetsAreEmbedded(t *testing.T) {
 		`data-dashboard-chart-mode`,
 		`renderDashboardTokenTrend`,
 		`renderDashboardModels`,
+		`function dashboardInputTokens(usage)`,
+		`const total = Math.max(0, input + output);`,
+		`缓存命中（输入中）`,
+		`缓存写入（输入中）`,
 		`dashboard-chart-tooltip`,
 		`container.onpointermove`,
 		`formatNumber(value)} Token`,
@@ -790,6 +796,12 @@ func TestDashboardAssetsAreEmbedded(t *testing.T) {
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("dashboard behavior %q is missing", expected)
+		}
+	}
+
+	for _, obsolete := range []string{`dashboardUncachedInputTokens`, `非缓存输入`} {
+		if strings.Contains(index+script, obsolete) {
+			t.Fatalf("obsolete dashboard token wording or calculation %q is still embedded", obsolete)
 		}
 	}
 
