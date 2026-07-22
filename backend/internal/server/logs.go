@@ -19,12 +19,14 @@ const (
 
 type loggingResponseWriter struct {
 	http.ResponseWriter
-	status       int
-	body         bytes.Buffer
-	tail         []byte
-	written      int
-	started      time.Time
-	firstTokenMS int64
+	status               int
+	body                 bytes.Buffer
+	tail                 []byte
+	written              int
+	started              time.Time
+	firstTokenMS         int64
+	downstreamGone       bool
+	drainAfterDisconnect bool
 }
 
 type sseLogState struct {
@@ -56,7 +58,24 @@ func (w *loggingResponseWriter) Write(p []byte) (int, error) {
 		}
 	}
 	w.writeTail(p)
-	return w.ResponseWriter.Write(p)
+	if w.downstreamGone {
+		return len(p), nil
+	}
+	n, err := w.ResponseWriter.Write(p)
+	if err != nil || n != len(p) {
+		if !w.drainAfterDisconnect {
+			return n, err
+		}
+		// Keep draining the upstream stream so its terminal usage event can be
+		// persisted even after the downstream client has disconnected.
+		w.downstreamGone = true
+		return len(p), nil
+	}
+	return n, nil
+}
+
+func (w *loggingResponseWriter) enableDisconnectDrain() {
+	w.drainAfterDisconnect = true
 }
 
 func (w *loggingResponseWriter) writeTail(p []byte) {
@@ -471,6 +490,7 @@ func statusText(status int) string {
 }
 
 func fillUsageFromPayload(log *requestLog, payload map[string]any) {
+	var separateCacheTokens int64
 	if log.Model == "" {
 		log.Model = firstString(payload["model"])
 	}
@@ -489,8 +509,11 @@ func fillUsageFromPayload(log *requestLog, payload map[string]any) {
 			log.CacheHitTokens += firstInt64(details["cached_tokens"], details["cache_read_tokens"])
 			log.CacheWriteTokens += firstInt64(details["cache_creation_tokens"], details["cache_write_tokens"])
 		}
-		log.CacheHitTokens += firstInt64(usage["cache_read_input_tokens"], usage["cache_read_tokens"])
-		log.CacheWriteTokens += firstInt64(usage["cache_creation_input_tokens"], usage["cache_creation_tokens"], usage["cache_write_input_tokens"], usage["cache_write_tokens"])
+		separateCacheReadTokens := firstInt64(usage["cache_read_input_tokens"], usage["cache_read_tokens"])
+		separateCacheWriteTokens := firstInt64(usage["cache_creation_input_tokens"], usage["cache_creation_tokens"], usage["cache_write_input_tokens"], usage["cache_write_tokens"])
+		log.CacheHitTokens += separateCacheReadTokens
+		log.CacheWriteTokens += separateCacheWriteTokens
+		separateCacheTokens += separateCacheReadTokens + separateCacheWriteTokens
 	}
 	if usage, _ := payload["usageMetadata"].(map[string]any); usage != nil {
 		setIfNonZero(&log.InputTokens, firstInt64(usage["promptTokenCount"]))
@@ -505,7 +528,10 @@ func fillUsageFromPayload(log *requestLog, payload map[string]any) {
 	setIfNonZero(&log.InputTokens, firstInt64(payload["prompt_eval_count"]))
 	setIfNonZero(&log.OutputTokens, firstInt64(payload["eval_count"]))
 	if log.TotalTokens == 0 {
-		log.TotalTokens = log.InputTokens + log.OutputTokens
+		// Anthropic-style top-level cache fields are separate from input_tokens.
+		// Cached-token details nested under OpenAI-compatible input/prompt usage
+		// are already included in input_tokens and must not be counted twice.
+		log.TotalTokens = log.InputTokens + log.OutputTokens + separateCacheTokens
 	}
 }
 

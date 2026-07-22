@@ -15,54 +15,62 @@ type dashboardQuery struct {
 }
 
 type dashboardSummary struct {
-	LifetimeTokens int64   `json:"lifetime_tokens"`
-	TodayTokens    int64   `json:"today_tokens"`
-	PeriodTokens   int64   `json:"period_tokens"`
-	InputTokens    int64   `json:"input_tokens"`
-	OutputTokens   int64   `json:"output_tokens"`
-	CacheHitTokens int64   `json:"cache_hit_tokens"`
-	Requests       int64   `json:"requests"`
-	Failures       int64   `json:"failures"`
-	AverageFirstMS float64 `json:"average_first_token_ms"`
-	AverageMS      float64 `json:"average_duration_ms"`
+	LifetimeTokens      int64   `json:"lifetime_tokens"`
+	TodayTokens         int64   `json:"today_tokens"`
+	PeriodTokens        int64   `json:"period_tokens"`
+	InputTokens         int64   `json:"input_tokens"`
+	UncachedInputTokens int64   `json:"uncached_input_tokens"`
+	OutputTokens        int64   `json:"output_tokens"`
+	CacheHitTokens      int64   `json:"cache_hit_tokens"`
+	CacheWriteTokens    int64   `json:"cache_write_tokens"`
+	Requests            int64   `json:"requests"`
+	Failures            int64   `json:"failures"`
+	AverageFirstMS      float64 `json:"average_first_token_ms"`
+	AverageMS           float64 `json:"average_duration_ms"`
 }
 
 type dashboardBucket struct {
-	Key            string           `json:"key"`
-	Label          string           `json:"label"`
-	InputTokens    int64            `json:"input_tokens"`
-	OutputTokens   int64            `json:"output_tokens"`
-	CacheHitTokens int64            `json:"cache_hit_tokens"`
-	TotalTokens    int64            `json:"total_tokens"`
-	Requests       int64            `json:"requests"`
-	Models         map[string]int64 `json:"models"`
+	Key                 string           `json:"key"`
+	Label               string           `json:"label"`
+	InputTokens         int64            `json:"input_tokens"`
+	UncachedInputTokens int64            `json:"uncached_input_tokens"`
+	OutputTokens        int64            `json:"output_tokens"`
+	CacheHitTokens      int64            `json:"cache_hit_tokens"`
+	CacheWriteTokens    int64            `json:"cache_write_tokens"`
+	TotalTokens         int64            `json:"total_tokens"`
+	Requests            int64            `json:"requests"`
+	Models              map[string]int64 `json:"models"`
 }
 
 type dashboardModelUsage struct {
-	SeriesKey      string `json:"series_key"`
-	Model          string `json:"model"`
-	Supplier       string `json:"supplier"`
-	InputTokens    int64  `json:"input_tokens"`
-	OutputTokens   int64  `json:"output_tokens"`
-	CacheHitTokens int64  `json:"cache_hit_tokens"`
-	TotalTokens    int64  `json:"total_tokens"`
-	Requests       int64  `json:"requests"`
+	SeriesKey           string `json:"series_key"`
+	Model               string `json:"model"`
+	Supplier            string `json:"supplier"`
+	InputTokens         int64  `json:"input_tokens"`
+	UncachedInputTokens int64  `json:"uncached_input_tokens"`
+	OutputTokens        int64  `json:"output_tokens"`
+	CacheHitTokens      int64  `json:"cache_hit_tokens"`
+	CacheWriteTokens    int64  `json:"cache_write_tokens"`
+	TotalTokens         int64  `json:"total_tokens"`
+	Requests            int64  `json:"requests"`
 }
 
 type dashboardMonthlyAggregate struct {
-	Month           string
-	Supplier        string
-	Model           string
-	InputTokens     int64
-	OutputTokens    int64
-	CacheHitTokens  int64
-	TotalTokens     int64
-	Requests        int64
-	Failures        int64
-	DurationTotal   int64
-	FirstTokenTotal int64
-	FirstTokenCount int64
-	TodayTokens     int64
+	Month               string
+	Supplier            string
+	Model               string
+	InputTokens         int64
+	UncachedInputTokens int64
+	OutputTokens        int64
+	CacheHitTokens      int64
+	CacheWriteTokens    int64
+	TotalTokens         int64
+	Requests            int64
+	Failures            int64
+	DurationTotal       int64
+	FirstTokenTotal     int64
+	FirstTokenCount     int64
+	TodayTokens         int64
 }
 
 type dashboardOptions struct {
@@ -177,10 +185,15 @@ func buildDashboardResponse(logs []requestLog, query dashboardQuery, options das
 		if !dashboardLogMatches(log, query) {
 			continue
 		}
+		uncachedInputTokens := dashboardUncachedInputTokens(log.UpstreamProvider, log.InputTokens, log.OutputTokens, log.TotalTokens, log.CacheHitTokens)
+		cacheWriteTokens := dashboardSeparateCacheWriteTokens(log.UpstreamProvider, log.InputTokens, log.OutputTokens, log.TotalTokens, log.CacheHitTokens, log.CacheWriteTokens)
+		totalTokens := dashboardEffectiveTotalTokens(log.UpstreamProvider, log.InputTokens, log.OutputTokens, log.TotalTokens, log.CacheHitTokens, log.CacheWriteTokens)
 		summary.InputTokens += log.InputTokens
+		summary.UncachedInputTokens += uncachedInputTokens
 		summary.OutputTokens += log.OutputTokens
 		summary.CacheHitTokens += log.CacheHitTokens
-		summary.PeriodTokens += log.TotalTokens
+		summary.CacheWriteTokens += cacheWriteTokens
+		summary.PeriodTokens += totalTokens
 		summary.Requests++
 		durationTotal += log.DurationMS
 		if log.FirstTokenMS > 0 {
@@ -191,7 +204,7 @@ func buildDashboardResponse(logs []requestLog, query dashboardQuery, options das
 			summary.Failures++
 		}
 		if !log.At.Before(todayStart) && log.At.Before(todayStart.AddDate(0, 0, 1)) {
-			summary.TodayTokens += log.TotalTokens
+			summary.TodayTokens += totalTokens
 		}
 		supplier := dashboardSupplierName(log)
 		model := dashboardModelName(log)
@@ -201,11 +214,13 @@ func buildDashboardResponse(logs []requestLog, query dashboardQuery, options das
 		if bucketIndex >= 0 && bucketIndex < len(buckets) {
 			bucket := &buckets[bucketIndex]
 			bucket.InputTokens += log.InputTokens
+			bucket.UncachedInputTokens += uncachedInputTokens
 			bucket.OutputTokens += log.OutputTokens
 			bucket.CacheHitTokens += log.CacheHitTokens
-			bucket.TotalTokens += log.TotalTokens
+			bucket.CacheWriteTokens += cacheWriteTokens
+			bucket.TotalTokens += totalTokens
 			bucket.Requests++
-			bucket.Models[seriesKey] += log.TotalTokens
+			bucket.Models[seriesKey] += totalTokens
 		}
 
 		usage := modelUsage[seriesKey]
@@ -214,9 +229,11 @@ func buildDashboardResponse(logs []requestLog, query dashboardQuery, options das
 			modelUsage[seriesKey] = usage
 		}
 		usage.InputTokens += log.InputTokens
+		usage.UncachedInputTokens += uncachedInputTokens
 		usage.OutputTokens += log.OutputTokens
 		usage.CacheHitTokens += log.CacheHitTokens
-		usage.TotalTokens += log.TotalTokens
+		usage.CacheWriteTokens += cacheWriteTokens
+		usage.TotalTokens += totalTokens
 		usage.Requests++
 	}
 
@@ -334,11 +351,50 @@ func sortedDashboardKeys(values map[string]bool) []string {
 	return keys
 }
 
+func dashboardUncachedInputTokens(provider string, inputTokens, outputTokens, totalTokens, cacheHitTokens int64) int64 {
+	// Anthropic reports cache reads separately from input_tokens. Keep this
+	// provider check before the total-based heuristic so logs written by older
+	// Vision Relay versions (whose total omitted cache tokens) remain correct.
+	if normalizeProvider(provider) == "anthropic" {
+		return maxInt64(0, inputTokens)
+	}
+	if cacheHitTokens <= 0 {
+		return maxInt64(0, inputTokens)
+	}
+	// OpenAI-compatible usage includes cached tokens in input_tokens, while
+	// Anthropic-style usage reports cache reads separately. total_tokens lets
+	// the dashboard normalize both shapes without double-counting cache hits.
+	if totalTokens >= inputTokens+outputTokens+cacheHitTokens {
+		return inputTokens
+	}
+	if inputTokens > cacheHitTokens {
+		return inputTokens - cacheHitTokens
+	}
+	return 0
+}
+
+func dashboardSeparateCacheWriteTokens(provider string, inputTokens, outputTokens, totalTokens, cacheHitTokens, cacheWriteTokens int64) int64 {
+	if cacheWriteTokens <= 0 {
+		return 0
+	}
+	if normalizeProvider(provider) == "anthropic" || totalTokens >= inputTokens+outputTokens+cacheHitTokens+cacheWriteTokens {
+		return cacheWriteTokens
+	}
+	return 0
+}
+
+func dashboardEffectiveTotalTokens(provider string, inputTokens, outputTokens, totalTokens, cacheHitTokens, cacheWriteTokens int64) int64 {
+	if normalizeProvider(provider) == "anthropic" {
+		return maxInt64(totalTokens, inputTokens+outputTokens+cacheHitTokens+cacheWriteTokens)
+	}
+	return totalTokens
+}
+
 func sumFilteredTokens(logs []requestLog, query dashboardQuery) int64 {
 	var total int64
 	for _, log := range logs {
 		if dashboardLogMatches(log, query) {
-			total += log.TotalTokens
+			total += dashboardEffectiveTotalTokens(log.UpstreamProvider, log.InputTokens, log.OutputTokens, log.TotalTokens, log.CacheHitTokens, log.CacheWriteTokens)
 		}
 	}
 	return total
@@ -346,7 +402,7 @@ func sumFilteredTokens(logs []requestLog, query dashboardQuery) int64 {
 func listRequestLogsRangeDB(db *sql.DB, start, end time.Time) ([]requestLog, error) {
 	rows, err := db.Query(`
 SELECT at, model, upstream_name, upstream_provider, status, duration_ms, first_token_ms,
-       input_tokens, output_tokens, total_tokens, cache_hit_tokens
+       input_tokens, output_tokens, total_tokens, cache_hit_tokens, cache_write_tokens
 FROM request_logs
 WHERE julianday(at) >= julianday(?) AND julianday(at) < julianday(?)
 ORDER BY id ASC
@@ -360,7 +416,7 @@ ORDER BY id ASC
 		var log requestLog
 		var at string
 		if err := rows.Scan(&at, &log.Model, &log.UpstreamName, &log.UpstreamProvider, &log.Status, &log.DurationMS, &log.FirstTokenMS,
-			&log.InputTokens, &log.OutputTokens, &log.TotalTokens, &log.CacheHitTokens); err != nil {
+			&log.InputTokens, &log.OutputTokens, &log.TotalTokens, &log.CacheHitTokens, &log.CacheWriteTokens); err != nil {
 			return nil, err
 		}
 		log.At, _ = time.Parse(time.RFC3339Nano, at)
@@ -396,7 +452,8 @@ ORDER BY upstream_name, upstream_provider, model
 func sumDashboardTokensDB(db *sql.DB, query dashboardQuery) (int64, error) {
 	const supplierSQL = "COALESCE(NULLIF(TRIM(upstream_name), ''), NULLIF(TRIM(upstream_provider), ''), '未标注供应商')"
 	const modelSQL = "COALESCE(NULLIF(TRIM(model), ''), '未标注模型')"
-	statement := "SELECT COALESCE(SUM(total_tokens), 0) FROM request_logs WHERE (? = '' OR " + supplierSQL + " = ?) AND (? = '' OR " + modelSQL + " = ?)"
+	const totalSQL = "CASE WHEN LOWER(TRIM(upstream_provider)) = 'anthropic' AND total_tokens < input_tokens + output_tokens + cache_hit_tokens + cache_write_tokens THEN input_tokens + output_tokens + cache_hit_tokens + cache_write_tokens ELSE total_tokens END"
+	statement := "SELECT COALESCE(SUM(" + totalSQL + "), 0) FROM request_logs WHERE (? = '' OR " + supplierSQL + " = ?) AND (? = '' OR " + modelSQL + " = ?)"
 	var total int64
 	err := db.QueryRow(statement, query.Supplier, query.Supplier, query.Model, query.Model).Scan(&total)
 	return total, err
@@ -429,8 +486,10 @@ func buildDashboardAllResponseDB(db *sql.DB, query dashboardQuery, now, start, e
 	var durationTotal, firstTokenTotal, firstTokenCount int64
 	for _, aggregate := range aggregates {
 		summary.InputTokens += aggregate.InputTokens
+		summary.UncachedInputTokens += aggregate.UncachedInputTokens
 		summary.OutputTokens += aggregate.OutputTokens
 		summary.CacheHitTokens += aggregate.CacheHitTokens
+		summary.CacheWriteTokens += aggregate.CacheWriteTokens
 		summary.PeriodTokens += aggregate.TotalTokens
 		summary.TodayTokens += aggregate.TodayTokens
 		summary.Requests += aggregate.Requests
@@ -443,8 +502,10 @@ func buildDashboardAllResponseDB(db *sql.DB, query dashboardQuery, now, start, e
 		if bucketIndex, ok := bucketIndexes[aggregate.Month]; ok {
 			bucket := &buckets[bucketIndex]
 			bucket.InputTokens += aggregate.InputTokens
+			bucket.UncachedInputTokens += aggregate.UncachedInputTokens
 			bucket.OutputTokens += aggregate.OutputTokens
 			bucket.CacheHitTokens += aggregate.CacheHitTokens
+			bucket.CacheWriteTokens += aggregate.CacheWriteTokens
 			bucket.TotalTokens += aggregate.TotalTokens
 			bucket.Requests += aggregate.Requests
 			bucket.Models[seriesKey] += aggregate.TotalTokens
@@ -456,8 +517,10 @@ func buildDashboardAllResponseDB(db *sql.DB, query dashboardQuery, now, start, e
 			modelUsage[seriesKey] = usage
 		}
 		usage.InputTokens += aggregate.InputTokens
+		usage.UncachedInputTokens += aggregate.UncachedInputTokens
 		usage.OutputTokens += aggregate.OutputTokens
 		usage.CacheHitTokens += aggregate.CacheHitTokens
+		usage.CacheWriteTokens += aggregate.CacheWriteTokens
 		usage.TotalTokens += aggregate.TotalTokens
 		usage.Requests += aggregate.Requests
 	}
@@ -495,16 +558,33 @@ SELECT strftime('%Y-%m', at, 'localtime') AS month,
        ` + supplierSQL + ` AS supplier,
        ` + modelSQL + ` AS model,
        COALESCE(SUM(input_tokens), 0),
+       COALESCE(SUM(CASE
+           WHEN LOWER(TRIM(upstream_provider)) = 'anthropic' THEN input_tokens
+           WHEN cache_hit_tokens <= 0 THEN input_tokens
+           WHEN total_tokens >= input_tokens + output_tokens + cache_hit_tokens THEN input_tokens
+           WHEN input_tokens > cache_hit_tokens THEN input_tokens - cache_hit_tokens
+           ELSE 0
+       END), 0),
        COALESCE(SUM(output_tokens), 0),
        COALESCE(SUM(cache_hit_tokens), 0),
-       COALESCE(SUM(total_tokens), 0),
+       COALESCE(SUM(CASE
+           WHEN LOWER(TRIM(upstream_provider)) = 'anthropic' OR total_tokens >= input_tokens + output_tokens + cache_hit_tokens + cache_write_tokens THEN cache_write_tokens
+           ELSE 0
+       END), 0),
+       COALESCE(SUM(CASE
+           WHEN LOWER(TRIM(upstream_provider)) = 'anthropic' AND total_tokens < input_tokens + output_tokens + cache_hit_tokens + cache_write_tokens THEN input_tokens + output_tokens + cache_hit_tokens + cache_write_tokens
+           ELSE total_tokens
+       END), 0),
        COUNT(*),
        COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(duration_ms), 0),
        COALESCE(SUM(CASE WHEN first_token_ms > 0 THEN first_token_ms ELSE 0 END), 0),
        COALESCE(SUM(CASE WHEN first_token_ms > 0 THEN 1 ELSE 0 END), 0),
        COALESCE(SUM(CASE
-           WHEN julianday(at) >= julianday(?) AND julianday(at) < julianday(?) THEN total_tokens
+           WHEN julianday(at) >= julianday(?) AND julianday(at) < julianday(?) THEN CASE
+               WHEN LOWER(TRIM(upstream_provider)) = 'anthropic' AND total_tokens < input_tokens + output_tokens + cache_hit_tokens + cache_write_tokens THEN input_tokens + output_tokens + cache_hit_tokens + cache_write_tokens
+               ELSE total_tokens
+           END
            ELSE 0
        END), 0)
 FROM request_logs
@@ -539,8 +619,10 @@ ORDER BY month, supplier, model
 			&aggregate.Supplier,
 			&aggregate.Model,
 			&aggregate.InputTokens,
+			&aggregate.UncachedInputTokens,
 			&aggregate.OutputTokens,
 			&aggregate.CacheHitTokens,
+			&aggregate.CacheWriteTokens,
 			&aggregate.TotalTokens,
 			&aggregate.Requests,
 			&aggregate.Failures,

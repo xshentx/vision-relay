@@ -3674,6 +3674,7 @@ body:has(.el-message) > .toast {
 .dashboard-metric.input { border-top-color: #2563eb; }
 .dashboard-metric.output { border-top-color: #8b5cf6; }
 .dashboard-metric.cache { border-top-color: #10b981; }
+.dashboard-metric.cache-write { border-top-color: #f97316; }
 .dashboard-metric.requests { border-top-color: #f59e0b; }
 
 .dashboard-metric span,

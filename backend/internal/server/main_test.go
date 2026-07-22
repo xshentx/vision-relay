@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,6 +15,29 @@ import (
 	"time"
 	"vision-relay/backend/internal/protocol"
 )
+
+type disconnectingResponseWriter struct {
+	header http.Header
+	cancel context.CancelFunc
+	status int
+	writes int
+}
+
+func (w *disconnectingResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *disconnectingResponseWriter) WriteHeader(status int) {
+	w.status = status
+}
+
+func (w *disconnectingResponseWriter) Write([]byte) (int, error) {
+	w.writes++
+	if w.writes == 1 {
+		w.cancel()
+	}
+	return 0, errors.New("downstream disconnected")
+}
 
 func TestEffectiveTextModelMapsCodexAccountAliases(t *testing.T) {
 	cfg := config{
@@ -658,6 +682,57 @@ func TestOpenAIResponsesStreamingIsConvertedForCodexClient(t *testing.T) {
 	out := rec.Body.String()
 	if !strings.Contains(out, "response.output_text.delta") || !strings.Contains(out, "response.completed") || !strings.Contains(out, "你好") {
 		t.Fatalf("bad responses stream: %s", out)
+	}
+}
+
+func TestOpenAIResponsesDrainsTerminalUsageAfterDownstreamDisconnect(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.created\n" +
+			"data: {\"type\":\"response.created\",\"response\":{\"status\":\"in_progress\"}}\n\n"))
+		w.(http.Flusher).Flush()
+		time.Sleep(20 * time.Millisecond)
+		_, _ = w.Write([]byte("event: response.completed\n" +
+			"data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.6-sol\",\"usage\":{\"input_tokens\":100,\"output_tokens\":10,\"total_tokens\":110,\"input_tokens_details\":{\"cached_tokens\":80}}}}\n\n"))
+	}))
+	defer upstream.Close()
+
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			TextProvider: "openai",
+			TextBaseURL:  upstream.URL,
+			TextWireAPI:  "responses",
+		}),
+		httpClient: upstream.Client(),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := &disconnectingResponseWriter{header: make(http.Header), cancel: cancel}
+	body := `{"model":"gpt-5.6-sol","stream":true,"input":"hi"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body)).WithContext(ctx)
+
+	a.handleRoute(writer, req)
+	logs := a.currentLogs()
+	if len(logs) != 1 || logs[0].TotalTokens != 110 || logs[0].CacheHitTokens != 80 {
+		t.Fatalf("terminal usage was not persisted after disconnect: %#v", logs)
+	}
+}
+
+func TestUpstreamStreamContextBoundsDrainAfterParentCancellation(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	ctx, keepAfterHeaders, release := upstreamStreamContextWithDrainTimeout(parent, true, 20*time.Millisecond)
+	defer release()
+	keepAfterHeaders()
+	cancelParent()
+
+	select {
+	case <-ctx.Done():
+		t.Fatal("upstream stream was canceled before the drain grace period")
+	default:
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("upstream stream was not canceled after the drain grace period")
 	}
 }
 
@@ -1484,6 +1559,37 @@ func TestRouteDoesNotRequireClientToken(t *testing.T) {
 	}
 }
 
+func TestFillUsageFromPayloadIncludesSeparateCacheTokensInDerivedTotal(t *testing.T) {
+	var log requestLog
+	fillUsageFromPayload(&log, map[string]any{
+		"usage": map[string]any{
+			"input_tokens":                20,
+			"output_tokens":               10,
+			"cache_read_input_tokens":     80,
+			"cache_creation_input_tokens": 5,
+		},
+	})
+	if log.InputTokens != 20 || log.OutputTokens != 10 || log.CacheHitTokens != 80 || log.CacheWriteTokens != 5 || log.TotalTokens != 115 {
+		t.Fatalf("separate cache usage was not included in total: %#v", log)
+	}
+}
+
+func TestFillUsageFromPayloadDoesNotDoubleCountNestedCacheDetails(t *testing.T) {
+	var log requestLog
+	fillUsageFromPayload(&log, map[string]any{
+		"usage": map[string]any{
+			"input_tokens":  100,
+			"output_tokens": 10,
+			"input_tokens_details": map[string]any{
+				"cached_tokens": 80,
+			},
+		},
+	})
+	if log.InputTokens != 100 || log.OutputTokens != 10 || log.CacheHitTokens != 80 || log.TotalTokens != 110 {
+		t.Fatalf("nested cache details were double counted: %#v", log)
+	}
+}
+
 func TestFillUsageFromSSE(t *testing.T) {
 	var log requestLog
 	body := []byte("data: {\"id\":\"x\",\"model\":\"glm-5.1\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
@@ -1607,6 +1713,22 @@ func TestResponsesNullErrorIsIgnored(t *testing.T) {
 	logs := a.currentLogs()
 	if len(logs) != 1 || logs[0].Status != http.StatusOK || logs[0].Error != "" || logs[0].TotalTokens != 12 {
 		t.Fatalf("null error was treated as a request failure: %#v", logs)
+	}
+}
+
+func TestLoggingResponseWriterOnlySuppressesErrorsWhenDrainEnabled(t *testing.T) {
+	newWriter := func() *loggingResponseWriter {
+		return newLoggingResponseWriter(&disconnectingResponseWriter{header: make(http.Header), cancel: func() {}}, time.Now())
+	}
+	regular := newWriter()
+	if _, err := regular.Write([]byte("payload")); err == nil {
+		t.Fatal("regular response writer suppressed a downstream error")
+	}
+
+	draining := newWriter()
+	draining.enableDisconnectDrain()
+	if n, err := draining.Write([]byte("payload")); err != nil || n != len("payload") {
+		t.Fatalf("draining response writer returned n=%d err=%v", n, err)
 	}
 }
 

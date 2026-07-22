@@ -7,8 +7,71 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
+
+const upstreamStreamDrainTimeout = 15 * time.Second
+
+func upstreamStreamContext(parent context.Context, stream bool) (context.Context, func(), func()) {
+	return upstreamStreamContextWithDrainTimeout(parent, stream, upstreamStreamDrainTimeout)
+}
+
+func upstreamStreamContextWithDrainTimeout(parent context.Context, stream bool, drainTimeout time.Duration) (context.Context, func(), func()) {
+	if !stream {
+		return parent, func() {}, func() {}
+	}
+
+	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	var mu sync.Mutex
+	preserve := false
+	released := false
+	var drainTimer *time.Timer
+	startDrainTimer := func() {
+		if released || drainTimer != nil {
+			return
+		}
+		if drainTimeout <= 0 {
+			cancel()
+			return
+		}
+		drainTimer = time.AfterFunc(drainTimeout, cancel)
+	}
+	stopParentCancel := context.AfterFunc(parent, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if preserve {
+			startDrainTimer()
+			return
+		}
+		cancel()
+	})
+	keepAfterHeaders := func() {
+		mu.Lock()
+		if !released {
+			preserve = true
+			if parent.Err() != nil {
+				startDrainTimer()
+			}
+		}
+		mu.Unlock()
+	}
+	release := func() {
+		mu.Lock()
+		if released {
+			mu.Unlock()
+			return
+		}
+		released = true
+		if drainTimer != nil {
+			drainTimer.Stop()
+		}
+		mu.Unlock()
+		stopParentCancel()
+		cancel()
+	}
+	return ctx, keepAfterHeaders, release
+}
 
 func (a *app) forwardJSON(ctx context.Context, ep endpoint, method, requestURI string, body []byte, originalHeader http.Header) (*http.Response, error) {
 	if method == "" {

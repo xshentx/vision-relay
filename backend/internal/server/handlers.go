@@ -203,13 +203,23 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 		payload["model"] = model
 	}
 	stream, _ := payload["stream"].(bool)
+	if stream {
+		if loggingWriter, ok := w.(*loggingResponseWriter); ok {
+			loggingWriter.enableDisconnectDrain()
+		}
+	}
+	forwardContext, keepStreamAfterHeaders, releaseStream := upstreamStreamContext(r.Context(), stream)
+	defer releaseStream()
 
 	if normalizeProvider(cfg.TextProvider) == "openai" && normalizeWireAPI(cfg.TextWireAPI) != "responses" {
 		chatPayload := protocol.ResponsesPayloadToChatCompletions(payload)
 		ensureStreamUsage(chatPayload)
 		sanitizeOpenAIChatPayload(chatPayload)
 		out, _ := json.Marshal(chatPayload)
-		resp, forwardErr := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, "/v1/chat/completions", out, r.Header)
+		resp, forwardErr := a.forwardJSON(forwardContext, a.textEndpoint(cfg), r.Method, "/v1/chat/completions", out, r.Header)
+		if forwardErr == nil {
+			keepStreamAfterHeaders()
+		}
 		if !stream {
 			if forwardErr != nil {
 				writeError(w, http.StatusBadGateway, forwardErr)
@@ -260,7 +270,10 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 		out, _ = json.Marshal(payload)
 	}
 	requestURI := canonicalRequestURI(r.URL.RequestURI())
-	resp, forwardErr := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, requestURI, out, r.Header)
+	resp, forwardErr := a.forwardJSON(forwardContext, a.textEndpoint(cfg), r.Method, requestURI, out, r.Header)
+	if forwardErr == nil {
+		keepStreamAfterHeaders()
+	}
 	if !stream {
 		if forwardErr != nil {
 			writeError(w, http.StatusBadGateway, forwardErr)

@@ -1835,9 +1835,10 @@ function renderDashboard(payload) {
   setDashboardToken("dashboardLifetimeTokens", summary.lifetime_tokens);
   setDashboardToken("dashboardTodayTokens", summary.today_tokens);
   setDashboardToken("dashboardPeriodTokens", summary.period_tokens);
-  setDashboardToken("dashboardInputTokens", summary.input_tokens);
+  setDashboardToken("dashboardInputTokens", dashboardUncachedInputTokens(summary));
   setDashboardToken("dashboardOutputTokens", summary.output_tokens);
   setDashboardToken("dashboardCacheTokens", summary.cache_hit_tokens);
+  setDashboardToken("dashboardCacheWriteTokens", summary.cache_write_tokens);
   setDashboardText("dashboardRequests", formatNumber(summary.requests));
   setDashboardText("dashboardFailures", formatNumber(summary.failures));
   setDashboardText("dashboardFailureSummary", `失败 ${formatNumber(summary.failures)} 次`);
@@ -1903,24 +1904,33 @@ function renderDashboardTokenTrend(payload) {
     }));
   } else {
     chartSeries = [
-      {name: "输入", color: "#2563eb", values: buckets.map((bucket) => Number(bucket.input_tokens || 0))},
+      {name: "非缓存输入", color: "#2563eb", values: buckets.map((bucket) => dashboardUncachedInputTokens(bucket))},
       {name: "输出", color: "#8b5cf6", values: buckets.map((bucket) => Number(bucket.output_tokens || 0))},
-      {name: "缓存命中", color: "#10b981", values: buckets.map((bucket) => Number(bucket.cache_hit_tokens || 0))}
+      {name: "缓存命中", color: "#10b981", values: buckets.map((bucket) => Number(bucket.cache_hit_tokens || 0))},
+      {name: "缓存写入", color: "#f97316", values: buckets.map((bucket) => Number(bucket.cache_write_tokens || 0))}
     ];
   }
   dashboardTokenLegend.innerHTML = chartSeries.map((series) => `<span><i style="background:${series.color}"></i>${escapeHTML(series.name)}</span>`).join("");
   renderDashboardLineChart(dashboardTokenChart, buckets.map((bucket) => bucket.label), chartSeries);
 }
+function dashboardUncachedInputTokens(usage) {
+  if (usage?.uncached_input_tokens != null) {
+    return Math.max(0, Number(usage.uncached_input_tokens || 0));
+  }
+  return Math.max(0, Number(usage?.input_tokens || 0) - Number(usage?.cache_hit_tokens || 0));
+}
+
 function renderDashboardComposition(summary) {
-  const input = Number(summary.input_tokens || 0);
   const output = Number(summary.output_tokens || 0);
   const cache = Number(summary.cache_hit_tokens || 0);
-  const uncachedInput = Math.max(0, input - cache);
-  const total = Math.max(0, uncachedInput + output + cache);
+  const cacheWrite = Number(summary.cache_write_tokens || 0);
+  const uncachedInput = dashboardUncachedInputTokens(summary);
+  const total = Math.max(0, uncachedInput + output + cache + cacheWrite);
   const values = [
-    {name: "普通输入", value: uncachedInput, color: "#2563eb"},
+    {name: "非缓存输入", value: uncachedInput, color: "#2563eb"},
     {name: "输出", value: output, color: "#8b5cf6"},
-    {name: "缓存命中", value: cache, color: "#10b981"}
+    {name: "缓存命中", value: cache, color: "#10b981"},
+    {name: "缓存写入", value: cacheWrite, color: "#f97316"}
   ];
   let offset = 0;
   const stops = values.map((item) => {
@@ -1941,16 +1951,17 @@ function renderDashboardComposition(summary) {
 
 function renderDashboardModels(models) {
   if (models.length === 0) {
-    dashboardModelRows.innerHTML = '<tr><td class="dashboard-table-empty" colspan="7">当前筛选范围内暂无模型用量</td></tr>';
+    dashboardModelRows.innerHTML = '<tr><td class="dashboard-table-empty" colspan="8">当前筛选范围内暂无模型用量</td></tr>';
     return;
   }
   dashboardModelRows.innerHTML = models.map((model) => `
     <tr>
       <td><strong>${escapeHTML(model.model || "-")}</strong></td>
       <td>${escapeHTML(model.supplier || "-")}</td>
-      <td title="${formatNumber(model.input_tokens)} Token">${formatCompactNumber(model.input_tokens)}</td>
+      <td title="${formatNumber(dashboardUncachedInputTokens(model))} Token">${formatCompactNumber(dashboardUncachedInputTokens(model))}</td>
       <td title="${formatNumber(model.output_tokens)} Token">${formatCompactNumber(model.output_tokens)}</td>
       <td title="${formatNumber(model.cache_hit_tokens)} Token">${formatCompactNumber(model.cache_hit_tokens)}</td>
+      <td title="${formatNumber(model.cache_write_tokens)} Token">${formatCompactNumber(model.cache_write_tokens)}</td>
       <td title="${formatNumber(model.total_tokens)} Token"><strong>${formatCompactNumber(model.total_tokens)}</strong></td>
       <td>${formatNumber(model.requests)}</td>
     </tr>

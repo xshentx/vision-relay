@@ -24,7 +24,7 @@ func TestBuildDashboardResponseAggregatesBySupplierAndModel(t *testing.T) {
 	if response.Summary.LifetimeTokens != 150 || response.Summary.TodayTokens != 100 || response.Summary.PeriodTokens != 150 {
 		t.Fatalf("unexpected token summary: %#v", response.Summary)
 	}
-	if response.Summary.InputTokens != 110 || response.Summary.OutputTokens != 40 || response.Summary.CacheHitTokens != 20 {
+	if response.Summary.InputTokens != 110 || response.Summary.UncachedInputTokens != 90 || response.Summary.OutputTokens != 40 || response.Summary.CacheHitTokens != 20 {
 		t.Fatalf("unexpected token breakdown: %#v", response.Summary)
 	}
 	if response.Summary.Requests != 2 || response.Summary.Failures != 1 || response.Summary.AverageMS != 750 || response.Summary.AverageFirstMS != 200 {
@@ -67,6 +67,89 @@ func TestDashboardSeriesSeparatesSameModelAcrossSuppliers(t *testing.T) {
 	bucket := response.Series[9]
 	if bucket.Models[seriesKeys["Supplier A"]] != 10 || bucket.Models[seriesKeys["Supplier B"]] != 20 {
 		t.Fatalf("same-name model series were merged: %#v", bucket.Models)
+	}
+}
+
+func TestDashboardUncachedInputTokensNormalizesProviderSemantics(t *testing.T) {
+	tests := []struct {
+		name, provider         string
+		input, output, total   int64
+		cacheHit, wantUncached int64
+	}{
+		{name: "OpenAI cache is included in input", provider: "openai", input: 100, output: 10, total: 110, cacheHit: 80, wantUncached: 20},
+		{name: "Anthropic cache is separate from input", provider: "anthropic", input: 20, output: 10, total: 110, cacheHit: 80, wantUncached: 20},
+		{name: "historical Anthropic total omitted cache", provider: "anthropic", input: 20, output: 10, total: 30, cacheHit: 80, wantUncached: 20},
+		{name: "no cache", input: 20, output: 10, total: 30, wantUncached: 20},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := dashboardUncachedInputTokens(tt.provider, tt.input, tt.output, tt.total, tt.cacheHit); got != tt.wantUncached {
+				t.Fatalf("uncached input = %d, want %d", got, tt.wantUncached)
+			}
+		})
+	}
+}
+
+func TestDashboardNormalizesHistoricalAnthropicCacheAccounting(t *testing.T) {
+	now := time.Now()
+	log := requestLog{
+		At: now, UpstreamName: "Claude", UpstreamProvider: "anthropic", Model: "claude-opus",
+		Status: 200, InputTokens: 20, OutputTokens: 10, TotalTokens: 30, CacheHitTokens: 80, CacheWriteTokens: 5,
+	}
+	start, end := dashboardPeriodRange("day", now)
+	response := buildDashboardResponse([]requestLog{log}, dashboardQuery{Period: "day"}, dashboardOptions{}, now, start, end, 115)
+	if response.Summary.UncachedInputTokens != 20 || response.Summary.CacheHitTokens != 80 || response.Summary.CacheWriteTokens != 5 || response.Summary.PeriodTokens != 115 {
+		t.Fatalf("historical Anthropic summary was not normalized: %#v", response.Summary)
+	}
+	if len(response.Models) != 1 || response.Models[0].CacheWriteTokens != 5 || response.Models[0].TotalTokens != 115 {
+		t.Fatalf("historical Anthropic model usage was not normalized: %#v", response.Models)
+	}
+
+	db, err := openAppDB(filepath.Join(t.TempDir(), "historical-anthropic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := insertRequestLogDB(db, log); err != nil {
+		t.Fatal(err)
+	}
+	allStart, allEnd := dashboardPeriodRange("all", now)
+	allResponse, err := buildDashboardAllResponseDB(db, dashboardQuery{Period: "all"}, now, allStart, allEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allResponse.Summary.UncachedInputTokens != 20 || allResponse.Summary.CacheWriteTokens != 5 || allResponse.Summary.PeriodTokens != 115 {
+		t.Fatalf("historical Anthropic database aggregate was not normalized: %#v", allResponse.Summary)
+	}
+}
+
+func TestDashboardDoesNotDoubleCountOpenAINestedCacheWrites(t *testing.T) {
+	now := time.Now()
+	log := requestLog{
+		At: now, UpstreamName: "OpenAI", UpstreamProvider: "openai", Model: "gpt-test",
+		Status: 200, InputTokens: 100, OutputTokens: 10, TotalTokens: 110, CacheHitTokens: 80, CacheWriteTokens: 5,
+	}
+	start, end := dashboardPeriodRange("day", now)
+	response := buildDashboardResponse([]requestLog{log}, dashboardQuery{Period: "day"}, dashboardOptions{}, now, start, end, 110)
+	if response.Summary.UncachedInputTokens != 20 || response.Summary.CacheHitTokens != 80 || response.Summary.CacheWriteTokens != 0 || response.Summary.PeriodTokens != 110 {
+		t.Fatalf("OpenAI nested cache details were double counted: %#v", response.Summary)
+	}
+
+	db, err := openAppDB(filepath.Join(t.TempDir(), "openai-nested-cache.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := insertRequestLogDB(db, log); err != nil {
+		t.Fatal(err)
+	}
+	allStart, allEnd := dashboardPeriodRange("all", now)
+	allResponse, err := buildDashboardAllResponseDB(db, dashboardQuery{Period: "all"}, now, allStart, allEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allResponse.Summary.UncachedInputTokens != 20 || allResponse.Summary.CacheWriteTokens != 0 || allResponse.Summary.PeriodTokens != 110 {
+		t.Fatalf("OpenAI database aggregate double counted nested cache details: %#v", allResponse.Summary)
 	}
 }
 
@@ -209,7 +292,7 @@ func TestBuildDashboardAllResponseDBAggregatesWithoutLoadingRawLogs(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Summary.LifetimeTokens != 150 || response.Summary.PeriodTokens != 150 || response.Summary.TodayTokens != 100 {
+	if response.Summary.LifetimeTokens != 150 || response.Summary.PeriodTokens != 150 || response.Summary.TodayTokens != 100 || response.Summary.UncachedInputTokens != 90 {
 		t.Fatalf("unexpected token summary: %#v", response.Summary)
 	}
 	if response.Summary.Requests != 2 || response.Summary.Failures != 1 || response.Summary.AverageMS != 750 || response.Summary.AverageFirstMS != 200 {

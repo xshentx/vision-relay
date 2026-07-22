@@ -326,9 +326,10 @@
             <article class="dashboard-metric primary"><span>累计 Token</span><strong id="dashboardLifetimeTokens">0</strong><small>当前筛选条件的历史总量</small></article>
             <article class="dashboard-metric"><span>今日 Token</span><strong id="dashboardTodayTokens">0</strong><small>本地时间当日用量</small></article>
             <article class="dashboard-metric"><span>周期 Token</span><strong id="dashboardPeriodTokens">0</strong><small id="dashboardPeriodLabel">今日统计</small></article>
-            <article class="dashboard-metric input"><span>输入</span><strong id="dashboardInputTokens">0</strong><small>所选周期</small></article>
+            <article class="dashboard-metric input"><span>非缓存输入</span><strong id="dashboardInputTokens">0</strong><small>所选周期，不含缓存命中</small></article>
             <article class="dashboard-metric output"><span>输出</span><strong id="dashboardOutputTokens">0</strong><small>所选周期</small></article>
             <article class="dashboard-metric cache"><span>缓存命中</span><strong id="dashboardCacheTokens">0</strong><small>所选周期</small></article>
+            <article class="dashboard-metric cache-write"><span>缓存写入</span><strong id="dashboardCacheWriteTokens">0</strong><small>所选周期，独立计费缓存写入</small></article>
             <article class="dashboard-metric requests"><span>请求量</span><strong id="dashboardRequests">0</strong><small id="dashboardFailureSummary">失败 0 次</small></article>
           </div>
 
@@ -358,7 +359,7 @@
             <div class="dashboard-card-head"><div><h4>模型用量排行</h4><p>按 Token 总量降序，展示模型和供应商的使用情况。</p></div></div>
             <div class="dashboard-table-wrap">
               <table class="dashboard-table">
-                <thead><tr><th>模型</th><th>供应商</th><th>输入</th><th>输出</th><th>缓存命中</th><th>总计</th><th>请求量</th></tr></thead>
+                <thead><tr><th>模型</th><th>供应商</th><th>非缓存输入</th><th>输出</th><th>缓存命中</th><th>缓存写入</th><th>总计</th><th>请求量</th></tr></thead>
                 <tbody id="dashboardModelRows"></tbody>
               </table>
             </div>
