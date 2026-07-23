@@ -1319,7 +1319,7 @@ func TestWriteCodexConfigRepairsMisplacedRelayBlockAndDuplicateWindows(t *testin
 		t.Fatal(err)
 	}
 
-	ctx := clientConfigContext{HomeDir: home, ProjectDir: projectDir, Origin: "http://127.0.0.1:8787", Model: "z-ai/glm-5.2"}
+	ctx := clientConfigContext{HomeDir: home, ProjectDir: projectDir, Origin: "http://127.0.0.1:8787", Model: "z-ai/glm-5.2", GOOS: "windows"}
 	if _, err := writeCodexConfig(ctx); err != nil {
 		t.Fatal(err)
 	}
