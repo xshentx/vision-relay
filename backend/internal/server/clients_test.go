@@ -293,6 +293,7 @@ func TestWriteClientConfigs(t *testing.T) {
 		HomeDir:       home,
 		ProjectDir:    projectDir,
 		Origin:        "http://127.0.0.1:8787",
+		GOOS:          "windows",
 		Model:         "z-ai/glm-5.2",
 		VisionEnabled: true,
 		ModelMappings: []textModelMapping{
@@ -1236,7 +1237,7 @@ func TestWriteCodexConfigReplacesPreviousRelayBlock(t *testing.T) {
 	if err := os.WriteFile(path, []byte(before), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ctx := clientConfigContext{HomeDir: home, ProjectDir: projectDir, Origin: "http://new", Key: "sk", Model: "new-model"}
+	ctx := clientConfigContext{HomeDir: home, ProjectDir: projectDir, Origin: "http://new", Key: "sk", Model: "new-model", GOOS: "windows"}
 	if _, err := writeCodexConfig(ctx); err != nil {
 		t.Fatal(err)
 	}

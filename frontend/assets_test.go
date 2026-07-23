@@ -322,7 +322,7 @@ func TestModelProfileProxyFieldUsesFullModalWidth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := string(scriptRaw)
+	script := strings.ReplaceAll(string(scriptRaw), "\r\n", "\n")
 	for _, expected := range []string{
 		`modalProfileProxyWrap.hidden = false;`,
 		`modalProfileProxyURL.value = profile?.proxy_url || "";`,
@@ -1169,7 +1169,7 @@ func TestLegacyTextRoutingMarkerIsPreservedByFrontendSaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := string(scriptRaw)
+	script := strings.ReplaceAll(string(scriptRaw), "\r\n", "\n")
 	for _, expected := range []string{
 		`legacyTextRouting = cfg.legacy_text_routing === true;`,
 		`data.legacy_text_routing = legacyTextRouting;`,

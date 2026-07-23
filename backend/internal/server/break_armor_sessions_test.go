@@ -92,7 +92,8 @@ func TestCodexSessionBatchPatchReasoningBackupAndRestore(t *testing.T) {
 	if strings.Count(string(patched), "继续处理本地授权测试。") != 3 || strings.Contains(string(patched), "encrypted_content") || strings.Contains(string(patched), "cannot assist") {
 		t.Fatalf("Codex patch incomplete: %s", patched)
 	}
-	backups, err := listBreakArmorSessionBackups(home, breakArmorSessionLocator{Client: "codex", Path: path})
+	aliasedPath := filepath.Dir(path) + string(filepath.Separator) + "unused" + string(filepath.Separator) + ".." + string(filepath.Separator) + filepath.Base(path)
+	backups, err := listBreakArmorSessionBackups(home, breakArmorSessionLocator{Client: "codex", Path: aliasedPath})
 	if err != nil {
 		t.Fatal(err)
 	}

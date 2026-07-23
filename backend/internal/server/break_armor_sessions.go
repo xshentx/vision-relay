@@ -1003,7 +1003,17 @@ func patchBreakArmorOpenCode(locator breakArmorSessionLocator, req breakArmorSes
 	return tx.Commit()
 }
 func breakArmorSessionBackupRoot(home string, locator breakArmorSessionLocator) string {
-	sum := sha256.Sum256([]byte(locator.Client + "\x00" + locator.Path + "\x00" + locator.SessionID))
+	// Temp and home directories can be reached through symlinks on macOS and
+	// Windows runners. Canonicalize the session path so backup creation and
+	// lookup use the same key even when callers use different path aliases.
+	path := locator.Path
+	if absPath, err := filepath.Abs(path); err == nil {
+		path = absPath
+	}
+	if resolvedPath, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolvedPath
+	}
+	sum := sha256.Sum256([]byte(locator.Client + "\x00" + filepath.Clean(path) + "\x00" + locator.SessionID))
 	return filepath.Join(home, ".vision-relay", "break-armor", "session-backups", locator.Client, hex.EncodeToString(sum[:12]))
 }
 func breakArmorSessionHasBackup(home string, locator breakArmorSessionLocator) bool {
