@@ -114,3 +114,22 @@ func TestUpdateProgressEndpointAndDuplicateGuard(t *testing.T) {
 		t.Fatalf("POST progress status = %d, want 405", recorder.Code)
 	}
 }
+
+func TestSelectDarwinAssetMatchesArchitecture(t *testing.T) {
+	assets := []githubAsset{
+		{Name: "vision-relay-darwin-amd64.zip", BrowserDownloadURL: "intel"},
+		{Name: "vision-relay-darwin-arm64.zip", BrowserDownloadURL: "apple-silicon"},
+		{Name: "vision-relay-darwin-universal.zip", BrowserDownloadURL: "universal"},
+	}
+	got, ok := selectReleaseAsset(assets, "darwin", "arm64")
+	if !ok || got.BrowserDownloadURL != "apple-silicon" {
+		t.Fatalf("arm64 Darwin asset = %#v, %v", got, ok)
+	}
+	got, ok = selectReleaseAsset(assets, "darwin", "amd64")
+	if !ok || got.BrowserDownloadURL != "intel" {
+		t.Fatalf("amd64 Darwin asset = %#v, %v", got, ok)
+	}
+	if _, ok := selectReleaseAsset(assets, "linux", "arm64"); ok {
+		t.Fatal("unsupported Linux target unexpectedly selected a release asset")
+	}
+}

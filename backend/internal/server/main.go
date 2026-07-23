@@ -127,6 +127,7 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/desktop/activate", desktopActivationHandler(desktopActivation))
 	mux.HandleFunc("/api/config", a.handleConfig)
+	mux.HandleFunc("/api/provider-router/status", a.handleProviderRouterStatus)
 	mux.HandleFunc("/api/update", a.handleUpdate)
 	mux.HandleFunc("/api/update/progress", a.handleUpdateProgress)
 	mux.HandleFunc("/api/client/configure", a.handleClientConfigure)

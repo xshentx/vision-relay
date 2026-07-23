@@ -645,6 +645,93 @@ func TestResponsesPayloadToChatCompletionsPreservesImages(t *testing.T) {
 	}
 }
 
+func TestLocalAPIRoutesEachProtocolThroughItsSelectedClientProfile(t *testing.T) {
+	type upstreamCall struct {
+		path  string
+		model string
+	}
+	calls := map[string][]upstreamCall{}
+	newUpstream := func(name string, response map[string]any) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			calls[name] = append(calls[name], upstreamCall{path: r.URL.Path, model: firstString(payload["model"])})
+			writeJSON(w, http.StatusOK, response)
+		}))
+	}
+
+	codexUpstream := newUpstream("codex", map[string]any{
+		"id": "resp-client-route", "object": "response", "status": "completed", "model": "codex-upstream", "output": []any{},
+	})
+	defer codexUpstream.Close()
+	claudeUpstream := newUpstream("claude", map[string]any{
+		"id": "msg-client-route", "type": "message", "role": "assistant", "model": "claude-upstream",
+		"content": []any{map[string]any{"type": "text", "text": "ok"}},
+	})
+	defer claudeUpstream.Close()
+	openCodeUpstream := newUpstream("opencode", map[string]any{
+		"id": "chat-client-route", "object": "chat.completion", "model": "opencode-upstream",
+		"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "ok"}}},
+	})
+	defer openCodeUpstream.Close()
+
+	localAPIEnabled := true
+	cfg := normalizeSeparateModelProfiles(config{
+		LocalAPIEnabled:     &localAPIEnabled,
+		ActiveTextProfileID: "legacy-global",
+		ActiveTextProfileByClient: map[string]string{
+			textProfileClientCodex:    "codex-selected",
+			textProfileClientClaude:   "claude-selected",
+			textProfileClientOpenCode: "opencode-selected",
+		},
+		TextModelProfiles: []textModelProfile{
+			{ID: "legacy-global", Name: "Legacy global", Client: textProfileClientOpenCode, Provider: "openai", BaseURL: "http://127.0.0.1:1", ModelMappings: []textModelMapping{{Name: "client-alias", Model: "wrong-global"}}},
+			{ID: "codex-selected", Name: "Codex selected", Client: textProfileClientCodex, Provider: "openai", WireAPI: "responses", BaseURL: codexUpstream.URL, ModelMappings: []textModelMapping{{Name: "client-alias", Model: "codex-upstream"}}},
+			{ID: "claude-selected", Name: "Claude selected", Client: textProfileClientClaude, Provider: "anthropic", BaseURL: claudeUpstream.URL, ModelMappings: []textModelMapping{{Name: "client-alias", Model: "claude-upstream"}}},
+			{ID: "opencode-selected", Name: "OpenCode selected", Client: textProfileClientOpenCode, Provider: "openai", BaseURL: openCodeUpstream.URL, ModelMappings: []textModelMapping{{Name: "client-alias", Model: "opencode-upstream"}}},
+		},
+	})
+	a := &app{cfg: cfg, httpClient: http.DefaultClient}
+
+	tests := []struct {
+		name      string
+		path      string
+		body      string
+		upstream  string
+		wantPath  string
+		wantModel string
+	}{
+		{name: "Codex Responses", path: "/v1/responses", body: `{"model":"client-alias","input":"hello"}`, upstream: "codex", wantPath: "/v1/responses", wantModel: "codex-upstream"},
+		{name: "Claude Messages", path: "/v1/messages", body: `{"model":"client-alias","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`, upstream: "claude", wantPath: "/v1/messages", wantModel: "claude-upstream"},
+		{name: "OpenCode Chat", path: "/v1/chat/completions", body: `{"model":"client-alias","messages":[{"role":"user","content":"hello"}]}`, upstream: "opencode", wantPath: "/v1/chat/completions", wantModel: "opencode-upstream"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			a.handleRoute(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+			}
+			got := calls[test.upstream]
+			if len(got) != 1 || got[0].path != test.wantPath || got[0].model != test.wantModel {
+				t.Fatalf("selected upstream calls = %#v, want path %q and model %q", got, test.wantPath, test.wantModel)
+			}
+		})
+	}
+	if len(calls) != 3 {
+		t.Fatalf("requests reached unexpected upstreams: %#v", calls)
+	}
+	logs := a.currentLogs()
+	if len(logs) != 3 || logs[0].UpstreamName != "OpenCode selected" || logs[1].UpstreamName != "Claude selected" || logs[2].UpstreamName != "Codex selected" {
+		t.Fatalf("request logs did not use the selected client profiles: %#v", logs)
+	}
+}
+
 func TestOpenAIResponsesStreamingIsConvertedForCodexClient(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload map[string]any
@@ -714,6 +801,35 @@ func TestOpenAIResponsesDrainsTerminalUsageAfterDownstreamDisconnect(t *testing.
 	logs := a.currentLogs()
 	if len(logs) != 1 || logs[0].TotalTokens != 110 || logs[0].CacheHitTokens != 80 {
 		t.Fatalf("terminal usage was not persisted after disconnect: %#v", logs)
+	}
+}
+
+func TestOpenAIChatDrainsTerminalUsageAfterDownstreamDisconnect(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-drain\",\"model\":\"gpt-5.6-sol\",\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))
+		w.(http.Flusher).Flush()
+		time.Sleep(20 * time.Millisecond)
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-drain\",\"model\":\"gpt-5.6-sol\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":10,\"total_tokens\":110,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+
+	a := &app{
+		cfg: normalizeSeparateModelProfiles(config{
+			TextProvider: "openai",
+			TextBaseURL:  upstream.URL,
+		}),
+		httpClient: upstream.Client(),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	writer := &disconnectingResponseWriter{header: make(http.Header), cancel: cancel}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.6-sol","stream":true,"messages":[{"role":"user","content":"hi"}]}`)).WithContext(ctx)
+
+	a.handleRoute(writer, req)
+	logs := a.currentLogs()
+	if len(logs) != 1 || logs[0].TotalTokens != 110 || logs[0].CacheHitTokens != 80 {
+		t.Fatalf("chat terminal usage was not persisted after disconnect: %#v", logs)
 	}
 }
 
@@ -1174,8 +1290,11 @@ func TestShouldAugmentImagesUsesSelectedModelCapability(t *testing.T) {
 	if !shouldAugmentImages(cfg, "text-model") {
 		t.Fatal("text-only model should use the configured vision relay")
 	}
+	if !shouldAugmentImages(cfg, "unmarked-model") {
+		t.Fatal("a model without an explicit image-capability mark should use the configured vision relay")
+	}
 	cfg.VisionEnabled = boolPtr(false)
-	if shouldAugmentImages(cfg, "vision-model") || shouldAugmentImages(cfg, "text-model") {
+	if shouldAugmentImages(cfg, "vision-model") || shouldAugmentImages(cfg, "text-model") || shouldAugmentImages(cfg, "unmarked-model") {
 		t.Fatal("no model should use the vision relay while it is disabled")
 	}
 }
@@ -1601,6 +1720,160 @@ func TestFillUsageFromSSE(t *testing.T) {
 	}
 }
 
+func TestFillUsageFromSSEDoesNotAccumulateRepeatedUsageSnapshots(t *testing.T) {
+	var log requestLog
+	body := []byte("data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\n" +
+		"data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120,\"prompt_tokens_details\":{\"cached_tokens\":80}}}\n\n")
+	fillUsageFromSSE(&log, body)
+	if log.InputTokens != 100 || log.OutputTokens != 20 || log.TotalTokens != 120 || log.CacheHitTokens != 80 {
+		t.Fatalf("repeated SSE usage was accumulated: %#v", log)
+	}
+}
+
+func TestFillUsageFromPayloadDoesNotAccumulateAliasedCacheFields(t *testing.T) {
+	var log requestLog
+	fillUsageFromPayload(&log, map[string]any{
+		"response": map[string]any{"usage": map[string]any{
+			"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+			"input_tokens_details": map[string]any{"cached_tokens": 80},
+		}},
+		"usage": map[string]any{
+			"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+			"cache_read_input_tokens": 80,
+		},
+	})
+	if log.InputTokens != 100 || log.OutputTokens != 20 || log.TotalTokens != 120 || log.CacheHitTokens != 80 {
+		t.Fatalf("aliased nested usage was accumulated: %#v", log)
+	}
+}
+
+func TestFillUsageFromAnthropicSSECombinesMessageUsage(t *testing.T) {
+	var log requestLog
+	log.UpstreamProvider = "anthropic"
+	body := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-test\",\"usage\":{\"input_tokens\":20,\"cache_read_input_tokens\":80,\"cache_creation_input_tokens\":5}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":20,\"output_tokens\":10,\"cache_read_input_tokens\":80,\"cache_creation_input_tokens\":5}}\n\n")
+	fillUsageFromSSE(&log, body)
+	if log.Model != "claude-test" || log.InputTokens != 20 || log.OutputTokens != 10 || log.CacheHitTokens != 80 || log.CacheWriteTokens != 5 || log.TotalTokens != 115 {
+		t.Fatalf("Anthropic stream usage was not combined: %#v", log)
+	}
+}
+
+func TestFillUsageFromResponsesUsesTerminalUsage(t *testing.T) {
+	var log requestLog
+	log.UpstreamProvider = "openai"
+	body := []byte("data: {\"type\":\"response.in_progress\",\"response\":{\"usage\":{\"input_tokens\":999,\"output_tokens\":999,\"total_tokens\":1998,\"input_tokens_details\":{\"cached_tokens\":999}}}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"total_tokens\":120,\"input_tokens_details\":{\"cached_tokens\":80}}}}\n\n")
+	fillUsageFromSSE(&log, body)
+	if log.InputTokens != 100 || log.OutputTokens != 20 || log.TotalTokens != 120 || log.CacheHitTokens != 80 {
+		t.Fatalf("Responses terminal usage was not authoritative: %#v", log)
+	}
+}
+
+func TestFillUsageFromAnthropicSSEUsesDeltaInputCorrection(t *testing.T) {
+	var log requestLog
+	log.UpstreamProvider = "anthropic"
+	body := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":20,\"output_tokens\":10}}\n\n")
+	fillUsageFromSSE(&log, body)
+	if log.InputTokens != 20 || log.OutputTokens != 10 || log.TotalTokens != 30 {
+		t.Fatalf("Anthropic delta input correction was ignored: %#v", log)
+	}
+}
+
+func TestFillUsageFromAnthropicSSEUsesExplicitZeroDeltaInput(t *testing.T) {
+	var log requestLog
+	log.UpstreamProvider = "anthropic"
+	body := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100,\"cache_read_input_tokens\":100}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":0,\"output_tokens\":5}}\n\n")
+	fillUsageFromSSE(&log, body)
+	if log.InputTokens != 0 || log.OutputTokens != 5 || log.CacheHitTokens != 100 || log.TotalTokens != 105 {
+		t.Fatalf("Anthropic explicit zero delta input was ignored: %#v", log)
+	}
+}
+
+func TestFillUsageFromAnthropicSSEAdoptsDeltaCachePairWithFreshInput(t *testing.T) {
+	var log requestLog
+	log.UpstreamProvider = "anthropic"
+	body := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":100,\"cache_read_input_tokens\":80,\"cache_creation_input_tokens\":5}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":20,\"output_tokens\":10,\"cache_read_input_tokens\":10,\"cache_creation_input_tokens\":2}}\n\n")
+	fillUsageFromSSE(&log, body)
+	if log.InputTokens != 20 || log.OutputTokens != 10 || log.CacheHitTokens != 10 || log.CacheWriteTokens != 2 || log.TotalTokens != 42 {
+		t.Fatalf("Anthropic delta cache pair was not adopted with fresh input: %#v", log)
+	}
+}
+
+func TestFillUsageFromSSEUsesFinalOpenAISnapshot(t *testing.T) {
+	var log requestLog
+	body := []byte("data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":20,\"total_tokens\":120}}\n\n" +
+		"data: {\"id\":\"x\",\"usage\":{\"prompt_tokens\":80,\"completion_tokens\":10,\"total_tokens\":90}}\n\n")
+	fillUsageFromSSE(&log, body)
+	if log.InputTokens != 80 || log.OutputTokens != 10 || log.TotalTokens != 90 {
+		t.Fatalf("final OpenAI usage snapshot was not authoritative: %#v", log)
+	}
+}
+
+func TestFillUsageFromGeminiUsageIncludesThoughtTokens(t *testing.T) {
+	var log requestLog
+	fillUsageFromPayload(&log, map[string]any{
+		"usageMetadata": map[string]any{
+			"promptTokenCount": 25, "candidatesTokenCount": 10,
+			"thoughtsTokenCount": 15, "totalTokenCount": 50,
+		},
+	})
+	if log.InputTokens != 25 || log.OutputTokens != 25 || log.TotalTokens != 50 {
+		t.Fatalf("Gemini thought tokens were not included in output: %#v", log)
+	}
+}
+
+func TestFillUsageFromSSEUsesFinalGeminiSnapshot(t *testing.T) {
+	var log requestLog
+	body := []byte("data: {\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":5,\"totalTokenCount\":15}}\n\n" +
+		"data: {\"usageMetadata\":{\"promptTokenCount\":12,\"candidatesTokenCount\":10,\"totalTokenCount\":30}}\n\n")
+	fillUsageFromSSE(&log, body)
+	if log.InputTokens != 12 || log.OutputTokens != 18 || log.TotalTokens != 30 {
+		t.Fatalf("final Gemini usage snapshot was not authoritative: %#v", log)
+	}
+}
+
+func TestFillUsageFromPayloadPrefersExplicitZeroCacheAlias(t *testing.T) {
+	var log requestLog
+	log.UpstreamProvider = "openai"
+	fillUsageFromPayload(&log, map[string]any{"usage": map[string]any{
+		"input_tokens": 100, "output_tokens": 10,
+		"cache_read_input_tokens": 0,
+		"prompt_tokens_details":   map[string]any{"cached_tokens": 80},
+	}})
+	if log.CacheHitTokens != 0 || log.TotalTokens != 110 {
+		t.Fatalf("lower-priority cache alias replaced explicit zero: %#v", log)
+	}
+}
+
+func TestOpenAIToAnthropicUsageCountsSeparateCacheInLogTotal(t *testing.T) {
+	var log requestLog
+	log.Protocol = "Anthropic Messages"
+	log.UpstreamProvider = "openai"
+	fillUsageFromPayload(&log, map[string]any{"usage": map[string]any{
+		"input_tokens": 20, "output_tokens": 10,
+		"cache_read_input_tokens":     80,
+		"cache_creation_input_tokens": 5,
+	}})
+	if log.TotalTokens != 115 || log.CacheHitTokens != 80 || log.CacheWriteTokens != 5 {
+		t.Fatalf("OpenAI-to-Anthropic usage did not preserve separate cache accounting: %#v", log)
+	}
+}
+
+func TestOpenAISeparateCacheAliasesAreNotAddedToTotal(t *testing.T) {
+	var log requestLog
+	log.UpstreamProvider = "openai"
+	fillUsageFromPayload(&log, map[string]any{"usage": map[string]any{
+		"input_tokens": 100, "output_tokens": 20,
+		"cache_read_input_tokens": 80,
+	}})
+	if log.TotalTokens != 120 || log.CacheHitTokens != 80 {
+		t.Fatalf("OpenAI cache aliases changed total semantics: %#v", log)
+	}
+}
+
 func TestFillUsageFromResponsesCompletedSSE(t *testing.T) {
 	var log requestLog
 	body := []byte("data: {\"type\":\"response.completed\",\"response\":{\"model\":\"deepseek-ai/deepseek-v4-pro\",\"usage\":{\"input_tokens\":31,\"output_tokens\":9,\"total_tokens\":40,\"input_tokens_details\":{\"cached_tokens\":7}}}}\n\n")
@@ -2002,5 +2275,27 @@ func TestNormalizeSeparateModelProfilesAppliesActiveProfiles(t *testing.T) {
 	}
 	if cfg.VisionBaseURL != "https://vision-b.example" || cfg.VisionModel != "vision-b-model" {
 		t.Fatalf("active vision profile was not applied: %#v", cfg)
+	}
+}
+
+func TestNormalizeActiveTextProfilesByClientIgnoresUnknownKeys(t *testing.T) {
+	profiles := normalizeTextProfiles([]textModelProfile{
+		{ID: "opencode-fallback", Client: textProfileClientOpenCode, Provider: "openai"},
+		{ID: "unknown-selected", Client: textProfileClientOpenCode, Provider: "openai"},
+		{ID: "claude-canonical", Client: textProfileClientClaude, Provider: "anthropic"},
+		{ID: "claude-alias", Client: textProfileClientClaude, Provider: "anthropic"},
+	})
+
+	active := normalizeActiveTextProfilesByClient(profiles, map[string]string{
+		"unexpected-client": "unknown-selected",
+		"claude-code":       "claude-alias",
+		"claude":            "claude-canonical",
+	}, "")
+
+	if got := active[textProfileClientOpenCode]; got != "opencode-fallback" {
+		t.Fatalf("unknown client key changed OpenCode selection: got %q, want %q", got, "opencode-fallback")
+	}
+	if got := active[textProfileClientClaude]; got != "claude-canonical" {
+		t.Fatalf("canonical Claude selection did not take precedence over alias: got %q", got)
 	}
 }

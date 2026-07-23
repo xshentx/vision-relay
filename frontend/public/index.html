@@ -126,9 +126,14 @@
           <div class="dashboard-heading">
             <div>
               <h3>文本模型</h3>
-              <p>保存多个文本上游，切换当前客户端请求最终转发到哪个文本模型。</p>
+              <p>供应商按 Codex、Claude、OpenCode 分组；点击“使用”只更新该组对应的客户端配置。</p>
             </div>
             <button class="secondary" id="addTextProfile" type="button">新增</button>
+          </div>
+          <div class="provider-client-tabs" role="tablist" aria-label="供应商客户端分组">
+            <button class="active" type="button" role="tab" aria-selected="true" data-provider-client-tab="codex">Codex</button>
+            <button type="button" role="tab" aria-selected="false" data-provider-client-tab="claude">Claude</button>
+            <button type="button" role="tab" aria-selected="false" data-provider-client-tab="opencode">OpenCode</button>
           </div>
           <div class="profile-list" id="textProfileList" aria-label="文本模型列表"></div>
         </section>
@@ -185,10 +190,10 @@
           <article class="component-card client-config-card">
             <div class="component-card-head client-config-heading"><div><h4>客户端配置</h4><p>一键配置由程序直接写入本地文件，不再启动终端；开启路由后，切换供应商会自动同步配置。</p></div><span class="component-tag">程序内置</span></div>
             <div class="client-tabs" role="tablist" aria-label="客户端类型"><button class="client-tab active" type="button" role="tab" aria-selected="true" data-client-tab="codex">Codex</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="opencode">OpenCode</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="claude-code">Claude</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="openclaw">OpenClaw</button></div>
-            <div class="client-tab-panel active" data-client-panel="codex"><div class="client-panel-intro"><div><h4>Codex</h4><p>通过 Responses 接口连接本机中转，并保留工具调用和图片解析结果。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeCodex" type="checkbox"><span aria-hidden="true"></span></span></label><button class="secondary small-action" id="restoreCodex" type="button">恢复官方模式</button><button class="primary-action small-action" id="configureCodex" type="button">一键配置 Codex</button></div></div><pre><code id="codexConfig"></code></pre></div>
+            <div class="client-tab-panel active" data-client-panel="codex"><div class="client-panel-intro"><div><h4>Codex</h4><p>使用 Codex 分组当前选中的供应商，同时配置桌面端与 CLI。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeCodex" type="checkbox"><span aria-hidden="true"></span></span></label><button class="secondary small-action" id="restoreCodex" type="button">恢复官方模式</button><button class="primary-action small-action" id="configureCodex" type="button">一键配置 Codex 桌面端 + CLI</button></div></div><pre><code id="codexConfig"></code></pre></div>
             <div class="client-tab-panel" data-client-panel="opencode" hidden><div class="client-panel-intro"><div><h4>OpenCode</h4><p>配置 OpenAI-compatible 模型的图片附件能力，避免客户端在本地拦截图片。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeOpenCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureOpenCode" type="button">一键配置 OpenCode</button></div></div><pre><code id="opencodeConfig"></code></pre></div>
-            <div class="client-tab-panel" data-client-panel="claude-code" hidden><div class="client-panel-intro"><div><h4>Claude</h4><p>通过 Anthropic Messages 接口连接，并保留工具调用和视觉识别结果。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureClaudeCode" type="button">一键配置 Claude</button></div></div><pre><code id="claudeCodeConfig"></code></pre></div>
-            <div class="client-tab-panel" data-client-panel="openclaw" hidden><div class="client-panel-intro"><div><h4>OpenClaw</h4><p>写入 OpenAI-compatible 自定义供应商、可用模型与图片输入能力，并切换默认模型。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeOpenClaw" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureOpenClaw" type="button">一键配置 OpenClaw</button></div></div><pre><code id="openclawConfig"></code></pre></div>
+            <div class="client-tab-panel" data-client-panel="claude-code" hidden><div class="client-panel-intro"><div><h4>Claude</h4><p>使用 Claude 分组当前选中的供应商，同时配置 Claude Desktop 与 Claude CLI。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureClaudeCode" type="button">一键配置 Claude 桌面端 + CLI</button></div></div><pre><code id="claudeCodeConfig"></code></pre></div>
+            <div class="client-tab-panel" data-client-panel="openclaw" hidden><div class="client-panel-intro"><div><h4>OpenClaw</h4><p>使用 OpenCode 分组当前选中的供应商，写入 OpenAI-compatible 模型与图片能力。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeOpenClaw" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureOpenClaw" type="button">一键配置 OpenClaw</button></div></div><pre><code id="openclawConfig"></code></pre></div>
           </article>
         </section>
 
@@ -681,6 +686,14 @@
         <label>
           供应商名称
           <input id="modalProfileName" required placeholder="例如 OpenAI 官方">
+        </label>
+        <label id="modalProfileClientWrap">
+          所属客户端
+          <select id="modalProfileClient">
+            <option value="codex">Codex</option>
+            <option value="claude">Claude</option>
+            <option value="opencode">OpenCode</option>
+          </select>
         </label>
         <label>
           类型

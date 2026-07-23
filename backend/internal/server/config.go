@@ -11,14 +11,17 @@ import (
 )
 
 const (
-	appDisplayName      = "Vision Relay"
-	appSlug             = "vision-relay"
-	legacyAppSlug       = "codex-proxy"
-	defaultAddr         = "127.0.0.1:8787"
-	defaultTextProvider = "openai"
-	defaultTextWireAPI  = "chat_completions"
-	defaultVisionModel  = "gpt-4o-mini"
-	defaultVisionPrompt = "你只是图片识别器，不是最终回答模型。只提取图片事实，禁止回答用户需求、禁止写代码、禁止给方案、禁止推理下一步。按图片复杂度输出必要细节，用简洁中文列出：1. 可见文字；2. 主要对象/页面结构；3. 颜色和布局；4. 与用户需求直接相关的细节。"
+	appDisplayName            = "Vision Relay"
+	appSlug                   = "vision-relay"
+	legacyAppSlug             = "codex-proxy"
+	defaultAddr               = "127.0.0.1:8787"
+	defaultTextProvider       = "openai"
+	defaultTextWireAPI        = "chat_completions"
+	textProfileClientCodex    = "codex"
+	textProfileClientClaude   = "claude"
+	textProfileClientOpenCode = "opencode"
+	defaultVisionModel        = "gpt-4o-mini"
+	defaultVisionPrompt       = "你只是图片识别器，不是最终回答模型。只提取图片事实，禁止回答用户需求、禁止写代码、禁止给方案、禁止推理下一步。按图片复杂度输出必要细节，用简洁中文列出：1. 可见文字；2. 主要对象/页面结构；3. 颜色和布局；4. 与用户需求直接相关的细节。"
 )
 
 var codexAccountModelAliases = []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
@@ -48,11 +51,13 @@ func defaultConfig() config {
 		AutoCheckUpdates:                  boolPtr(true),
 		OpenWindow:                        env("OPEN_WINDOW", "true") != "false",
 		OpenBrowser:                       env("OPEN_BROWSER", "false") == "true",
+		legacyTextRouting:                 true,
 	}
 	cfg.TextModelProfiles = []textModelProfile{textProfileFromConfig(cfg, "text-default", "默认文本模型")}
 	cfg.ActiveTextProfileID = cfg.TextModelProfiles[0].ID
 	cfg.VisionModelProfiles = []visionModelProfile{visionProfileFromConfig(cfg, "vision-default", "默认视觉模型")}
 	cfg.ActiveVisionProfileID = cfg.VisionModelProfiles[0].ID
+	cfg.visionProxyURL = cfg.VisionModelProfiles[0].ProxyURL
 	return cfg
 }
 
@@ -117,6 +122,12 @@ func mergeConfig(base, loaded config) config {
 	}
 	if loaded.ActiveTextProfileID != "" {
 		base.ActiveTextProfileID = loaded.ActiveTextProfileID
+	}
+	if loaded.ActiveTextProfileByClient != nil {
+		base.ActiveTextProfileByClient = loaded.ActiveTextProfileByClient
+	}
+	if loaded.LegacyTextRouting {
+		base.LegacyTextRouting = true
 	}
 	if len(loaded.TextModelProfiles) > 0 {
 		base.TextModelProfiles = loaded.TextModelProfiles
@@ -319,6 +330,10 @@ func boolPtr(value bool) *bool {
 	return &value
 }
 
+func stringPtr(value string) *string {
+	return &value
+}
+
 func visionEnabled(cfg config) bool {
 	return cfg.VisionEnabled == nil || *cfg.VisionEnabled
 }
@@ -368,8 +383,28 @@ func normalizeClientBehavior(values map[string]bool, fallback bool) map[string]b
 }
 
 func textSupportsImages(cfg config, requested string) bool {
-	mapping, ok := effectiveTextModelMapping(cfg, requested)
+	mapping, ok := textImageCapabilityMapping(cfg, requested)
 	return ok && mapping.SupportsImages
+}
+
+// textImageCapabilityMapping deliberately does not use the generic model
+// routing fallback. effectiveTextModelMapping falls back to the first mapping
+// so an unknown client model can still be routed to a usable upstream model;
+// image capability is different and must be explicitly declared for the model
+// requested by the client. Otherwise an unrelated first mapping marked as
+// multimodal would bypass vision augmentation for a text-only/unknown model.
+func textImageCapabilityMapping(cfg config, requested string) (textModelMapping, bool) {
+	mappings := textModelMappings(cfg)
+	requested = strings.TrimSpace(requested)
+	for _, mapping := range mappings {
+		if requested == mapping.Name || requested == mapping.Model {
+			return mapping, true
+		}
+	}
+	if index, ok := codexAccountModelAliasIndex(requested); ok && index < len(mappings) {
+		return mappings[index], true
+	}
+	return textModelMapping{}, false
 }
 
 func textModelReasoningEffort(mapping textModelMapping) string {
@@ -446,6 +481,23 @@ func shouldAugmentImages(cfg config, requested string) bool {
 }
 
 func normalizeSeparateModelProfiles(cfg config) config {
+	// ProxyURL was historically shared by text and vision. Capture it before an
+	// active text profile is applied so old vision profiles can migrate once to
+	// their own proxy without inheriting a per-client supplier at request time.
+	legacyVisionProxyURL := strings.TrimSpace(cfg.ProxyURL)
+	// A profile list without explicit client ownership is from the legacy
+	// global-routing format. Persist the compatibility bit because the normalized
+	// profiles returned to the UI have inferred ownership; without the bit, an
+	// unrelated settings save would accidentally turn the migration off.
+	hasExplicitClient := false
+	for _, profile := range cfg.TextModelProfiles {
+		if strings.TrimSpace(profile.Client) != "" {
+			hasExplicitClient = true
+			break
+		}
+	}
+	cfg.legacyTextRouting = cfg.LegacyTextRouting || (!hasExplicitClient && len(cfg.ActiveTextProfileByClient) == 0)
+	cfg.LegacyTextRouting = cfg.legacyTextRouting
 	if len(cfg.TextModelProfiles) == 0 || len(cfg.VisionModelProfiles) == 0 {
 		cfg = migrateCombinedProfiles(cfg)
 	}
@@ -457,6 +509,12 @@ func normalizeSeparateModelProfiles(cfg config) config {
 	}
 	cfg.TextModelProfiles = normalizeTextProfiles(cfg.TextModelProfiles)
 	cfg.VisionModelProfiles = normalizeVisionProfiles(cfg.VisionModelProfiles)
+	for i := range cfg.VisionModelProfiles {
+		if cfg.VisionModelProfiles[i].ProxyURL == nil {
+			cfg.VisionModelProfiles[i].ProxyURL = stringPtr(legacyVisionProxyURL)
+		}
+	}
+	cfg.ActiveTextProfileByClient = normalizeActiveTextProfilesByClient(cfg.TextModelProfiles, cfg.ActiveTextProfileByClient, cfg.ActiveTextProfileID)
 	if cfg.ActiveTextProfileID == "" || !hasTextProfile(cfg.TextModelProfiles, cfg.ActiveTextProfileID) {
 		cfg.ActiveTextProfileID = cfg.TextModelProfiles[0].ID
 	}
@@ -518,6 +576,7 @@ func migrateCombinedProfiles(cfg config) config {
 			BaseURL:  profile.VisionBaseURL,
 			APIKey:   profile.VisionAPIKey,
 			Model:    profile.VisionModel,
+			ProxyURL: stringPtr(profile.ProxyURL),
 		})
 	}
 	if len(cfg.TextModelProfiles) == 0 {
@@ -553,6 +612,7 @@ func normalizeTextProfiles(profiles []textModelProfile) []textModelProfile {
 		if profile.Provider == "" {
 			profile.Provider = defaultTextProvider
 		}
+		profile.Client = normalizeTextProfileClient(profile.Client, profile.Provider, profile.WireAPI)
 		profile.BaseURL = strings.TrimSpace(profile.BaseURL)
 		if profile.BaseURL == "" {
 			profile.BaseURL = defaultBaseURL(profile.Provider)
@@ -573,6 +633,109 @@ func normalizeTextProfiles(profiles []textModelProfile) []textModelProfile {
 		out = append(out, profile)
 	}
 	return out
+}
+
+func normalizeTextProfileClientID(client string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(client)) {
+	case textProfileClientCodex:
+		return textProfileClientCodex, true
+	case textProfileClientClaude, clientClaudeCode:
+		return textProfileClientClaude, true
+	case textProfileClientOpenCode, "open-code":
+		return textProfileClientOpenCode, true
+	default:
+		return "", false
+	}
+}
+
+func normalizeTextProfileClient(client, provider, wireAPI string) string {
+	if normalized, ok := normalizeTextProfileClientID(client); ok {
+		return normalized
+	}
+	if normalizeProvider(provider) == "anthropic" {
+		return textProfileClientClaude
+	}
+	if normalizeProvider(provider) == "openai" && normalizeWireAPI(wireAPI) == "responses" {
+		return textProfileClientCodex
+	}
+	return textProfileClientOpenCode
+}
+
+func normalizeActiveTextProfilesByClient(profiles []textModelProfile, active map[string]string, legacyActiveID string) map[string]string {
+	out := map[string]string{}
+	priorities := map[string]int{}
+	for key, id := range active {
+		client, ok := normalizeTextProfileClientID(key)
+		if !ok {
+			continue
+		}
+		priority := 1
+		if strings.EqualFold(strings.TrimSpace(key), client) {
+			priority = 2
+		}
+		if priority < priorities[client] {
+			continue
+		}
+		for _, profile := range profiles {
+			if profile.ID == strings.TrimSpace(id) && profile.Client == client {
+				out[client] = profile.ID
+				priorities[client] = priority
+				break
+			}
+		}
+	}
+	for _, client := range []string{textProfileClientCodex, textProfileClientClaude, textProfileClientOpenCode} {
+		if out[client] != "" {
+			continue
+		}
+		for _, profile := range profiles {
+			if profile.Client == client && profile.ID == legacyActiveID {
+				out[client] = profile.ID
+				break
+			}
+		}
+		if out[client] != "" {
+			continue
+		}
+		for _, profile := range profiles {
+			if profile.Client == client {
+				out[client] = profile.ID
+				break
+			}
+		}
+	}
+	return out
+}
+
+// selectedTextProfileForClient resolves only the supplier selected inside one
+// client group. It never falls back to the globally active or another group's
+// profile.
+func selectedTextProfileForClient(cfg config, client string) (textModelProfile, bool) {
+	client, ok := normalizeTextProfileClientID(client)
+	if !ok {
+		return textModelProfile{}, false
+	}
+	profiles := normalizeTextProfiles(cfg.TextModelProfiles)
+	active := normalizeActiveTextProfilesByClient(profiles, cfg.ActiveTextProfileByClient, cfg.ActiveTextProfileID)
+	profileID := active[client]
+	for _, profile := range profiles {
+		if profile.ID == profileID && profile.Client == client {
+			return profile, true
+		}
+	}
+	return textModelProfile{}, false
+}
+
+// textConfigForClient applies the selected text profile for one client.
+// Requests from different local clients share one relay address, so their
+// protocol handlers must use this view instead of the globally active fields.
+func textConfigForClient(cfg config, client string) config {
+	profile, ok := selectedTextProfileForClient(cfg, client)
+	if !ok {
+		return cfg
+	}
+	cfg.ActiveTextProfileID = profile.ID
+	return applyTextProfileToConfig(cfg, profile)
 }
 
 func normalizeVisionProfiles(profiles []visionModelProfile) []visionModelProfile {
@@ -603,6 +766,9 @@ func normalizeVisionProfiles(profiles []visionModelProfile) []visionModelProfile
 		profile.Model = strings.TrimSpace(profile.Model)
 		if profile.Model == "" {
 			profile.Model = defaultVisionModel
+		}
+		if profile.ProxyURL != nil {
+			profile.ProxyURL = stringPtr(strings.TrimSpace(*profile.ProxyURL))
 		}
 		out = append(out, profile)
 	}
@@ -651,6 +817,7 @@ func visionProfileFromConfig(cfg config, id, name string) visionModelProfile {
 		BaseURL:  cfg.VisionBaseURL,
 		APIKey:   cfg.VisionAPIKey,
 		Model:    cfg.VisionModel,
+		ProxyURL: stringPtr(cfg.ProxyURL),
 	}})[0]
 }
 
@@ -674,6 +841,7 @@ func applyVisionProfileToConfig(cfg config, profile visionModelProfile) config {
 	cfg.VisionBaseURL = profile.BaseURL
 	cfg.VisionAPIKey = profile.APIKey
 	cfg.VisionModel = profile.Model
+	cfg.visionProxyURL = profile.ProxyURL
 	return cfg
 }
 
@@ -960,12 +1128,16 @@ func normalizeWireAPI(value string) string {
 }
 
 func (a *app) visionEndpoint(cfg config) endpoint {
+	proxyURL := cfg.ProxyURL
+	if cfg.visionProxyURL != nil {
+		proxyURL = *cfg.visionProxyURL
+	}
 	return endpoint{
 		Provider:      normalizeProvider(cfg.VisionProvider),
 		BaseURL:       cfg.VisionBaseURL,
 		APIKey:        cfg.VisionAPIKey,
 		ModelOverride: cfg.VisionModel,
-		ProxyURL:      cfg.ProxyURL,
+		ProxyURL:      proxyURL,
 	}
 }
 

@@ -61,7 +61,8 @@ func (a *app) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	out, status, err := a.prepareOpenAIChat(r.Context(), body)
+	cfg := a.textConfigForRequest(r)
+	out, status, err := a.prepareOpenAIChatWithConfig(r.Context(), cfg, body)
 	if err != nil {
 		writeError(w, status, err)
 		return
@@ -69,9 +70,13 @@ func (a *app) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	var payload map[string]any
 	_ = json.Unmarshal(out, &payload)
 	stream, _ := payload["stream"].(bool)
-	cfg := a.currentConfig()
 	requestURI := canonicalRequestURI(r.URL.RequestURI())
-	resp, forwardErr := a.forwardJSON(r.Context(), a.textEndpoint(cfg), http.MethodPost, requestURI, out, r.Header)
+	forwardContext, keepStreamAfterHeaders, releaseStream := upstreamStreamContext(r.Context(), stream)
+	defer releaseStream()
+	resp, forwardErr := a.forwardJSON(forwardContext, a.textEndpoint(cfg), http.MethodPost, requestURI, out, r.Header)
+	if forwardErr == nil && stream {
+		keepStreamAfterHeaders()
+	}
 	if !stream {
 		if forwardErr != nil {
 			writeError(w, http.StatusBadGateway, forwardErr)
@@ -114,11 +119,11 @@ func (a *app) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) processOpenAIChat(ctx context.Context, body []byte, header http.Header, requestURI string) (*http.Response, int, error) {
-	out, status, err := a.prepareOpenAIChat(ctx, body)
+	cfg := textConfigForClient(a.currentConfig(), textProfileClientOpenCode)
+	out, status, err := a.prepareOpenAIChatWithConfig(ctx, cfg, body)
 	if err != nil {
 		return nil, status, err
 	}
-	cfg := a.currentConfig()
 	resp, err := a.forwardJSON(ctx, a.textEndpoint(cfg), http.MethodPost, canonicalRequestURI(requestURI), out, header)
 	if err != nil {
 		return nil, http.StatusBadGateway, err
@@ -127,7 +132,10 @@ func (a *app) processOpenAIChat(ctx context.Context, body []byte, header http.He
 }
 
 func (a *app) prepareOpenAIChat(ctx context.Context, body []byte) ([]byte, int, error) {
-	cfg := a.currentConfig()
+	return a.prepareOpenAIChatWithConfig(ctx, a.currentConfig(), body)
+}
+
+func (a *app) prepareOpenAIChatWithConfig(ctx context.Context, cfg config, body []byte) ([]byte, int, error) {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, http.StatusBadRequest, err
@@ -184,7 +192,7 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	cfg := a.currentConfig()
+	cfg := a.textConfigForRequest(r)
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -433,7 +441,7 @@ func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	cfg := a.currentConfig()
+	cfg := a.textConfigForRequest(r)
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -477,7 +485,12 @@ func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		sanitizeOpenAIChatPayload(chatPayload)
 		out, _ := json.Marshal(chatPayload)
-		resp, forwardErr := a.forwardJSON(r.Context(), a.textEndpoint(cfg), http.MethodPost, "/v1/chat/completions", out, r.Header)
+		forwardContext, keepStreamAfterHeaders, releaseStream := upstreamStreamContext(r.Context(), stream)
+		defer releaseStream()
+		resp, forwardErr := a.forwardJSON(forwardContext, a.textEndpoint(cfg), http.MethodPost, "/v1/chat/completions", out, r.Header)
+		if forwardErr == nil && stream {
+			keepStreamAfterHeaders()
+		}
 		if !stream {
 			if forwardErr != nil {
 				writeError(w, http.StatusBadGateway, forwardErr)
@@ -525,7 +538,12 @@ func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 		out, _ = json.Marshal(payload)
 	}
 	requestURI := canonicalRequestURI(r.URL.RequestURI())
-	resp, forwardErr := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, requestURI, out, r.Header)
+	forwardContext, keepStreamAfterHeaders, releaseStream := upstreamStreamContext(r.Context(), stream)
+	defer releaseStream()
+	resp, forwardErr := a.forwardJSON(forwardContext, a.textEndpoint(cfg), r.Method, requestURI, out, r.Header)
+	if forwardErr == nil && stream {
+		keepStreamAfterHeaders()
+	}
 	if !stream {
 		if forwardErr != nil {
 			writeError(w, http.StatusBadGateway, forwardErr)
@@ -577,7 +595,7 @@ func (a *app) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	cfg := a.currentConfig()
+	cfg := a.textConfigForRequest(r)
 	if normalizeProvider(cfg.TextProvider) != "openai" {
 		resp, err := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, canonicalRequestURI(r.URL.RequestURI()), body, r.Header)
 		if err != nil {
@@ -604,7 +622,7 @@ func (a *app) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	cfg := a.currentConfig()
+	cfg := a.textConfigForRequest(r)
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -637,7 +655,12 @@ func (a *app) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 	requestURI := geminiRequestURIWithEffectiveModel(cfg, r.URL.RequestURI())
 	stream := geminiStreamingRequest(requestURI)
-	resp, forwardErr := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, requestURI, out, r.Header)
+	forwardContext, keepStreamAfterHeaders, releaseStream := upstreamStreamContext(r.Context(), stream)
+	defer releaseStream()
+	resp, forwardErr := a.forwardJSON(forwardContext, a.textEndpoint(cfg), r.Method, requestURI, out, r.Header)
+	if forwardErr == nil && stream {
+		keepStreamAfterHeaders()
+	}
 	if !stream {
 		if forwardErr != nil {
 			writeError(w, http.StatusBadGateway, forwardErr)
@@ -690,7 +713,7 @@ func (a *app) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	cfg := a.currentConfig()
+	cfg := a.textConfigForRequest(r)
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -736,7 +759,7 @@ func (a *app) handleOllamaGenerate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	cfg := a.currentConfig()
+	cfg := a.textConfigForRequest(r)
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -771,7 +794,12 @@ func (a *app) handleOllamaGenerate(w http.ResponseWriter, r *http.Request) {
 func (a *app) forwardOllamaWithFallback(w http.ResponseWriter, r *http.Request, cfg config, payload map[string]any, out []byte) {
 	requestURI := r.URL.RequestURI()
 	stream := ollamaStreamRequested(payload)
-	resp, forwardErr := a.forwardJSON(r.Context(), a.textEndpoint(cfg), r.Method, requestURI, out, r.Header)
+	forwardContext, keepStreamAfterHeaders, releaseStream := upstreamStreamContext(r.Context(), stream)
+	defer releaseStream()
+	resp, forwardErr := a.forwardJSON(forwardContext, a.textEndpoint(cfg), r.Method, requestURI, out, r.Header)
+	if forwardErr == nil && stream {
+		keepStreamAfterHeaders()
+	}
 	if !stream {
 		if forwardErr != nil {
 			writeError(w, http.StatusBadGateway, forwardErr)

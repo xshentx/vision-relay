@@ -248,6 +248,8 @@ func WriteAnthropicStreamFromChatCompletion(w http.ResponseWriter, resp *http.Re
 	finishReason := ""
 	inputTokens := int64(0)
 	outputTokens := int64(0)
+	cacheReadTokens := int64(0)
+	cacheWriteTokens := int64(0)
 	completed := false
 	tools := map[int]*toolState{}
 	ensureStarted := func() {
@@ -302,8 +304,10 @@ func WriteAnthropicStreamFromChatCompletion(w http.ResponseWriter, resp *http.Re
 			model = value
 		}
 		if usage, ok := chunk["usage"].(map[string]any); ok {
-			inputTokens = numberAsInt64(firstAny(usage["prompt_tokens"], usage["input_tokens"]))
-			outputTokens = numberAsInt64(firstAny(usage["completion_tokens"], usage["output_tokens"]))
+			inputTokens = firstInt64(usage["prompt_tokens"], usage["input_tokens"])
+			outputTokens = firstInt64(usage["completion_tokens"], usage["output_tokens"])
+			cacheReadTokens = chatUsageCacheReadTokens(usage)
+			cacheWriteTokens = chatUsageCacheWriteTokens(usage)
 		}
 		ensureStarted()
 		choices, _ := chunk["choices"].([]any)
@@ -425,10 +429,20 @@ func WriteAnthropicStreamFromChatCompletion(w http.ResponseWriter, resp *http.Re
 	case "tool_calls", "function_call":
 		stopReason = "tool_use"
 	}
+	finalUsage := map[string]any{
+		"input_tokens":  chatFreshInputTokens(inputTokens, cacheReadTokens, cacheWriteTokens),
+		"output_tokens": outputTokens,
+	}
+	if cacheReadTokens > 0 {
+		finalUsage["cache_read_input_tokens"] = cacheReadTokens
+	}
+	if cacheWriteTokens > 0 {
+		finalUsage["cache_creation_input_tokens"] = cacheWriteTokens
+	}
 	writeAnthropicSSE(w, flusher, "message_delta", map[string]any{
 		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
-		"usage": map[string]any{"input_tokens": inputTokens, "output_tokens": outputTokens},
+		"usage": finalUsage,
 	})
 	writeAnthropicSSE(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 }
@@ -581,10 +595,53 @@ func chatCompletionToAnthropicContent(chat map[string]any) []any {
 
 func chatUsageToAnthropic(usageValue any) map[string]any {
 	usage, _ := usageValue.(map[string]any)
-	return map[string]any{
-		"input_tokens":  numberAsInt64(firstAny(usage["prompt_tokens"], usage["input_tokens"])),
-		"output_tokens": numberAsInt64(firstAny(usage["completion_tokens"], usage["output_tokens"])),
+	cacheRead := chatUsageCacheReadTokens(usage)
+	cacheWrite := chatUsageCacheWriteTokens(usage)
+	out := map[string]any{
+		// OpenAI prompt_tokens is cache-inclusive. Anthropic's input_tokens is
+		// the fresh portion, while cache reads/writes are reported separately.
+		"input_tokens":  chatFreshInputTokens(firstInt64(usage["prompt_tokens"], usage["input_tokens"]), cacheRead, cacheWrite),
+		"output_tokens": firstInt64(usage["completion_tokens"], usage["output_tokens"]),
 	}
+	if cacheRead > 0 {
+		out["cache_read_input_tokens"] = cacheRead
+	}
+	if cacheWrite > 0 {
+		out["cache_creation_input_tokens"] = cacheWrite
+	}
+	return out
+}
+
+func chatFreshInputTokens(input, cacheRead, cacheWrite int64) int64 {
+	if cacheRead >= input {
+		return 0
+	}
+	input -= cacheRead
+	if cacheWrite >= input {
+		return 0
+	}
+	return input - cacheWrite
+}
+
+func chatUsageCacheReadTokens(usage map[string]any) int64 {
+	inputDetails, _ := usage["input_tokens_details"].(map[string]any)
+	promptDetails, _ := usage["prompt_tokens_details"].(map[string]any)
+	return firstInt64(
+		usage["cache_read_input_tokens"], usage["cache_read_tokens"],
+		inputDetails["cached_tokens"], inputDetails["cache_read_tokens"],
+		promptDetails["cached_tokens"], promptDetails["cache_read_tokens"],
+	)
+}
+
+func chatUsageCacheWriteTokens(usage map[string]any) int64 {
+	inputDetails, _ := usage["input_tokens_details"].(map[string]any)
+	promptDetails, _ := usage["prompt_tokens_details"].(map[string]any)
+	return firstInt64(
+		usage["cache_creation_input_tokens"], usage["cache_creation_tokens"],
+		usage["cache_write_input_tokens"], usage["cache_write_tokens"],
+		inputDetails["cache_creation_tokens"], inputDetails["cache_write_tokens"],
+		promptDetails["cache_creation_tokens"], promptDetails["cache_write_tokens"],
+	)
 }
 
 func chatFinishReason(chat map[string]any) string {

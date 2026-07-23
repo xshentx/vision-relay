@@ -138,6 +138,13 @@ func visionPromptText(prompt string, userText string) string {
 	return fmt.Sprintf("用户需求仅用于判断哪些视觉细节相关，不要直接回答该需求。\n用户需求：%s\n\n%s", emptyAs(userText, "描述图片。"), prompt)
 }
 
+func (a *app) forwardVisionJSON(ctx context.Context, ep endpoint, requestURI string, body []byte) (*http.Response, error) {
+	// A client supplier group is carried on the original request context for the
+	// later text call. Vision has its own global profile and circuit-independent
+	// upstream, so it must bypass the text provider router explicitly.
+	return a.forwardRawOnce(ctx, ep, http.MethodPost, requestURI, body, nil)
+}
+
 func (a *app) describeWithOpenAI(ctx context.Context, ep endpoint, prompt string, pm parsedMessage) (string, error) {
 	content := []any{map[string]any{
 		"type": "text",
@@ -158,7 +165,7 @@ func (a *app) describeWithOpenAI(ctx context.Context, ep endpoint, prompt string
 		"max_tokens":  1200,
 	}
 	body, _ := json.Marshal(payload)
-	resp, err := a.forwardJSON(ctx, ep, http.MethodPost, "/v1/chat/completions", body, nil)
+	resp, err := a.forwardVisionJSON(ctx, ep, "/v1/chat/completions", body)
 	if err != nil {
 		return "", err
 	}
@@ -201,7 +208,7 @@ func (a *app) describeWithAnthropic(ctx context.Context, ep endpoint, prompt str
 		"messages":   []any{map[string]any{"role": "user", "content": content}},
 	}
 	body, _ := json.Marshal(payload)
-	resp, err := a.forwardJSON(ctx, ep, http.MethodPost, "/v1/messages", body, nil)
+	resp, err := a.forwardVisionJSON(ctx, ep, "/v1/messages", body)
 	if err != nil {
 		return "", err
 	}
@@ -249,7 +256,7 @@ func (a *app) describeWithGemini(ctx context.Context, ep endpoint, prompt string
 	}
 	body, _ := json.Marshal(payload)
 	path := fmt.Sprintf("/v1beta/models/%s:generateContent", url.PathEscape(ep.ModelOverride))
-	resp, err := a.forwardJSON(ctx, ep, http.MethodPost, path, body, nil)
+	resp, err := a.forwardVisionJSON(ctx, ep, path, body)
 	if err != nil {
 		return "", err
 	}
@@ -302,7 +309,7 @@ func (a *app) describeWithOllama(ctx context.Context, ep endpoint, prompt string
 		}},
 	}
 	body, _ := json.Marshal(payload)
-	resp, err := a.forwardJSON(ctx, ep, http.MethodPost, "/api/chat", body, nil)
+	resp, err := a.forwardVisionJSON(ctx, ep, "/api/chat", body)
 	if err != nil {
 		return "", err
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	currentClientPathDetectionVersion         = 5
+	currentClientPathDetectionVersion         = 6
 	claudeDesktopCLISplitPathDetectionVersion = 5
 )
 
@@ -57,13 +57,17 @@ func configuredClientConfigPath(cfg config, client, homeDir string) string {
 }
 
 func defaultClientConfigPath(client, homeDir string) string {
+	return defaultClientConfigPathForOS(client, homeDir, runtime.GOOS)
+}
+
+func defaultClientConfigPathForOS(client, homeDir, goos string) string {
 	switch normalizeClientProgramID(client) {
 	case clientCodex:
 		return filepath.Join(codexConfigDir(homeDir), "config.toml")
 	case clientOpenCode:
 		return filepath.Join(homeDir, ".config", "opencode", "opencode.json")
 	case clientClaudeCode:
-		return claudeDesktopConfigPath(homeDir)
+		return claudeDesktopConfigPathForOS(homeDir, goos)
 	case clientClaudeCLI:
 		if dir := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")); dir != "" {
 			return filepath.Join(resolveClientPath(dir, homeDir), "settings.json")
@@ -153,20 +157,28 @@ func detectClientConfigPath(client, homeDir string) string {
 }
 
 func claudeDesktopConfigLibraryDir(homeDir string) string {
-	if runtime.GOOS == "windows" {
+	return claudeDesktopConfigLibraryDirForOS(homeDir, runtime.GOOS)
+}
+
+func claudeDesktopConfigLibraryDirForOS(homeDir, goos string) string {
+	if goos == "windows" {
 		if value := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); value != "" {
 			return filepath.Join(value, "Claude-3p", "configLibrary")
 		}
 		return filepath.Join(homeDir, "AppData", "Local", "Claude-3p", "configLibrary")
 	}
-	if runtime.GOOS == "darwin" {
+	if goos == "darwin" {
 		return filepath.Join(homeDir, "Library", "Application Support", "Claude-3p", "configLibrary")
 	}
 	return filepath.Join(homeDir, ".config", "Claude-3p", "configLibrary")
 }
 
 func claudeDesktopConfigPath(homeDir string) string {
-	dir := claudeDesktopConfigLibraryDir(homeDir)
+	return claudeDesktopConfigPathForOS(homeDir, runtime.GOOS)
+}
+
+func claudeDesktopConfigPathForOS(homeDir, goos string) string {
+	dir := claudeDesktopConfigLibraryDirForOS(homeDir, goos)
 	meta, err := readJSONMap(filepath.Join(dir, "_meta.json"))
 	if err == nil {
 		if id, ok := meta["appliedId"].(string); ok && strings.TrimSpace(id) != "" {
@@ -206,9 +218,17 @@ func detectClientProgramPath(client, homeDir string) string {
 }
 
 func clientProgramCandidates(client, homeDir string) []string {
-	if runtime.GOOS != "windows" {
+	switch runtime.GOOS {
+	case "windows":
+		return windowsClientProgramCandidates(client, homeDir)
+	case "darwin":
+		return darwinClientProgramCandidates(client, homeDir)
+	default:
 		return nil
 	}
+}
+
+func windowsClientProgramCandidates(client, homeDir string) []string {
 	localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA"))
 	if localAppData == "" && strings.TrimSpace(homeDir) != "" {
 		localAppData = filepath.Join(homeDir, "AppData", "Local")
@@ -235,6 +255,38 @@ func clientProgramCandidates(client, homeDir string) []string {
 	default:
 		return nil
 	}
+}
+
+// darwinClientProgramCandidates returns the executable inside each application
+// bundle rather than the .app directory. The lifecycle controller can still
+// recover the bundle and launch it through macOS Launch Services.
+func darwinClientProgramCandidates(client, homeDir string) []string {
+	applicationRoots := []string{"/Applications"}
+	if strings.TrimSpace(homeDir) != "" {
+		applicationRoots = append(applicationRoots, filepath.Join(homeDir, "Applications"))
+	}
+	bundleExecutables := func(bundle, executable string) []string {
+		candidates := make([]string, 0, len(applicationRoots))
+		for _, root := range applicationRoots {
+			candidates = append(candidates, filepath.Join(root, bundle+".app", "Contents", "MacOS", executable))
+		}
+		return candidates
+	}
+
+	var candidates []string
+	switch normalizeClientProgramID(client) {
+	case clientCodex:
+		candidates = append(candidates, bundleExecutables("Codex", "Codex")...)
+		candidates = append(candidates, bundleExecutables("ChatGPT", "ChatGPT")...)
+	case clientOpenCode:
+		candidates = append(candidates, bundleExecutables("OpenCode", "OpenCode")...)
+		candidates = append(candidates, bundleExecutables("opencode", "opencode")...)
+	case clientClaudeCode:
+		candidates = append(candidates, bundleExecutables("Claude", "Claude")...)
+	case clientOpenClaw:
+		candidates = append(candidates, bundleExecutables("OpenClaw", "OpenClaw")...)
+	}
+	return candidates
 }
 
 func claudeDesktopProgramCandidates(localAppData string) []string {

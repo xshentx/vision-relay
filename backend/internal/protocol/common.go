@@ -161,8 +161,14 @@ func copyHeader(dst, src http.Header) {
 
 func firstInt64(values ...any) int64 {
 	for _, value := range values {
-		if number := numberAsInt64(value); number != 0 {
-			return number
+		if value == nil {
+			continue
+		}
+		switch value.(type) {
+		case int, int64, float64, json.Number:
+			// Match cc-switch's Option/or_else semantics: an explicitly
+			// reported zero wins over a lower-priority alias.
+			return numberAsInt64(value)
 		}
 	}
 	return 0

@@ -33,7 +33,25 @@ func (a *app) handleRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	lrw := newLoggingResponseWriter(w, started)
+	// Keep consuming streaming upstream responses after a downstream client
+	// disconnects so terminal usage events are still captured for every API,
+	// not only Responses. This mirrors cc-switch's usage collector behavior.
+	if requestStreamMode(r, decodeJSONMap(body)) == "stream" {
+		lrw.enableDisconnectDrain()
+	}
 	path := r.URL.Path
+	if group, ok := providerGroupForClient(textProfileClientForRequest(r)); ok {
+		r = r.WithContext(withProviderRouteContext(r.Context(), group))
+		// Reject an unconfigured text group before model rewriting or image
+		// augmentation. Vision configuration is global and independent from text
+		// supplier grouping; a request that cannot reach a text supplier must never
+		// spend a vision call first.
+		if _, configured := a.resolveProviderRoute(r.Context(), a.textEndpoint(a.currentConfig())); !configured {
+			writeUpstream(lrw, providerGroupUnconfiguredResponse(group))
+			a.logCompletedRequest(r, body, lrw.logBody(), lrw.status, started, lrw.firstTokenMS)
+			return
+		}
+	}
 	switch {
 	case isOpenAIChatPath(path):
 		a.handleOpenAIChat(lrw, r)
@@ -104,6 +122,44 @@ func isOllamaChatPath(path string) bool {
 
 func isOllamaGeneratePath(path string) bool {
 	return path == "/api/generate"
+}
+
+func textProfileClientForRequest(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	path := r.URL.Path
+	switch {
+	case isOpenAIResponsesPath(path):
+		return textProfileClientCodex
+	case isAnthropicMessagesPath(path), isAnthropicCountTokensPath(path):
+		return textProfileClientClaude
+	case isOpenAIChatPath(path), isGeminiGeneratePath(path), isOllamaChatPath(path), isOllamaGeneratePath(path):
+		return textProfileClientOpenCode
+	default:
+		// /models and raw proxy paths cannot reliably identify the caller.
+		// Keep the legacy globally active profile for backward compatibility.
+		return ""
+	}
+}
+
+func (a *app) textConfigForRequest(r *http.Request) config {
+	cfg := a.currentConfig()
+	if r == nil {
+		return cfg
+	}
+	if route := providerRouteRequestFromContext(r.Context()); route != nil {
+		candidate, configured := a.resolveProviderRoute(r.Context(), a.textEndpoint(cfg))
+		if configured {
+			return candidate.Config
+		}
+		return cfg
+	}
+	client := textProfileClientForRequest(r)
+	if client == "" {
+		return cfg
+	}
+	return textConfigForClient(cfg, client)
 }
 
 func canonicalRequestURI(requestURI string) string {

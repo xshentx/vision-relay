@@ -266,3 +266,60 @@ func clearClientPathEnvironment(t *testing.T) {
 		t.Setenv(key, "")
 	}
 }
+
+func TestDarwinClientProgramCandidatesIncludeApplicationBundles(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "Users", "tester")
+	tests := []struct {
+		client string
+		want   []string
+	}{
+		{client: clientCodex, want: []string{
+			filepath.Join(string(filepath.Separator), "Applications", "Codex.app", "Contents", "MacOS", "Codex"),
+			filepath.Join(home, "Applications", "Codex.app", "Contents", "MacOS", "Codex"),
+			filepath.Join(string(filepath.Separator), "Applications", "ChatGPT.app", "Contents", "MacOS", "ChatGPT"),
+		}},
+		{client: clientClaudeCode, want: []string{
+			filepath.Join(string(filepath.Separator), "Applications", "Claude.app", "Contents", "MacOS", "Claude"),
+			filepath.Join(home, "Applications", "Claude.app", "Contents", "MacOS", "Claude"),
+		}},
+		{client: clientOpenCode, want: []string{
+			filepath.Join(string(filepath.Separator), "Applications", "OpenCode.app", "Contents", "MacOS", "OpenCode"),
+		}},
+	}
+	for _, tt := range tests {
+		got := darwinClientProgramCandidates(tt.client, home)
+		if len(got) < len(tt.want) {
+			t.Fatalf("darwin candidates for %s = %#v, want at least %#v", tt.client, got, tt.want)
+		}
+		for i, want := range tt.want {
+			if got[i] != want {
+				t.Fatalf("darwin candidate %s[%d] = %q, want %q; all: %#v", tt.client, i, got[i], want, got)
+			}
+		}
+	}
+}
+
+func TestDarwinDefaultClientConfigPaths(t *testing.T) {
+	home := t.TempDir()
+	clearClientPathEnvironment(t)
+	claudeLibrary := filepath.Join(home, "Library", "Application Support", "Claude-3p", "configLibrary")
+	if err := os.MkdirAll(claudeLibrary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeLibrary, "_meta.json"), []byte("{\"appliedId\":\"work\"}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := map[string]string{
+		clientCodex:      filepath.Join(home, ".codex", "config.toml"),
+		clientOpenCode:   filepath.Join(home, ".config", "opencode", "opencode.json"),
+		clientClaudeCode: filepath.Join(claudeLibrary, "work.json"),
+		clientClaudeCLI:  filepath.Join(home, ".claude", "settings.json"),
+		clientOpenClaw:   filepath.Join(home, ".openclaw", "openclaw.json"),
+	}
+	for client, want := range tests {
+		if got := defaultClientConfigPathForOS(client, home, "darwin"); got != want {
+			t.Fatalf("darwin config path for %s = %q, want %q", client, got, want)
+		}
+	}
+}

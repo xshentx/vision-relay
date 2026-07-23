@@ -14,6 +14,7 @@ type config struct {
 	ActiveModelProfileID              string               `json:"active_model_profile_id,omitempty"`
 	ModelProfiles                     []modelProfile       `json:"model_profiles,omitempty"`
 	ActiveTextProfileID               string               `json:"active_text_profile_id"`
+	ActiveTextProfileByClient         map[string]string    `json:"active_text_profile_by_client,omitempty"`
 	TextModelProfiles                 []textModelProfile   `json:"text_model_profiles"`
 	ActiveVisionProfileID             string               `json:"active_vision_profile_id"`
 	VisionModelProfiles               []visionModelProfile `json:"vision_model_profiles"`
@@ -45,11 +46,21 @@ type config struct {
 	AutoCheckUpdates                  *bool                `json:"auto_check_updates"`
 	OpenWindow                        bool                 `json:"open_window"`
 	OpenBrowser                       bool                 `json:"open_browser"`
+	// LegacyTextRouting persists the compatibility mode assigned while migrating
+	// configurations that predate per-client supplier groups. The private field
+	// is the normalized runtime copy used by routing code.
+	LegacyTextRouting bool `json:"legacy_text_routing,omitempty"`
+	legacyTextRouting bool
+	// visionProxyURL is resolved from the active vision profile. It is kept
+	// separate from ProxyURL because that field belongs to the selected text
+	// supplier and changes while routing per-client provider groups.
+	visionProxyURL *string
 }
 
 type textModelProfile struct {
 	ID             string             `json:"id"`
 	Name           string             `json:"name"`
+	Client         string             `json:"client"`
 	Provider       string             `json:"provider"`
 	BaseURL        string             `json:"base_url"`
 	APIKey         string             `json:"api_key"`
@@ -62,12 +73,13 @@ type textModelProfile struct {
 }
 
 type visionModelProfile struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Provider string `json:"provider"`
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
-	Model    string `json:"model"`
+	ID       string  `json:"id"`
+	Name     string  `json:"name"`
+	Provider string  `json:"provider"`
+	BaseURL  string  `json:"base_url"`
+	APIKey   string  `json:"api_key"`
+	Model    string  `json:"model"`
+	ProxyURL *string `json:"proxy_url,omitempty"`
 }
 
 type modelProfile struct {
@@ -146,6 +158,8 @@ type app struct {
 	nextLogID               int64
 	updateMu                sync.RWMutex
 	updateStatus            updateProgress
+	providerRouterMu        sync.Mutex
+	providerRouter          *providerRouter
 }
 
 type requestLog struct {

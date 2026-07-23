@@ -2,6 +2,8 @@ package server
 
 import (
 	"errors"
+	"path/filepath"
+	"regexp"
 	"testing"
 )
 
@@ -118,5 +120,39 @@ func TestClientProgramTargetsIncludeDesktopAndCLI(t *testing.T) {
 				t.Fatalf("clientProgramTargets(%q) = %#v, want %#v", client, got, want)
 			}
 		}
+	}
+}
+
+func TestDarwinAppBundleAndProcessMatchingHelpers(t *testing.T) {
+	programPath := filepath.Join(string(filepath.Separator), "Applications", "Claude.app", "Contents", "MacOS", "Claude")
+	wantBundle := filepath.Join(string(filepath.Separator), "Applications", "Claude.app")
+	if got := darwinAppBundlePath(programPath); got != wantBundle {
+		t.Fatalf("darwinAppBundlePath(%q) = %q, want %q", programPath, got, wantBundle)
+	}
+	if got := darwinAppBundlePath(filepath.Join(string(filepath.Separator), "usr", "local", "bin", "claude")); got != "" {
+		t.Fatalf("CLI path was treated as an app bundle: %q", got)
+	}
+
+	names := darwinClientProcessNames(clientClaudeCode, programPath)
+	if len(names) != 1 || names[0] != "Claude" {
+		t.Fatalf("Claude desktop process names = %#v, want [Claude]", names)
+	}
+	cliNames := darwinClientProcessNames(clientClaudeCLI, filepath.Join(string(filepath.Separator), "opt", "homebrew", "bin", "claude"))
+	if len(cliNames) != 1 || cliNames[0] != "claude" {
+		t.Fatalf("Claude CLI process names = %#v, want [claude]", cliNames)
+	}
+
+	pattern := regexp.MustCompile(darwinExactCommandMarkerPattern(programPath))
+	if !pattern.MatchString(`"` + programPath + `" --disable-gpu`) {
+		t.Fatalf("process marker pattern did not match quoted app executable: %s", pattern)
+	}
+	if pattern.MatchString(programPath + "Helper --type=renderer") {
+		t.Fatalf("process marker pattern matched a different helper executable: %s", pattern)
+	}
+	if markers := darwinClientProcessMarkers(programPath); len(markers) != 0 {
+		t.Fatalf("app bundle should be matched by process name, got markers %#v", markers)
+	}
+	if markers := darwinClientProcessMarkers(filepath.Join(string(filepath.Separator), "usr", "local", "bin", "claude")); len(markers) == 0 {
+		t.Fatal("CLI executable should retain command-line path matching")
 	}
 }

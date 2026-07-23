@@ -1,0 +1,75 @@
+name: Release desktop apps
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build Windows executable
+        shell: pwsh
+        run: ./tools/build-windows.ps1 -Output dist/vision-relay.exe -Version "${{ github.ref_name }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vision-relay-windows
+          path: |
+            dist/vision-relay.exe
+            dist/vision-relay.exe.sha256
+          if-no-files-found: error
+
+  macos:
+    name: Build macOS Universal
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build Universal macOS app
+        shell: bash
+        run: bash ./tools/build-macos.sh --version "${{ github.ref_name }}" --arch universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vision-relay-macos
+          path: |
+            dist/vision-relay-darwin-universal.zip
+            dist/vision-relay-darwin-universal.zip.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [windows, macos]
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Create release and upload desktop packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --title "Vision Relay $RELEASE_TAG" \
+              --generate-notes \
+              --repo "$GITHUB_REPOSITORY"
+          fi

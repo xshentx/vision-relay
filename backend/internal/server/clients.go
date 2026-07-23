@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -41,20 +42,25 @@ type clientConfigContext struct {
 	ModelMappings        []textModelMapping
 	VisionEnabled        bool
 	PreserveOfficialAuth *bool
+	// GOOS is normally runtime.GOOS. Keeping it in the write context makes the
+	// platform-specific Codex and Claude Desktop output independently testable.
+	GOOS string
 }
 
 type clientConfigRequest struct {
-	Client  string `json:"client"`
-	WorkDir string `json:"work_dir"`
+	Client    string `json:"client"`
+	WorkDir   string `json:"work_dir"`
+	ProfileID string `json:"profile_id"`
 }
 
 type clientRouteResult struct {
-	Client         string `json:"client"`
-	Name           string `json:"name"`
-	Path           string `json:"path"`
-	ProjectDir     string `json:"project_dir,omitempty"`
-	DirectUpstream bool   `json:"direct_upstream"`
-	Provider       string `json:"provider,omitempty"`
+	Client         string            `json:"client"`
+	Name           string            `json:"name"`
+	Path           string            `json:"path"`
+	ConfigPaths    map[string]string `json:"config_paths,omitempty"`
+	ProjectDir     string            `json:"project_dir,omitempty"`
+	DirectUpstream bool              `json:"direct_upstream"`
+	Provider       string            `json:"provider,omitempty"`
 }
 
 type clientRouteValidationError struct {
@@ -71,9 +77,9 @@ func newClientRouteValidationError(message string) error {
 
 var clientRouteOrder = []string{clientCodex, clientOpenCode, clientClaudeCode, clientOpenClaw}
 
-// clientProgramOrder includes both the desktop and terminal targets. Route
-// configuration remains keyed by clientRouteOrder because the desktop and CLI
-// variants share one configuration file per client family.
+// clientProgramOrder includes both desktop and terminal targets. Route
+// configuration remains keyed by clientRouteOrder because both variants in a
+// family always use the same selected supplier, even when they use two files.
 var clientProgramOrder = []string{
 	clientCodex,
 	clientCodexCLI,
@@ -117,9 +123,19 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.breakArmorMu.Lock()
-	result, err := a.configureClientRoute(client, req.WorkDir, requestOrigin(r, a.currentConfig()), home)
+	requestCfg := a.currentConfig()
+	var result clientRouteResult
+	if strings.TrimSpace(req.ProfileID) != "" {
+		result, err = a.configureClientRouteWithProfile(client, req.ProfileID, req.WorkDir, requestOrigin(r, requestCfg), home)
+	} else {
+		result, err = a.configureClientRoute(client, req.WorkDir, requestOrigin(r, requestCfg), home)
+	}
 	if err == nil {
-		err = a.setClientRouteEnabled(client, true)
+		if strings.TrimSpace(req.ProfileID) != "" {
+			err = a.setClientRouteSelection(client, req.ProfileID)
+		} else {
+			err = a.setClientRouteEnabled(client, true)
+		}
 	}
 	a.breakArmorMu.Unlock()
 	if err != nil {
@@ -156,6 +172,7 @@ func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 		"ok":               true,
 		"client":           result.Client,
 		"path":             result.Path,
+		"config_paths":     result.ConfigPaths,
 		"project_dir":      result.ProjectDir,
 		"direct_upstream":  result.DirectUpstream,
 		"provider":         result.Provider,
@@ -206,7 +223,12 @@ func (a *app) configureEnabledClientRoutes(origin, home string) ([]clientRouteRe
 		if !routes[client] {
 			continue
 		}
-		result, err := a.configureClientRoute(client, "", origin, home)
+		routeCfg, err := textConfigForClientRoute(cfg, client)
+		if err != nil {
+			applyErrors = append(applyErrors, clientKeyName(client)+": "+err.Error())
+			continue
+		}
+		result, err := a.configureClientRouteWithConfig(client, "", origin, home, routeCfg)
 		if err != nil {
 			applyErrors = append(applyErrors, clientKeyName(client)+": "+err.Error())
 			continue
@@ -217,7 +239,65 @@ func (a *app) configureEnabledClientRoutes(origin, home string) ([]clientRouteRe
 }
 
 func (a *app) configureClientRoute(client, workDir, origin, home string) (clientRouteResult, error) {
+	cfg, err := textConfigForClientRoute(a.currentConfig(), client)
+	if err != nil {
+		return clientRouteResult{}, err
+	}
+	return a.configureClientRouteWithConfig(client, workDir, origin, home, cfg)
+}
+
+func textConfigForClientRoute(cfg config, client string) (config, error) {
+	group := textProfileClientForRoute(client)
+	if group == "" {
+		return cfg, nil
+	}
+	profile, ok := selectedTextProfileForClient(cfg, group)
+	if !ok {
+		if cfg.legacyTextRouting || len(cfg.TextModelProfiles) == 0 {
+			return cfg, nil
+		}
+		return config{}, newClientRouteValidationError("no model supplier configured for " + group)
+	}
+	cfg.ActiveTextProfileID = profile.ID
+	return applyTextProfileToConfig(cfg, profile), nil
+}
+
+func (a *app) configureClientRouteWithProfile(client, profileID, workDir, origin, home string) (clientRouteResult, error) {
 	cfg := a.currentConfig()
+	profileID = strings.TrimSpace(profileID)
+	var profile *textModelProfile
+	for i := range cfg.TextModelProfiles {
+		if cfg.TextModelProfiles[i].ID == profileID {
+			profile = &cfg.TextModelProfiles[i]
+			break
+		}
+	}
+	if profile == nil {
+		return clientRouteResult{}, newClientRouteValidationError("text model profile not found")
+	}
+	normalizedProfile := normalizeTextProfiles([]textModelProfile{*profile})[0]
+	if normalizedProfile.Client != textProfileClientForRoute(client) {
+		return clientRouteResult{}, newClientRouteValidationError("text model profile belongs to a different client")
+	}
+	return a.configureClientRouteWithConfig(client, workDir, origin, home, applyTextProfileToConfig(cfg, normalizedProfile))
+}
+
+func textProfileClientForRoute(client string) string {
+	switch normalizeClientID(client) {
+	case clientCodex:
+		return textProfileClientCodex
+	case clientClaudeCode:
+		return textProfileClientClaude
+	case clientOpenCode, clientOpenClaw:
+		// OpenClaw uses the OpenAI-compatible route and intentionally follows
+		// the supplier selected for the OpenCode group.
+		return textProfileClientOpenCode
+	default:
+		return ""
+	}
+}
+
+func (a *app) configureClientRouteWithConfig(client, workDir, origin, home string, cfg config) (clientRouteResult, error) {
 	directUpstream := !localAPIEnabled(cfg)
 	key := ""
 	modelMappings := textModelMappings(cfg)
@@ -252,24 +332,33 @@ func (a *app) configureClientRoute(client, workDir, origin, home string) (client
 		ModelMappings:        modelMappings,
 		VisionEnabled:        visionAvailable,
 		PreserveOfficialAuth: boolPtr(preserveCodexOfficialAuth(cfg)),
+		GOOS:                 runtime.GOOS,
 	}
 	path, err := writeClientConfig(client, ctx)
 	if err != nil {
 		return clientRouteResult{}, err
 	}
-	if client == clientClaudeCode {
+	configPaths := map[string]string{client: path}
+	switch client {
+	case clientCodex:
+		// Codex Desktop and CLI share CODEX_HOME/config.toml.
+		configPaths[clientCodexCLI] = path
+	case clientClaudeCode:
 		// Claude Desktop on 3P and Claude Code CLI do not consume the same
 		// settings file. Configure both when the shared Claude route is applied.
 		cliContext := ctx
 		cliContext.ConfigPath = configuredClientConfigPath(cfg, clientClaudeCLI, home)
-		if _, err := writeClaudeCodeConfig(cliContext); err != nil {
+		cliPath, err := writeClaudeCodeConfig(cliContext)
+		if err != nil {
 			return clientRouteResult{}, err
 		}
+		configPaths[clientClaudeCLI] = cliPath
 	}
 	return clientRouteResult{
 		Client:         client,
 		Name:           clientKeyName(client),
 		Path:           path,
+		ConfigPaths:    configPaths,
 		ProjectDir:     projectDir,
 		DirectUpstream: directUpstream,
 		Provider:       strings.TrimSpace(cfg.TextProvider),
@@ -315,6 +404,26 @@ func directClientTextModelMappings(cfg config) []textModelMapping {
 		out = append(out, mapping)
 	}
 	return out
+}
+
+func (a *app) setClientRouteSelection(client, profileID string) error {
+	client = normalizeClientID(client)
+	group := textProfileClientForRoute(client)
+	if client == "" || group == "" {
+		return errors.New("unsupported client")
+	}
+	cfg := a.currentConfig()
+	active := normalizeActiveTextProfilesByClient(cfg.TextModelProfiles, cfg.ActiveTextProfileByClient, cfg.ActiveTextProfileID)
+	active[group] = strings.TrimSpace(profileID)
+	cfg.ActiveTextProfileByClient = active
+	// Selecting a supplier for a concrete client is the explicit transition from
+	// the legacy single-supplier compatibility mode to grouped routing.
+	cfg.LegacyTextRouting = false
+	cfg.legacyTextRouting = false
+	routes := normalizeClientRouteEnabled(cfg.ClientRouteEnabled)
+	routes[client] = true
+	cfg.ClientRouteEnabled = routes
+	return a.setConfig(cfg)
 }
 
 func (a *app) setClientRouteEnabled(client string, enabled bool) error {
@@ -580,7 +689,7 @@ func writeClientConfig(client string, ctx clientConfigContext) (string, error) {
 func writeClaudeDesktopConfig(ctx clientConfigContext) (string, error) {
 	path := strings.TrimSpace(ctx.ConfigPath)
 	if path == "" {
-		path = defaultClientConfigPath(clientClaudeCode, ctx.HomeDir)
+		path = defaultClientConfigPathForOS(clientClaudeCode, ctx.HomeDir, clientConfigGOOS(ctx))
 	}
 	cfg, err := readJSONMap(path)
 	if err != nil {
@@ -708,7 +817,7 @@ func writeCodexConfig(ctx clientConfigContext) (string, error) {
 		return "", err
 	}
 	lines = removeCodexRelayConfig(lines)
-	lines = upsertWindowsSandbox(lines, "unelevated")
+	lines = upsertCodexPlatformSettings(lines, clientConfigGOOS(ctx))
 	block := codexRelayConfigBlock(ctx, model)
 	block = append(block, "")
 	content := strings.TrimRight(strings.Join(append(block, lines...), "\n"), "\n") + "\n"
@@ -775,7 +884,7 @@ func writeCodexProjectConfig(ctx clientConfigContext) (string, error) {
 		return "", err
 	}
 	lines = removeCodexRelayProjectConfig(lines)
-	lines = upsertWindowsSandbox(lines, "unelevated")
+	lines = upsertCodexPlatformSettings(lines, clientConfigGOOS(ctx))
 	block := append(codexProjectConfigBlock(ctx, model), "")
 	content := strings.TrimRight(strings.Join(append(block, lines...), "\n"), "\n") + "\n"
 	return path, writeConfigFile(path, []byte(content))
@@ -923,6 +1032,22 @@ func upsertWindowsSandbox(lines []string, value string) []string {
 	return out
 }
 
+func clientConfigGOOS(ctx clientConfigContext) string {
+	if goos := strings.TrimSpace(ctx.GOOS); goos != "" {
+		return goos
+	}
+	return runtime.GOOS
+}
+
+func upsertCodexPlatformSettings(lines []string, goos string) []string {
+	if strings.EqualFold(strings.TrimSpace(goos), "windows") {
+		return upsertWindowsSandbox(lines, "unelevated")
+	}
+	// A [windows] section can legitimately be shared through a synchronized
+	// CODEX_HOME. Preserve it on macOS/Linux, but never create or rewrite it.
+	return lines
+}
+
 func saveCodexAccountConfigBackup(homeDir, userPath string) error {
 	raw, err := os.ReadFile(userPath)
 	if err != nil {
@@ -958,7 +1083,7 @@ func restoreCodexAccountConfigAtPath(homeDir, userPath, projectDir string, unify
 		return "", err
 	}
 	lines = removeCodexRelayConfig(lines)
-	lines = upsertWindowsSandbox(lines, "unelevated")
+	lines = upsertCodexPlatformSettings(lines, runtime.GOOS)
 	if err := removeCodexModelCache(homeDir); err != nil {
 		return "", err
 	}
@@ -1685,7 +1810,7 @@ func relayInputModalities(enabled bool) []string {
 func writeClaudeCodeConfig(ctx clientConfigContext) (string, error) {
 	path := strings.TrimSpace(ctx.ConfigPath)
 	if path == "" {
-		path = defaultClientConfigPath(clientClaudeCode, ctx.HomeDir)
+		path = defaultClientConfigPathForOS(clientClaudeCLI, ctx.HomeDir, clientConfigGOOS(ctx))
 	}
 	cfg, err := readJSONMap(path)
 	if err != nil {

@@ -637,6 +637,83 @@ h3 {
   margin: 12px 0 18px;
 }
 
+.provider-client-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 7px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #eef2f7;
+}
+
+.provider-client-tabs button {
+  min-width: 112px;
+  min-height: 40px;
+  padding: 0 15px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: #64748b;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.provider-client-tabs button:hover {
+  color: #1e3a5f;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.provider-client-tabs button.active {
+  border-color: #bfdbfe;
+  color: #0f5aa8;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+}
+
+.provider-client-group {
+  margin: 0 0 22px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.provider-client-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.provider-client-group-head h4 {
+  margin: 0;
+  color: var(--blue-ink);
+  font-size: 15px;
+}
+
+.provider-client-group-head span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.provider-client-profile-list {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-client-empty {
+  padding: 14px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: #fff;
+  font-size: 13px;
+}
+
 .toggle-line {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -799,6 +876,37 @@ h3 {
   color: var(--muted);
   font-size: 12px;
   font-weight: 650;
+}
+
+.profile-main .provider-circuit-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  margin-top: 7px;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.provider-circuit-badge.is-closed {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.provider-circuit-badge.is-open {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.provider-circuit-badge.is-half-open {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #b45309;
 }
 
 .profile-actions {

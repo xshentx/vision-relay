@@ -1,4 +1,4 @@
-const form = document.querySelector("#configForm");
+﻿const form = document.querySelector("#configForm");
 const statusEl = document.querySelector("#status");
 const toast = document.querySelector("#toast");
 const serviceState = document.querySelector("#serviceState");
@@ -76,6 +76,7 @@ const clientAutoStartInputs = {
   openclaw: document.querySelector("#autoStartOpenClaw")
 };
 const textProfileList = document.querySelector("#textProfileList");
+const providerClientTabButtons = [...document.querySelectorAll("[data-provider-client-tab]")];
 const addTextProfile = document.querySelector("#addTextProfile");
 const visionProfileList = document.querySelector("#visionProfileList");
 const visionEnabledInput = document.querySelector("#visionEnabled");
@@ -101,6 +102,8 @@ const modelTestStatus = document.querySelector("#modelTestStatus");
 const modelTestMeta = document.querySelector("#modelTestMeta");
 const modelTestOutput = document.querySelector("#modelTestOutput");
 const modalProfileName = document.querySelector("#modalProfileName");
+const modalProfileClientWrap = document.querySelector("#modalProfileClientWrap");
+const modalProfileClient = document.querySelector("#modalProfileClient");
 const modalProfileProvider = document.querySelector("#modalProfileProvider");
 const modalProfileWireAPIWrap = document.querySelector("#modalProfileWireAPIWrap");
 const modalProfileWireAPI = document.querySelector("#modalProfileWireAPI");
@@ -175,8 +178,19 @@ const breakArmorSessionAfter = document.querySelector("#breakArmorSessionAfter")
 const breakArmorBackupSelect = document.querySelector("#breakArmorBackupSelect");
 const breakArmorTemplateList = document.querySelector("#breakArmorTemplateList");
 
+const textProfileClientGroups = [
+  {id: "codex", label: "Codex", routeClient: "codex"},
+  {id: "claude", label: "Claude", routeClient: "claude-code"},
+  {id: "opencode", label: "OpenCode", routeClient: "opencode"}
+];
+
 let textProfiles = [];
 let activeTextProfileId = "";
+let activeTextProfileByClient = {codex: "", claude: "", opencode: ""};
+let legacyTextRouting = false;
+let activeProviderClientTab = "codex";
+let providerCircuitStatuses = new Map();
+let providerCircuitStatusTimer = 0;
 let visionProfiles = [];
 let activeVisionProfileId = "";
 let visionCapabilityEnabled = true;
@@ -266,6 +280,13 @@ navItems.forEach((item) => {
         showToast(`加载日志失败：${err.message || err}`, "error");
       });
     }
+  });
+});
+
+providerClientTabButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    activeProviderClientTab = button.dataset.providerClientTab;
+    renderTextProfiles();
   });
 });
 
@@ -1189,6 +1210,12 @@ async function loadConfig() {
   if (!textProfiles.some((profile) => profile.id === activeTextProfileId)) {
     activeTextProfileId = textProfiles[0].id;
   }
+  activeTextProfileByClient = normalizeActiveTextProfileByClient(
+    cfg.active_text_profile_by_client,
+    textProfiles,
+    activeTextProfileId
+  );
+  legacyTextRouting = cfg.legacy_text_routing === true;
   visionProfiles = normalizeVisionProfiles(cfg.vision_model_profiles || migrated.visionProfiles);
   activeVisionProfileId = cfg.active_vision_profile_id || migrated.activeVisionProfileId || visionProfiles[0].id;
   if (!visionProfiles.some((profile) => profile.id === activeVisionProfileId)) {
@@ -1476,6 +1503,8 @@ async function persistConfig(successMessage = "配置已自动保存") {
   data.client_route_enabled = normalizeClientRoutes(clientRouteEnabled);
   data.text_model_profiles = normalizeTextProfiles(textProfiles);
   data.active_text_profile_id = activeTextProfileId;
+  data.active_text_profile_by_client = normalizeActiveTextProfileByClient(activeTextProfileByClient, textProfiles, activeTextProfileId);
+  data.legacy_text_routing = legacyTextRouting;
   data.vision_model_profiles = normalizeVisionProfiles(visionProfiles);
   data.active_vision_profile_id = activeVisionProfileId;
   data.model_profiles = [];
@@ -1585,15 +1614,16 @@ detectClientPaths?.addEventListener("click", async () => {
 });
 
 const clientConfigureActions = [
-  {button: configureOpenCode, client: "opencode", name: "OpenCode"},
-  {button: configureCodex, client: "codex", name: "Codex"},
-  {button: configureClaudeCode, client: "claude-code", name: "Claude"},
-  {button: configureOpenClaw, client: "openclaw", name: "OpenClaw"}
+  {button: configureOpenCode, client: "opencode", profileGroup: "opencode", name: "OpenCode"},
+  {button: configureCodex, client: "codex", profileGroup: "codex", name: "Codex"},
+  {button: configureClaudeCode, client: "claude-code", profileGroup: "claude", name: "Claude"},
+  // OpenClaw speaks the OpenAI-compatible route and follows OpenCode's supplier.
+  {button: configureOpenClaw, client: "openclaw", profileGroup: "opencode", name: "OpenClaw"}
 ];
 
-clientConfigureActions.forEach(({button, client, name}) => {
+clientConfigureActions.forEach(({button, client, profileGroup, name}) => {
   button?.addEventListener("click", () => {
-    configureClient({button, client, name}).catch((err) => {
+    configureClient({button, client, profileGroup, name}).catch((err) => {
       console.error(err);
       showToast(`配置 ${name} 失败：${err.message || err}`, "error");
     });
@@ -1618,13 +1648,17 @@ restoreCodex?.addEventListener("click", () => {
   });
 });
 
-async function configureClient({button, client, name}) {
+async function configureClient({button, client, profileGroup, name}) {
   if (button) button.disabled = true;
   try {
+    const profile = profileGroup ? textProfileForClient(profileGroup) : null;
+    if (profileGroup && !profile) {
+      throw new Error(`请先在 ${name} 对应分组选择模型供应商`);
+    }
     const res = await fetch("/api/client/configure", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({client})
+      body: JSON.stringify({client, ...(profile ? {profile_id: profile.id} : {})})
     });
     if (!res.ok) throw new Error(await readErrorMessage(res));
     const payload = await res.json();
@@ -1637,7 +1671,10 @@ async function configureClient({button, client, name}) {
     if (programResults.length === 0 && payload?.program_warning) warnings.push(payload.program_warning);
     clientRouteEnabled[client] = payload?.route_enabled !== false;
     await loadConfig();
-    const path = payload?.path ? `：${payload.path}` : "";
+    const configuredPaths = [...new Set(Object.values(payload?.config_paths || {}).filter(Boolean))];
+    const path = configuredPaths.length
+      ? `：${configuredPaths.join("、")}`
+      : (payload?.path ? `：${payload.path}` : "");
     let behaviorMessage = "配置已写入";
     if (programRestarted || payload?.restarted === true) {
       behaviorMessage = "客户端已自动重启";
@@ -1691,30 +1728,64 @@ async function applyEnabledClientRoutes() {
   return Array.isArray(payload?.clients) ? payload.clients : [];
 }
 
-async function switchTextProvider(profile) {
-  let providerSwitched = false;
-  try {
-    applyTextProfile(profile.id);
-    renderTextProfiles();
-    await persistConfig("");
-    providerSwitched = true;
-    const updatedClients = await applyEnabledClientRoutes();
-    const providerName = profile.name || profile.provider || "未命名";
-    const directUpstream = programSettings.localAPIEnabled === false;
-    if (updatedClients.length === 0) {
-      showToast(`已切换供应商：${providerName}；当前未启用客户端路由`, "success");
-      setStatus(`已切换供应商：${providerName}`);
-      return;
-    }
-    const clientNames = updatedClients.map((client) => client.name || client.client).join("、");
-    showToast(directUpstream
-      ? `供应商切换成功，已将 ${clientNames} 更新为直连 ${profile.provider || providerName}；请重启客户端程序`
-      : `供应商切换成功，已更新 ${clientNames}；请重启客户端程序`, "success");
-    setStatus(`供应商切换成功，请重启 ${clientNames}`);
-  } catch (err) {
-    err.providerSwitched = providerSwitched;
-    throw err;
+
+function affectedSelectedTextProfileGroups(previousSelections, changedProfileId) {
+  return textProfileClientGroups
+    .filter((group) => previousSelections?.[group.id] === changedProfileId
+      || previousSelections?.[group.id] !== activeTextProfileByClient[group.id])
+    .map((group) => group.id);
+}
+
+async function persistTextProfileChanges(successMessage, affectedGroups) {
+  legacyTextRouting = false;
+  await persistConfig("");
+  const needsDirectRouteRefresh = !programSettings.localAPIEnabled && affectedGroups.some((groupId) => {
+    if (groupId === "openclaw") return clientRouteEnabled.openclaw === true;
+    if (groupId === "opencode") return clientRouteEnabled.opencode === true || clientRouteEnabled.openclaw === true;
+    const group = textProfileClientGroups.find((item) => item.id === groupId);
+    return group && clientRouteEnabled[group.routeClient] === true;
+  });
+  if (!needsDirectRouteRefresh) {
+    showToast(successMessage, "success");
+    return;
   }
+  try {
+    const updatedClients = await applyEnabledClientRoutes();
+    const names = updatedClients.map((client) => client.name || client.client).filter(Boolean).join("\u3001");
+    const routeMessage = names ? `\uff1b\u5df2\u66f4\u65b0 ${names} \u7684\u76f4\u8fde\u914d\u7f6e\uff0c\u8bf7\u91cd\u542f\u5ba2\u6237\u7aef\u7a0b\u5e8f` : "";
+    showToast(`${successMessage}${routeMessage}`, "success");
+  } catch (err) {
+    console.error(err);
+    showToast(`${successMessage}\uff0c\u4f46\u76f4\u8fde\u5ba2\u6237\u7aef\u914d\u7f6e\u66f4\u65b0\u5931\u8d25\uff1a${err.message || err}`, "error");
+    setStatus("\u4f9b\u5e94\u5546\u5df2\u4fdd\u5b58\uff0c\u76f4\u8fde\u914d\u7f6e\u66f4\u65b0\u5931\u8d25");
+  }
+}
+
+async function switchTextProvider(profile) {
+  const clientGroup = normalizeTextProfileClient(profile?.client, profile);
+  const group = textProfileClientGroups.find((item) => item.id === clientGroup);
+  if (!group) throw new Error("\u4e0d\u652f\u6301\u7684\u5ba2\u6237\u7aef\u5206\u7ec4");
+  const res = await fetch("/api/client/configure", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({client: group.routeClient, profile_id: profile.id})
+  });
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  const payload = await res.json();
+  activeTextProfileByClient[clientGroup] = profile.id;
+  legacyTextRouting = false;
+  clientRouteEnabled[group.routeClient] = true;
+  if (currentConfig) {
+    currentConfig.active_text_profile_by_client = {...activeTextProfileByClient};
+  }
+  syncClientRouteInputs();
+  renderTextProfiles();
+  const providerName = profile.name || profile.provider || "\u672a\u547d\u540d\u4f9b\u5e94\u5546";
+  const actionHint = payload?.restarted || payload?.started
+    ? "\u5ba2\u6237\u7aef\u5df2\u81ea\u52a8\u5e94\u7528\u914d\u7f6e"
+    : "\u8bf7\u91cd\u542f\u5ba2\u6237\u7aef\u7a0b\u5e8f\u540e\u751f\u6548";
+  showToast(`\u5df2\u4e3a ${group.label} \u4f7f\u7528 ${providerName}\uff1b${actionHint}`, "success");
+  setStatus(`${group.label} \u4f9b\u5e94\u5546\u5df2\u66f4\u65b0`);
 }
 
 async function restoreCodexOfficialMode() {
@@ -2290,8 +2361,85 @@ function formatNumber(value) {
   return Number(value || 0).toLocaleString();
 }
 
+function providerCircuitStatusKey(group, profileId) {
+  return `${group || ""}:${profileId || ""}`;
+}
+
+function providerCircuitPresentation(state) {
+  switch (state) {
+    case "open":
+    case "half_open":
+      return {className: "is-open", label: "\u7194\u65ad"};
+    default:
+      return {className: "is-closed", label: "\u6b63\u5e38"};
+  }
+}
+
+function providerCircuitBadge(profile) {
+  const status = providerCircuitStatuses.get(providerCircuitStatusKey(profile.client, profile.id));
+  const presentation = providerCircuitPresentation(status?.circuit_state);
+  return `<span class="provider-circuit-badge ${presentation.className}" data-provider-group="${escapeHTML(profile.client || "")}" data-provider-profile="${escapeHTML(profile.id || "")}">${presentation.label}</span>`;
+}
+
+function refreshProviderCircuitBadges() {
+  document.querySelectorAll(".provider-circuit-badge[data-provider-group][data-provider-profile]").forEach((badge) => {
+    const status = providerCircuitStatuses.get(providerCircuitStatusKey(badge.dataset.providerGroup, badge.dataset.providerProfile));
+    const presentation = providerCircuitPresentation(status?.circuit_state);
+    badge.classList.remove("is-closed", "is-open", "is-half-open");
+    badge.classList.add(presentation.className);
+    badge.textContent = presentation.label;
+  });
+}
+
+async function loadProviderCircuitStatus() {
+  const res = await fetch("/api/provider-router/status", {cache: "no-store"});
+  if (!res.ok) throw new Error(`provider router status ${res.status}`);
+  const payload = await res.json();
+  const next = new Map();
+  (payload.groups || []).forEach((group) => {
+    (group.providers || []).forEach((provider) => {
+      next.set(providerCircuitStatusKey(group.group, provider.profile_id), provider);
+    });
+  });
+  providerCircuitStatuses = next;
+  refreshProviderCircuitBadges();
+}
+
+function startProviderCircuitStatusPolling() {
+  if (providerCircuitStatusTimer) return;
+  loadProviderCircuitStatus().catch((err) => console.error("load provider circuit status failed", err));
+  providerCircuitStatusTimer = window.setInterval(() => {
+    loadProviderCircuitStatus().catch((err) => console.error("load provider circuit status failed", err));
+  }, 5000);
+}
+
 function renderTextProfiles() {
-  renderProfileList(textProfileList, textProfiles, activeTextProfileId, "text");
+  textProfileList.innerHTML = "";
+  const group = textProfileClientGroups.find((item) => item.id === activeProviderClientTab) || textProfileClientGroups[0];
+  activeProviderClientTab = group.id;
+  providerClientTabButtons.forEach((button) => {
+    const active = button.dataset.providerClientTab === group.id;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  const profiles = textProfiles.filter((profile) => profile.client === group.id);
+  const section = document.createElement("section");
+  section.className = "provider-client-group";
+  section.dataset.clientGroup = group.id;
+  section.innerHTML = `
+    <div class="provider-client-group-head">
+      <h4>${group.label}</h4>
+      <span>${profiles.length} \u4e2a\u4f9b\u5e94\u5546</span>
+    </div>
+    <div class="provider-client-profile-list"></div>
+  `;
+  const list = section.querySelector(".provider-client-profile-list");
+  if (profiles.length) {
+    renderProfileList(list, profiles, activeTextProfileByClient[group.id], "text");
+  } else {
+    list.innerHTML = '<div class="provider-client-empty">\u6682\u65e0\u4f9b\u5e94\u5546\uff0c\u53ef\u70b9\u51fb\u53f3\u4e0a\u89d2\u201c\u65b0\u589e\u201d\u6dfb\u52a0\u3002</div>';
+  }
+  textProfileList.appendChild(section);
   renderOpenCodeSnippet();
   renderOverview();
 }
@@ -2347,6 +2495,7 @@ function renderProfileList(container, profiles, activeId, kind) {
         <div>
           <strong>${escapeHTML(profile.name || "未命名")}</strong>
           <span>${escapeHTML(profileSummary(profile, kind))}</span>
+          ${kind === "text" ? providerCircuitBadge(profile) : ""}
         </div>
       </div>
       <div class="profile-actions">
@@ -2361,10 +2510,12 @@ function renderProfileList(container, profiles, activeId, kind) {
     });
     row.querySelector('[data-action="switch"]').addEventListener("click", (event) => {
       if (profile.id === activeId) return;
-      event.currentTarget.disabled = true;
+      const switchButton = event.currentTarget;
+      switchButton.disabled = true;
       if (kind === "text") {
         switchTextProvider(profile).catch((err) => {
           console.error(err);
+          switchButton.disabled = false;
           const prefix = err.providerSwitched
             ? "供应商已切换，但客户端路由更新失败"
             : "切换供应商失败";
@@ -2473,14 +2624,21 @@ async function deleteProfile(kind, id) {
   }
   const index = profiles.findIndex((profile) => profile.id === id);
   if (index < 0) return;
+  const previousTextSelections = isText ? {...activeTextProfileByClient} : null;
+  const previousActiveTextProfileId = isText ? activeTextProfileId : "";
   profiles.splice(index, 1);
   if (isText) {
     if (activeTextProfileId === id) {
       activeTextProfileId = profiles[Math.max(0, index - 1)]?.id || profiles[0].id;
       applyTextProfile(activeTextProfileId);
     }
+    activeTextProfileByClient = normalizeActiveTextProfileByClient(activeTextProfileByClient, profiles, activeTextProfileId);
+    const affectedGroups = affectedSelectedTextProfileGroups(previousTextSelections, id);
+    if (previousActiveTextProfileId === id || previousActiveTextProfileId !== activeTextProfileId) {
+      affectedGroups.push("openclaw");
+    }
     renderTextProfiles();
-    await persistConfig("已删除并保存文本模型");
+    await persistTextProfileChanges("\u5df2\u5220\u9664\u5e76\u4fdd\u5b58\u6587\u672c\u6a21\u578b", affectedGroups);
   } else {
     if (activeVisionProfileId === id) {
       activeVisionProfileId = profiles[Math.max(0, index - 1)]?.id || profiles[0].id;
@@ -2517,6 +2675,9 @@ function openProfileModal(kind, mode, profileId = "") {
     : (isText ? "填写新的文本上游配置，创建后保存到列表。" : "填写新的视觉上游配置，创建后保存到列表。");
   profileModalSubmit.textContent = mode === "edit" ? "保存模型" : "创建模型";
   modalProfileName.value = profile?.name || (isText ? `文本模型 ${index}` : `视觉模型 ${index}`);
+  modalProfileClient.value = isText ? normalizeTextProfileClient(profile?.client, profile) : "codex";
+  modalProfileClientWrap.hidden = !isText;
+  syncComponentSelect(modalProfileClient);
   modalProfileProvider.value = profile?.provider || "openai";
   modalProfileWireAPI.value = isText ? normalizeWireAPI(profile?.wire_api) : "chat_completions";
   syncComponentSelect(modalProfileProvider);
@@ -2532,9 +2693,9 @@ function openProfileModal(kind, mode, profileId = "") {
   modelMappingSection.hidden = !isText;
   fetchModels.hidden = isText;
   renderModelMappingRows();
-  modalProfileProxyWrap.hidden = !isText;
+  modalProfileProxyWrap.hidden = false;
   modalProfileWireAPIWrap.hidden = !isText;
-  modalProfileProxyURL.value = isText ? profile?.proxy_url || "" : "";
+  modalProfileProxyURL.value = profile?.proxy_url || "";
   resetModelPicker();
   if (profileModal.showModal) {
     profileModal.showModal();
@@ -2576,7 +2737,7 @@ async function fetchProviderModels() {
         provider,
         base_url: baseURL,
         api_key: modalProfileAPIKey.value.trim(),
-        proxy_url: profileModalKind === "text" ? modalProfileProxyURL.value.trim() : ""
+        proxy_url: modalProfileProxyURL.value.trim()
       })
     });
     if (!res.ok) {
@@ -2752,10 +2913,13 @@ async function createProfileFromModal() {
   const isEdit = profileModalMode === "edit";
   if (isText) {
     updateModelMappingFromRows();
+    const previousTextSelections = {...activeTextProfileByClient};
+    const previousActiveTextProfileId = activeTextProfileId;
     const id = isEdit ? profileModalEditId : `text-${Date.now().toString(36)}`;
     const profile = normalizeTextProfile({
       id,
       name: modalProfileName.value,
+      client: modalProfileClient.value,
       provider: modalProfileProvider.value,
       base_url: modalProfileBaseURL.value,
       api_key: modalProfileAPIKey.value,
@@ -2773,9 +2937,15 @@ async function createProfileFromModal() {
     } else {
       textProfiles.push(profile);
     }
+    activeTextProfileByClient = normalizeActiveTextProfileByClient(activeTextProfileByClient, textProfiles, activeTextProfileId);
+    const affectedGroups = affectedSelectedTextProfileGroups(previousTextSelections, profile.id);
+    if (isEdit && previousActiveTextProfileId === profile.id) {
+      affectedGroups.push("openclaw");
+    }
+    activeProviderClientTab = profile.client;
     renderTextProfiles();
     showPage("text");
-    await persistConfig(isEdit ? "已更新并保存文本模型" : "已新增并保存文本模型");
+    await persistTextProfileChanges(isEdit ? "\u5df2\u66f4\u65b0\u5e76\u4fdd\u5b58\u6587\u672c\u6a21\u578b" : "\u5df2\u65b0\u589e\u5e76\u4fdd\u5b58\u6587\u672c\u6a21\u578b", affectedGroups);
   } else {
     const id = isEdit ? profileModalEditId : `vision-${Date.now().toString(36)}`;
     const profile = normalizeVisionProfile({
@@ -2784,7 +2954,8 @@ async function createProfileFromModal() {
       provider: modalProfileProvider.value,
       base_url: modalProfileBaseURL.value,
       api_key: modalProfileAPIKey.value,
-      model: modalProfileModel.value
+      model: modalProfileModel.value,
+      proxy_url: modalProfileProxyURL.value
     }, visionProfiles.length);
     if (isEdit) {
       replaceProfile(visionProfiles, profile);
@@ -2812,6 +2983,7 @@ function defaultProfileDraft(kind, index) {
     return {
       id: "",
       name: `文本模型 ${index}`,
+      client: activeProviderClientTab,
       provider: "openai",
       base_url: "",
       api_key: "",
@@ -2827,7 +2999,8 @@ function defaultProfileDraft(kind, index) {
     provider: "openai",
     base_url: "",
     api_key: "",
-    model: ""
+    model: "",
+    proxy_url: ""
   };
 }
 
@@ -3036,203 +3209,268 @@ function openClawDirectBaseURL(profile) {
   return clientVersionedBaseURL(profile);
 }
 
+function textProfileForClient(groupId) {
+  const normalizedGroup = normalizeTextProfileClient(groupId);
+  const selectedId = activeTextProfileByClient[normalizedGroup] || "";
+  return textProfiles.find((profile) => profile.client === normalizedGroup && profile.id === selectedId) || null;
+}
+
+function configuredClientPreviewPath(client, fallback) {
+  return String(programSettings.clientConfigPaths?.[client] || fallback || "").trim();
+}
+
+function siblingClientConfigPath(configPath, filename) {
+  const path = String(configPath || "").trim();
+  const separator = path.includes("\\") ? "\\" : "/";
+  const index = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return index >= 0 ? `${path.slice(0, index)}${separator}${filename}` : filename;
+}
+
+function isWindowsClientConfigPath(path) {
+  return /^[a-z]:[\\/]/i.test(String(path || "")) || String(path || "").includes("\\");
+}
+
 function renderOpenCodeSnippet() {
-  const profile = activeTextProfile();
   const directUpstream = programSettings.localAPIEnabled === false;
-  const sourceMappings = textProfileMappings(profile);
-  const mappings = directUpstream ? directClientMappings(sourceMappings) : sourceMappings;
-  const providerDisplayName = directUpstream ? `${profile?.provider || "供应商"}（直连）` : "Vision Relay";
-  const upstreamKey = directUpstream ? String(profile?.api_key || "").trim() : "";
-  const preserveOfficialAuth = preserveCodexOfficialAuth?.checked !== false;
-  const codexRequiresOpenAIAuth = directUpstream || preserveOfficialAuth;
-  const codexBearerToken = preserveOfficialAuth ? (directUpstream ? upstreamKey : "vision-relay-local") : "";
-  if (directUpstream && mappings.length === 0) {
-    const message = "关闭本地 API 后，请先为当前文本供应商添加至少一个模型。";
-    [opencodeConfig, openclawConfig, codexConfig, claudeCodeConfig].forEach((element) => {
-      if (element) element.textContent = message;
+  const renderForSupplier = (groupId, elements, render) => {
+    const profile = textProfileForClient(groupId);
+    if (!profile) {
+      const message = `请先在 ${groupId === "codex" ? "Codex" : groupId === "claude" ? "Claude" : "OpenCode"} 分组添加模型供应商。`;
+      elements.forEach((element) => { if (element) element.textContent = message; });
+      return;
+    }
+    const sourceMappings = textProfileMappings(profile);
+    const mappings = directUpstream ? directClientMappings(sourceMappings) : sourceMappings;
+    if (directUpstream && mappings.length === 0) {
+      const message = "关闭本地 API 后，请先为当前分组选择的供应商添加至少一个模型。";
+      elements.forEach((element) => { if (element) element.textContent = message; });
+      return;
+    }
+    const snippetMappings = mappings.length
+      ? mappings
+      : [normalizeModelMapping({name: "z-ai/glm-5.2", model: "z-ai/glm-5.2"})];
+    const defaultClientModel = (snippetMappings[0].name || snippetMappings[0].model || "z-ai/glm-5.2").trim();
+    render({
+      profile,
+      directUpstream,
+      snippetMappings,
+      defaultClientModel,
+      providerDisplayName: directUpstream ? `${profile.provider || "供应商"}（直连）` : "Vision Relay",
+      upstreamKey: directUpstream ? String(profile.api_key || "").trim() : ""
     });
-    return;
-  }
-  const snippetMappings = mappings.length ? mappings : [normalizeModelMapping({name: "z-ai/glm-5.2", model: "z-ai/glm-5.2"})];
-  const defaultClientModel = (snippetMappings[0].name || snippetMappings[0].model || "z-ai/glm-5.2").trim();
-  if (opencodeConfig) {
-    opencodeConfig.textContent = JSON.stringify({
-      "$schema": "https://opencode.ai/config.json",
-      provider: {
-        "vision-relay": {
-          npm: openCodeProviderNPM(profile, directUpstream),
-          name: providerDisplayName,
-          options: {
-            baseURL: directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`,
-            ...(directUpstream ? {apiKey: upstreamKey} : {})
-          },
-          models: Object.fromEntries(snippetMappings.map((mapping) => {
-            const modelName = mapping.name || mapping.model;
-            const imageEnabled = clientImageInputEnabled(mapping);
-            const inputModalities = visionInputModalities(imageEnabled);
-            return [modelName, {
-              name: modelName,
-              reasoning: mapping.reasoning_effort !== "none",
-              attachment: imageEnabled,
-              attachments: imageEnabled,
-              vision: imageEnabled,
-              input_modalities: inputModalities,
-              output_modalities: ["text"],
-              modalities: {
-                input: inputModalities,
-                output: ["text"]
-              },
-              ...(mapping.context_window ? {limit: {context: mapping.context_window}} : {})
-            }];
-          }))
-        }
-      },
-      model: `vision-relay/${defaultClientModel}`
-    }, null, 2);
-  }
-  if (openclawConfig) {
-    const openclawModels = snippetMappings.map((mapping) => {
-      const modelName = mapping.name || mapping.model;
-      return {
-        id: modelName,
-        name: modelName,
-        input: visionInputModalities(clientImageInputEnabled(mapping)),
-        cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0},
-        contextWindow: mapping.context_window || 128000,
-        maxTokens: 8192
-      };
-    });
-    openclawConfig.textContent = JSON.stringify({
-      agents: {
-        defaults: {
-          model: {primary: `vision-relay/${openclawModels[0].id}`}
-        }
-      },
-      models: {
-        mode: "merge",
-        providers: {
+  };
+
+  // OpenClaw uses the same OpenAI-compatible supplier selection as OpenCode.
+  renderForSupplier("opencode", [opencodeConfig, openclawConfig], ({
+    profile, directUpstream, snippetMappings, defaultClientModel, providerDisplayName, upstreamKey
+  }) => {
+    if (opencodeConfig) {
+      opencodeConfig.textContent = JSON.stringify({
+        "$schema": "https://opencode.ai/config.json",
+        provider: {
           "vision-relay": {
-            baseUrl: directUpstream ? openClawDirectBaseURL(profile) : `${location.origin}/v1`,
-            ...(directUpstream ? {apiKey: upstreamKey} : {}),
-            api: directUpstream ? openClawDirectAPI(profile) : "openai-completions",
-            models: openclawModels
+            npm: openCodeProviderNPM(profile, directUpstream),
+            name: providerDisplayName,
+            options: {
+              baseURL: directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`,
+              ...(directUpstream ? {apiKey: upstreamKey} : {})
+            },
+            models: Object.fromEntries(snippetMappings.map((mapping) => {
+              const modelName = mapping.name || mapping.model;
+              const imageEnabled = clientImageInputEnabled(mapping);
+              const inputModalities = visionInputModalities(imageEnabled);
+              return [modelName, {
+                name: modelName,
+                reasoning: mapping.reasoning_effort !== "none",
+                attachment: imageEnabled,
+                attachments: imageEnabled,
+                vision: imageEnabled,
+                input_modalities: inputModalities,
+                output_modalities: ["text"],
+                modalities: {
+                  input: inputModalities,
+                  output: ["text"]
+                },
+                ...(mapping.context_window ? {limit: {context: mapping.context_window}} : {})
+              }];
+            }))
+          }
+        },
+        model: `vision-relay/${defaultClientModel}`
+      }, null, 2);
+    }
+    if (openclawConfig) {
+      const openclawModels = snippetMappings.map((mapping) => {
+        const modelName = mapping.name || mapping.model;
+        return {
+          id: modelName,
+          name: modelName,
+          input: visionInputModalities(clientImageInputEnabled(mapping)),
+          cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0},
+          contextWindow: mapping.context_window || 128000,
+          maxTokens: 8192
+        };
+      });
+      openclawConfig.textContent = JSON.stringify({
+        agents: {
+          defaults: {
+            model: {primary: `vision-relay/${openclawModels[0].id}`}
+          }
+        },
+        models: {
+          mode: "merge",
+          providers: {
+            "vision-relay": {
+              baseUrl: directUpstream ? openClawDirectBaseURL(profile) : `${location.origin}/v1`,
+              ...(directUpstream ? {apiKey: upstreamKey} : {}),
+              api: directUpstream ? openClawDirectAPI(profile) : "openai-completions",
+              models: openclawModels
+            }
           }
         }
-      }
-    }, null, 2);
-  }
-  const codexDirectError = directUpstream ? directClientCompatibilityMessage("codex", profile) : "";
-  if (codexConfig && !codexDirectError) {
-    const catalogMappings = snippetMappings;
-    const codexDefaultModel = catalogMappings[0].name || catalogMappings[0].model;
-    const codexDefaultReasoningEffort = catalogMappings[0].reasoning_effort;
-    const codexDefaultSupportsReasoning = codexDefaultReasoningEffort !== "none";
-    const codexCatalog = {
-      models: catalogMappings.map((mapping, index) => {
-        const slug = mapping.name || mapping.model;
-        const imageEnabled = clientImageInputEnabled(mapping);
-        const inputModalities = visionInputModalities(imageEnabled);
-        const reasoningEffort = mapping.reasoning_effort;
-        const supportsReasoning = reasoningEffort !== "none";
-        return {
-        slug,
-        display_name: slug,
-        description: mapping.model && mapping.model !== slug
-          ? `Vision Relay route to ${mapping.model}`
-          : "Vision Relay model",
-        base_instructions: "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals.",
-        context_window: mapping.context_window || 128000,
-        max_context_window: mapping.context_window || 128000,
-        effective_context_window_percent: 95,
-        ...(supportsReasoning ? {default_reasoning_level: reasoningEffort} : {}),
-        default_reasoning_summary: "none",
-        supported_reasoning_levels: supportsReasoning ? [
-          {effort: "none", description: "Disable reasoning"},
-          {effort: reasoningEffort, description: reasoningEffortDescription(reasoningEffort)}
-        ] : [],
-        visibility: "list",
-        supported_in_api: true,
-        priority: 1000 + index,
-        shell_type: "shell_command",
-        input_modalities: inputModalities,
-        supports_parallel_tool_calls: false,
-        supports_image_detail_original: imageEnabled,
-        supports_reasoning_summaries: supportsReasoning,
-        supports_reasoning_summary_parameter: supportsReasoning,
-        supports_search_tool: false,
-        support_verbosity: false,
-        truncation_policy: {mode: "bytes", limit: 10000},
-        additional_speed_tiers: [],
-        service_tiers: [],
-        availability_nux: null,
-        upgrade: null,
-        experimental_supported_tools: []
-      };
-      })
-    };
-    codexConfig.textContent = [
-      `# %USERPROFILE%\\.codex\\config.toml`,
-      `model_provider = "custom"`,
-      `model = "${codexDefaultModel}"`,
-      `disable_response_storage = true`,
-      ...(codexDefaultSupportsReasoning ? [`model_reasoning_effort = "${codexDefaultReasoningEffort}"`] : []),
-      `model_catalog_json = "vision-relay-model.json"`,
-      `web_search = "disabled"`,
-      ``,
-      `[model_providers.custom]`,
-      `name = "${providerDisplayName}"`,
-      `wire_api = "responses"`,
-      `requires_openai_auth = ${codexRequiresOpenAIAuth}`,
-      `base_url = "${directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`}"`,
-      ...(codexBearerToken ? [`experimental_bearer_token = "${codexBearerToken}"`] : []),
-      ``,
-      `[windows]`,
-      `sandbox = "unelevated"`,
-      ``,
-      `# %USERPROFILE%\\.codex\\vision-relay-model.json`,
-      JSON.stringify(codexCatalog, null, 2),
-      ``,
-      `# 当前项目 .codex\\config.toml`,
-      `model_provider = "custom"`,
-      `model = "${codexDefaultModel}"`,
-      `disable_response_storage = true`,
-      ...(codexDefaultSupportsReasoning ? [`model_reasoning_effort = "${codexDefaultReasoningEffort}"`] : []),
-      `model_catalog_json = "vision-relay-model.json"`,
-      `web_search = "disabled"`,
-      ``,
-      `[model_providers.custom]`,
-      `name = "${providerDisplayName}"`,
-      `wire_api = "responses"`,
-      `requires_openai_auth = ${codexRequiresOpenAIAuth}`,
-      `base_url = "${directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`}"`,
-      ...(codexBearerToken ? [`experimental_bearer_token = "${codexBearerToken}"`] : []),
-      ``,
-      `[windows]`,
-      `sandbox = "unelevated"`
-    ].join("\n");
-  } else if (codexConfig) {
-    codexConfig.textContent = `# ${codexDirectError}`;
-  }
-  const claudeDirectError = directUpstream ? directClientCompatibilityMessage("claude-code", profile) : "";
-  if (claudeCodeConfig && !claudeDirectError) {
-    const claudeModels = snippetMappings.map((mapping) => ({
-      name: mapping.name || mapping.model,
-      ...(Number(mapping.context_window || 0) >= 1000000 ? {supports1m: true} : {})
-    }));
-    const directAnthropic = directUpstream && normalizedDirectProvider(profile) === "anthropic";
-    const claudeDesktopConfig = {
-      inferenceProvider: "gateway",
-      inferenceGatewayBaseUrl: directUpstream ? claudeDesktopGatewayBaseURL(profile) : location.origin,
-      inferenceGatewayAuthScheme: directAnthropic ? "x-api-key" : "bearer",
-      inferenceGatewayApiKey: directUpstream ? upstreamKey : "vision-relay",
-      inferenceModels: claudeModels,
-      disableDeploymentModeChooser: true
-    };
-    claudeCodeConfig.textContent = JSON.stringify(claudeDesktopConfig, null, 2);
-  } else if (claudeCodeConfig) {
-    claudeCodeConfig.textContent = claudeDirectError;
-  }
+      }, null, 2);
+    }
+  });
 
+  renderForSupplier("codex", [codexConfig], ({
+    profile, directUpstream, snippetMappings, providerDisplayName, upstreamKey
+  }) => {
+    const preserveOfficialAuth = preserveCodexOfficialAuth?.checked !== false;
+    const codexRequiresOpenAIAuth = directUpstream || preserveOfficialAuth;
+    const codexBearerToken = preserveOfficialAuth ? (directUpstream ? upstreamKey : "vision-relay-local") : "";
+    const codexDirectError = directUpstream ? directClientCompatibilityMessage("codex", profile) : "";
+    if (codexConfig && !codexDirectError) {
+      const catalogMappings = snippetMappings;
+      const codexDefaultModel = catalogMappings[0].name || catalogMappings[0].model;
+      const codexDefaultReasoningEffort = catalogMappings[0].reasoning_effort;
+      const codexDefaultSupportsReasoning = codexDefaultReasoningEffort !== "none";
+      const codexCatalog = {
+        models: catalogMappings.map((mapping, index) => {
+          const slug = mapping.name || mapping.model;
+          const imageEnabled = clientImageInputEnabled(mapping);
+          const inputModalities = visionInputModalities(imageEnabled);
+          const reasoningEffort = mapping.reasoning_effort;
+          const supportsReasoning = reasoningEffort !== "none";
+          return {
+          slug,
+          display_name: slug,
+          description: mapping.model && mapping.model !== slug
+            ? `Vision Relay route to ${mapping.model}`
+            : "Vision Relay model",
+          base_instructions: "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals.",
+          context_window: mapping.context_window || 128000,
+          max_context_window: mapping.context_window || 128000,
+          effective_context_window_percent: 95,
+          ...(supportsReasoning ? {default_reasoning_level: reasoningEffort} : {}),
+          default_reasoning_summary: "none",
+          supported_reasoning_levels: supportsReasoning ? [
+            {effort: "none", description: "Disable reasoning"},
+            {effort: reasoningEffort, description: reasoningEffortDescription(reasoningEffort)}
+          ] : [],
+          visibility: "list",
+          supported_in_api: true,
+          priority: 1000 + index,
+          shell_type: "shell_command",
+          input_modalities: inputModalities,
+          supports_parallel_tool_calls: false,
+          supports_image_detail_original: imageEnabled,
+          supports_reasoning_summaries: supportsReasoning,
+          supports_reasoning_summary_parameter: supportsReasoning,
+          supports_search_tool: false,
+          support_verbosity: false,
+          truncation_policy: {mode: "bytes", limit: 10000},
+          additional_speed_tiers: [],
+          service_tiers: [],
+          availability_nux: null,
+          upgrade: null,
+          experimental_supported_tools: []
+        };
+        })
+      };
+      const codexConfigPath = configuredClientPreviewPath("codex", "~/.codex/config.toml");
+      const codexCatalogPath = siblingClientConfigPath(codexConfigPath, "vision-relay-model.json");
+      const windowsSandbox = isWindowsClientConfigPath(codexConfigPath)
+        ? [``, `[windows]`, `sandbox = "unelevated"`]
+        : [];
+      codexConfig.textContent = [
+        `# ${codexConfigPath}`,
+        `model_provider = "custom"`,
+        `model = "${codexDefaultModel}"`,
+        `disable_response_storage = true`,
+        ...(codexDefaultSupportsReasoning ? [`model_reasoning_effort = "${codexDefaultReasoningEffort}"`] : []),
+        `model_catalog_json = "vision-relay-model.json"`,
+        `web_search = "disabled"`,
+        ``,
+        `[model_providers.custom]`,
+        `name = "${providerDisplayName}"`,
+        `wire_api = "responses"`,
+        `requires_openai_auth = ${codexRequiresOpenAIAuth}`,
+        `base_url = "${directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`}"`,
+        ...(codexBearerToken ? [`experimental_bearer_token = "${codexBearerToken}"`] : []),
+        ...windowsSandbox,
+        ``,
+        `# ${codexCatalogPath}`,
+        JSON.stringify(codexCatalog, null, 2)
+      ].join("\n");
+    } else if (codexConfig) {
+      codexConfig.textContent = `# ${codexDirectError}`;
+    }
+  });
+
+  renderForSupplier("claude", [claudeCodeConfig], ({
+    profile, directUpstream, snippetMappings, upstreamKey
+  }) => {
+    const claudeDirectError = directUpstream ? directClientCompatibilityMessage("claude-code", profile) : "";
+    if (claudeCodeConfig && !claudeDirectError) {
+      const claudeModels = snippetMappings.map((mapping) => ({
+        name: mapping.name || mapping.model,
+        ...(Number(mapping.context_window || 0) >= 1000000 ? {supports1m: true} : {})
+      }));
+      const directAnthropic = directUpstream && normalizedDirectProvider(profile) === "anthropic";
+      const claudeDesktopConfig = {
+        inferenceProvider: "gateway",
+        inferenceGatewayBaseUrl: directUpstream ? claudeDesktopGatewayBaseURL(profile) : location.origin,
+        inferenceGatewayAuthScheme: directAnthropic ? "x-api-key" : "bearer",
+        inferenceGatewayApiKey: directUpstream ? upstreamKey : "vision-relay",
+        inferenceModels: claudeModels,
+        disableDeploymentModeChooser: true
+      };
+      const claudeModelIDs = snippetMappings.map((mapping) => mapping.name || mapping.model);
+      const claudeCLIEnv = {
+        ANTHROPIC_BASE_URL: directUpstream
+          ? String(profile.base_url || defaultBaseURL(profile.provider)).trim().replace(/\/+$/, "")
+          : location.origin,
+        ...(directUpstream ? {ANTHROPIC_AUTH_TOKEN: upstreamKey} : {})
+      };
+      [
+        ["ANTHROPIC_CUSTOM_MODEL_OPTION", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
+        ["ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME"],
+        ["ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME"],
+        ["ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME"]
+      ].forEach(([modelKey, nameKey], index) => {
+        if (!claudeModelIDs[index]) return;
+        claudeCLIEnv[modelKey] = claudeModelIDs[index];
+        claudeCLIEnv[nameKey] = `Vision Relay ${claudeModelIDs[index]}`;
+      });
+      const claudeCLIConfig = {
+        "$schema": "https://json.schemastore.org/claude-code-settings.json",
+        model: claudeModelIDs[0],
+        availableModels: claudeModelIDs,
+        env: claudeCLIEnv
+      };
+      const desktopPath = configuredClientPreviewPath("claude-code", "~/Library/Application Support/Claude-3p/configLibrary/vision-relay.json");
+      const cliPath = configuredClientPreviewPath("claude-cli", "~/.claude/settings.json");
+      claudeCodeConfig.textContent = [
+        `# Claude Desktop: ${desktopPath}`,
+        JSON.stringify(claudeDesktopConfig, null, 2),
+        ``,
+        `# Claude CLI: ${cliPath}`,
+        JSON.stringify(claudeCLIConfig, null, 2)
+      ].join("\n");
+    } else if (claudeCodeConfig) {
+      claudeCodeConfig.textContent = claudeDirectError;
+    }
+  });
 }
 
 function applyTextProfile(id) {
@@ -3275,7 +3513,8 @@ function migrateProfiles(cfg) {
         provider: profile.vision_provider,
         base_url: profile.vision_base_url,
         api_key: profile.vision_api_key,
-        model: profile.vision_model
+        model: profile.vision_model,
+        proxy_url: profile.proxy_url
       }, index)),
       activeTextProfileId: cfg.active_model_profile_id ? `text-${cfg.active_model_profile_id}` : "",
       activeVisionProfileId: cfg.active_model_profile_id ? `vision-${cfg.active_model_profile_id}` : ""
@@ -3310,7 +3549,8 @@ function visionProfileFromConfig(cfg, id, name) {
     provider: cfg.vision_provider,
     base_url: cfg.vision_base_url,
     api_key: cfg.vision_api_key,
-    model: cfg.vision_model
+    model: cfg.vision_model,
+    proxy_url: cfg.proxy_url
   }, 0);
 }
 
@@ -3337,8 +3577,32 @@ function visionProfileFromForm(id, name) {
     provider: "openai",
     base_url: "https://api.openai.com",
     api_key: "",
-    model: "gpt-4o-mini"
+    model: "gpt-4o-mini",
+    proxy_url: ""
   }, 0);
+}
+
+function normalizeTextProfileClient(client, profile = {}) {
+  const value = String(client || "").trim().toLowerCase();
+  if (value === "codex") return "codex";
+  if (value === "claude" || value === "claude-code") return "claude";
+  if (value === "opencode" || value === "open-code") return "opencode";
+  if (String(profile.provider || "").trim().toLowerCase() === "anthropic") return "claude";
+  if (String(profile.provider || "").trim().toLowerCase() === "openai" && normalizeWireAPI(profile.wire_api) === "responses") return "codex";
+  return "opencode";
+}
+
+function normalizeActiveTextProfileByClient(active, profiles, legacyActiveId = "") {
+  const normalized = {codex: "", claude: "", opencode: ""};
+  textProfileClientGroups.forEach((group) => {
+    const groupProfiles = profiles.filter((profile) => profile.client === group.id);
+    const requested = active?.[group.id] || active?.[group.routeClient] || "";
+    normalized[group.id] = groupProfiles.find((profile) => profile.id === requested)?.id
+      || groupProfiles.find((profile) => profile.id === legacyActiveId)?.id
+      || groupProfiles[0]?.id
+      || "";
+  });
+  return normalized;
 }
 
 function normalizeTextProfiles(profiles) {
@@ -3368,6 +3632,7 @@ function normalizeTextProfile(profile, index) {
   return {
     id: String(profile.id || `text-${index + 1}`).trim(),
     name: String(profile.name || `文本模型 ${index + 1}`).trim(),
+    client: normalizeTextProfileClient(profile.client, profile),
     provider: String(profile.provider || "openai").trim(),
     base_url: String(profile.base_url || "https://api.openai.com").trim(),
     api_key: String(profile.api_key || "").trim(),
@@ -3386,7 +3651,8 @@ function normalizeVisionProfile(profile, index) {
     provider: String(profile.provider || "openai").trim(),
     base_url: String(profile.base_url || "https://api.openai.com").trim(),
     api_key: String(profile.api_key || "").trim(),
-    model: String(profile.model || "gpt-4o-mini").trim()
+    model: String(profile.model || "gpt-4o-mini").trim(),
+    proxy_url: String(profile.proxy_url || "").trim()
   };
 }
 
@@ -3640,6 +3906,7 @@ installUpdateButton.addEventListener("click", () => {
 });
 
 loadConfig().then(async () => {
+  startProviderCircuitStatusPolling();
   const progress = await pollUpdateProgress();
   if (!updateProgressIsActive(progress.state) && programSettings.autoCheckUpdates) {
     await checkForUpdate(false);

@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$Output = "vision-relay.exe",
     [switch]$SkipTests,
     [string]$Version = ""
@@ -15,7 +15,7 @@ $tempPath = "$outputPath.tmp"
 $iconDirectory = Join-Path $projectRoot "backend\cmd\vision-relay"
 $iconGeneratorPath = Join-Path $projectRoot "tools\make-icon.ps1"
 $iconDefinitionPath = Join-Path $iconDirectory "app.rc"
-$iconResourcePath = Join-Path $iconDirectory "app.syso"
+$iconResourcePath = Join-Path $iconDirectory "app_windows.syso"
 if ([string]::IsNullOrWhiteSpace($Version)) {
     $Version = (& git -C $projectRoot describe --tags --always --dirty 2>$null)
     if ([string]::IsNullOrWhiteSpace($Version)) { $Version = "dev" }

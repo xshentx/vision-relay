@@ -76,7 +76,7 @@ func TestWriteAnthropicStreamFlushesBeforeUpstreamCompletes(t *testing.T) {
 	default:
 	}
 
-	_, _ = io.WriteString(writer, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":1}}\n\n")
+	_, _ = io.WriteString(writer, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":2,\"cache_write_tokens\":1}}}\n\n")
 	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 	_ = writer.Close()
 	select {
@@ -85,11 +85,49 @@ func TestWriteAnthropicStreamFlushesBeforeUpstreamCompletes(t *testing.T) {
 		t.Fatal("converter did not finish after upstream completion")
 	}
 	body := capture.String()
-	if !strings.Contains(body, `"input_tokens":3`) || !strings.Contains(body, `"output_tokens":1`) {
-		t.Fatalf("final usage is missing:\n%s", body)
+	if !strings.Contains(body, `"input_tokens":7`) || !strings.Contains(body, `"output_tokens":1`) ||
+		!strings.Contains(body, `"cache_read_input_tokens":2`) || !strings.Contains(body, `"cache_creation_input_tokens":1`) {
+		t.Fatalf("final usage or cache details are missing:\n%s", body)
 	}
 	if !strings.Contains(body, "event: message_stop") {
 		t.Fatalf("message_stop is missing:\n%s", body)
+	}
+}
+
+func TestWriteAnthropicFromChatCompletionAdjustsCachedInput(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"chatcmpl-cache","model":"cache-model","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":2,"cache_write_tokens":1}}}`)),
+	}
+	recorder := httptest.NewRecorder()
+
+	WriteAnthropicFromChatCompletion(recorder, resp)
+	body := recorder.Body.String()
+	for _, expected := range []string{
+		`"input_tokens":7`,
+		`"output_tokens":1`,
+		`"cache_read_input_tokens":2`,
+		`"cache_creation_input_tokens":1`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("converted usage is missing %q: %s", expected, body)
+		}
+	}
+}
+
+func TestWriteAnthropicFromChatCompletionPrefersExplicitZeroCacheAlias(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"chatcmpl-zero-cache","model":"cache-model","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"cache_read_input_tokens":0,"prompt_tokens_details":{"cached_tokens":2}}}`)),
+	}
+	recorder := httptest.NewRecorder()
+
+	WriteAnthropicFromChatCompletion(recorder, resp)
+	body := recorder.Body.String()
+	if strings.Contains(body, `"cache_read_input_tokens":2`) || !strings.Contains(body, `"input_tokens":10`) {
+		t.Fatalf("lower-priority cache alias replaced explicit zero: %s", body)
 	}
 }
 

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// Version is replaced by tools/build-windows.ps1 for release builds.
+// Version is replaced by the platform build scripts for release builds.
 var Version = "dev"
 
 const (
@@ -225,7 +225,7 @@ func (a *app) checkForUpdate(ctx context.Context) (updateInfo, error) {
 	if err != nil {
 		return updateInfo{}, err
 	}
-	asset, ok := selectWindowsAsset(release.Assets)
+	asset, ok := selectReleaseAsset(release.Assets, runtime.GOOS, runtime.GOARCH)
 	info := updateInfo{
 		CurrentVersion: Version, LatestVersion: release.TagName,
 		UpdateAvailable: versionNewer(release.TagName, Version),
@@ -388,19 +388,73 @@ func (a *app) fetchChecksum(ctx context.Context, assets []githubAsset, exeName s
 	return "", false, nil
 }
 
+func selectReleaseAsset(assets []githubAsset, goos, goarch string) (githubAsset, bool) {
+	switch goos {
+	case "windows":
+		return selectWindowsAssetForArch(assets, goarch)
+	case "darwin":
+		return selectDarwinAsset(assets, goarch)
+	default:
+		return githubAsset{}, false
+	}
+}
+
 func selectWindowsAsset(assets []githubAsset) (githubAsset, bool) {
-	for _, a := range assets {
-		if strings.EqualFold(a.Name, "vision-relay.exe") {
-			return a, true
+	return selectWindowsAssetForArch(assets, runtime.GOARCH)
+}
+
+func selectWindowsAssetForArch(assets []githubAsset, goarch string) (githubAsset, bool) {
+	for _, asset := range assets {
+		if strings.EqualFold(asset.Name, "vision-relay.exe") {
+			return asset, true
 		}
 	}
-	for _, a := range assets {
-		n := strings.ToLower(a.Name)
-		if strings.HasSuffix(n, ".exe") && strings.Contains(n, "windows") && (runtime.GOARCH != "amd64" || strings.Contains(n, "amd64") || strings.Contains(n, "x64")) {
-			return a, true
+	for _, asset := range assets {
+		name := strings.ToLower(asset.Name)
+		if strings.HasSuffix(name, ".exe") && strings.Contains(name, "windows") && releaseAssetMatchesArch(name, goarch) {
+			return asset, true
 		}
 	}
 	return githubAsset{}, false
+}
+
+func selectDarwinAsset(assets []githubAsset, goarch string) (githubAsset, bool) {
+	canonical := []string{
+		"vision-relay-darwin-" + goarch + ".zip",
+		"vision-relay-macos-" + goarch + ".zip",
+		"vision-relay-darwin-universal.zip",
+		"vision-relay-macos-universal.zip",
+	}
+	for _, wanted := range canonical {
+		for _, asset := range assets {
+			if strings.EqualFold(asset.Name, wanted) {
+				return asset, true
+			}
+		}
+	}
+	for _, asset := range assets {
+		name := strings.ToLower(strings.ReplaceAll(asset.Name, "_", "-"))
+		if (strings.Contains(name, "darwin") || strings.Contains(name, "macos") || strings.Contains(name, "mac-os")) &&
+			(strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".tar.gz")) && releaseAssetMatchesArch(name, goarch) {
+			return asset, true
+		}
+	}
+	return githubAsset{}, false
+}
+
+func releaseAssetMatchesArch(name, goarch string) bool {
+	name = strings.ToLower(strings.ReplaceAll(name, "_", "-"))
+	if strings.Contains(name, "universal") {
+		return true
+	}
+	switch goarch {
+	case "amd64":
+		return strings.Contains(name, "amd64") || strings.Contains(name, "x86-64") || strings.Contains(name, "x64")
+	case "arm64":
+		return strings.Contains(name, "arm64") || strings.Contains(name, "aarch64")
+	default:
+		return strings.Contains(name, strings.ToLower(goarch))
+	}
 }
 
 func versionNewer(latest, current string) bool {

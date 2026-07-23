@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -85,6 +86,65 @@ func (a *app) forwardJSON(ctx context.Context, ep endpoint, method, requestURI s
 }
 
 func (a *app) forwardRaw(ctx context.Context, ep endpoint, method, requestURI string, body []byte, originalHeader http.Header) (*http.Response, error) {
+	group, routed := providerGroupFromContext(ctx)
+	if !routed {
+		return a.forwardRawOnce(ctx, ep, method, requestURI, body, originalHeader)
+	}
+	candidate, configured := a.resolveProviderRoute(ctx, ep)
+	if !configured {
+		return providerGroupUnconfiguredResponse(group), nil
+	}
+	trace := providerRouteTraceFromContext(ctx)
+	trace.set(providerRouteSelection{
+		Group: candidate.Group, ProfileID: candidate.ProfileID, Name: candidate.Name,
+		Provider: candidate.Endpoint.Provider, Model: candidate.Endpoint.ModelOverride,
+	})
+
+	router := a.textProviderRouter()
+	candidate, allowed := router.selectCandidate(candidate)
+	if !allowed {
+		return providerCircuitOpenResponse(), nil
+	}
+	router.recordSelection(candidate)
+	adaptedURI, adaptedBody := adaptProviderAttempt(candidate, requestURI, body)
+	resp, err := a.forwardRawOnce(ctx, candidate.Endpoint, method, adaptedURI, adaptedBody, originalHeader)
+	if shouldRecordProviderFailure(ctx, resp, err) {
+		router.recordFailure(candidate, providerAttemptError(resp, err))
+	} else if err == nil && resp != nil {
+		if resp.Body == nil || resp.Body == http.NoBody || resp.ContentLength == 0 {
+			router.recordSuccess(candidate)
+		} else {
+			resp.Body = newProviderObservedBody(ctx, resp.Body, router, candidate)
+		}
+	} else {
+		router.releaseHalfOpenProbe(candidate)
+	}
+	return resp, err
+}
+
+func providerGroupUnconfiguredResponse(group providerGroup) *http.Response {
+	body := `{"error":{"message":"no model supplier configured for ` + string(group) + `","type":"provider_group_unconfigured"}}`
+	return &http.Response{
+		StatusCode:    http.StatusServiceUnavailable,
+		Status:        "503 Service Unavailable",
+		Header:        http.Header{"Content-Type": {"application/json; charset=utf-8"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
+}
+
+func providerCircuitOpenResponse() *http.Response {
+	body := `{"error":{"message":"active provider circuit is open","type":"provider_circuit_open"}}`
+	return &http.Response{
+		StatusCode:    http.StatusServiceUnavailable,
+		Status:        "503 Service Unavailable",
+		Header:        http.Header{"Content-Type": {"application/json; charset=utf-8"}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
+}
+
+func (a *app) forwardRawOnce(ctx context.Context, ep endpoint, method, requestURI string, body []byte, originalHeader http.Header) (*http.Response, error) {
 	if ep.BaseURL == "" {
 		ep.BaseURL = defaultBaseURL(ep.Provider)
 	}

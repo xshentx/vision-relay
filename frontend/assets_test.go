@@ -39,8 +39,25 @@ func TestClientConfigureActionsAreEmbedded(t *testing.T) {
 			t.Fatalf("client configure action %q is missing", clientID)
 		}
 	}
-	if !strings.Contains(script, `fetch("/api/client/configure"`) || !strings.Contains(script, `body: JSON.stringify({client})`) {
-		t.Fatal("client configure actions are not wired to the shared API request")
+	for _, expected := range []string{
+		`fetch("/api/client/configure"`,
+		`clientConfigureActions.forEach(({button, client, profileGroup, name}) => {`,
+		`configureClient({button, client, profileGroup, name})`,
+		`body: JSON.stringify({client, ...(profile ? {profile_id: profile.id} : {})})`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("client configure action %q is not wired to the selected supplier", expected)
+		}
+	}
+	for _, groupedAction := range []string{
+		`client: "codex", profileGroup: "codex"`,
+		`client: "claude-code", profileGroup: "claude"`,
+		`client: "opencode", profileGroup: "opencode"`,
+		`client: "openclaw", profileGroup: "opencode"`,
+	} {
+		if !strings.Contains(script, groupedAction) {
+			t.Fatalf("client configure supplier mapping %q is missing", groupedAction)
+		}
 	}
 	for _, forbidden := range []string{"sk-local", "localPlaceholderKey", "PROXY_MANAGED"} {
 		if strings.Contains(script, forbidden) {
@@ -56,6 +73,37 @@ func TestClientConfigureActionsAreEmbedded(t *testing.T) {
 		if !strings.Contains(script, multiModelConfig) {
 			t.Fatalf("multi-model client preview %q is missing", multiModelConfig)
 		}
+	}
+}
+
+func TestClientPreviewsUseTheirSelectedSupplierGroup(t *testing.T) {
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		`function textProfileForClient(groupId)`,
+		`const selectedId = activeTextProfileByClient[normalizedGroup] || "";`,
+		`return textProfiles.find((profile) => profile.client === normalizedGroup && profile.id === selectedId) || null;`,
+		`renderForSupplier("codex", [codexConfig]`,
+		`renderForSupplier("claude", [claudeCodeConfig]`,
+		`renderForSupplier("opencode", [opencodeConfig, openclawConfig]`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("grouped client preview behavior %q is missing", expected)
+		}
+	}
+	start := strings.Index(script, "function renderOpenCodeSnippet()")
+	if start < 0 {
+		t.Fatal("client preview renderer is missing")
+	}
+	previewBody := script[start:]
+	if strings.Contains(previewBody, "activeTextProfile()") {
+		t.Fatal("client previews must not fall back to the globally active supplier")
+	}
+	if strings.Contains(script, `textProfiles.find((profile) => profile.client === normalizedGroup)`) {
+		t.Fatal("client previews must not silently replace a missing group selection")
 	}
 }
 
@@ -133,11 +181,18 @@ func TestClientProviderRoutesAreEmbedded(t *testing.T) {
 			t.Fatalf("client provider route switch %q is missing", inputID)
 		}
 	}
-	if got := strings.Count(index, `class="client-route-control"><span>路由</span>`); got != 4 {
-		t.Fatalf("client route label count = %d, want 4", got)
-	}
-	if strings.Contains(index, "供应商路由") {
-		t.Fatal("legacy client route label must not be displayed")
+	for _, expected := range []string{
+		`id="modalProfileClient"`,
+		`<option value="codex">Codex</option>`,
+		`<option value="claude">Claude</option>`,
+		`<option value="opencode">OpenCode</option>`,
+		`data-provider-client-tab="codex"`,
+		`data-provider-client-tab="claude"`,
+		`data-provider-client-tab="opencode"`,
+	} {
+		if !strings.Contains(index, expected) {
+			t.Fatalf("client supplier grouping field %q is missing", expected)
+		}
 	}
 
 	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
@@ -148,17 +203,31 @@ func TestClientProviderRoutesAreEmbedded(t *testing.T) {
 	for _, expected := range []string{
 		`data.client_route_enabled = normalizeClientRoutes(clientRouteEnabled);`,
 		`fetch("/api/client/routes/apply", {method: "POST"})`,
-		`供应商切换成功`,
-		`请重启客户端程序`,
+		`const textProfileClientGroups = [`,
+		`active_text_profile_by_client`,
+		`fetch("/api/client/configure", {`,
+		`body: JSON.stringify({client: group.routeClient, profile_id: profile.id})`,
+		`activeTextProfileByClient[clientGroup] = profile.id;`,
+		`button.dataset.providerClientTab === group.id`,
+		`affectedSelectedTextProfileGroups(previousSelections, changedProfileId)`,
+		`await persistTextProfileChanges("\u5df2\u5220\u9664\u5e76\u4fdd\u5b58\u6587\u672c\u6a21\u578b", affectedGroups);`,
+		`const updatedClients = await applyEnabledClientRoutes();`,
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("client provider route behavior %q is missing", expected)
 		}
 	}
-	if strings.Contains(script, "供应商路由") {
-		t.Fatal("legacy client route wording must not appear in notifications")
+	switchStart := strings.Index(script, "async function switchTextProvider(profile)")
+	switchEnd := strings.Index(script[switchStart:], "async function restoreCodexOfficialMode")
+	if switchStart < 0 || switchEnd < 0 {
+		t.Fatal("supplier switch function is missing")
+	}
+	switchBody := script[switchStart : switchStart+switchEnd]
+	if strings.Contains(switchBody, "applyEnabledClientRoutes") || strings.Contains(switchBody, "/api/client/routes/apply") {
+		t.Fatal("supplier switch must only configure its own client, not all enabled client routes")
 	}
 }
+
 func TestProfileSwitchUsesExplicitButtonAndSupportsPersistentDragSorting(t *testing.T) {
 	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
 	if err != nil {
@@ -225,13 +294,13 @@ func TestClientRouteControlsAlignWithActionButtons(t *testing.T) {
 	}
 }
 
-func TestTextProfileProxyFieldUsesFullModalWidth(t *testing.T) {
+func TestModelProfileProxyFieldUsesFullModalWidth(t *testing.T) {
 	indexRaw, err := fs.ReadFile(FS, "index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(indexRaw), `class="modal-wide-field" id="modalProfileProxyWrap"`) {
-		t.Fatal("text profile proxy field must use the full-width modal field layout")
+		t.Fatal("model profile proxy field must use the full-width modal field layout")
 	}
 
 	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
@@ -255,12 +324,14 @@ func TestTextProfileProxyFieldUsesFullModalWidth(t *testing.T) {
 	}
 	script := string(scriptRaw)
 	for _, expected := range []string{
-		`modalProfileProxyWrap.hidden = !isText;`,
-		`modalProfileProxyURL.value = isText ? profile?.proxy_url || "" : "";`,
-		`proxy_url: modalProfileProxyURL.value`,
+		`modalProfileProxyWrap.hidden = false;`,
+		`modalProfileProxyURL.value = profile?.proxy_url || "";`,
+		`model: modalProfileModel.value,
+      proxy_url: modalProfileProxyURL.value`,
+		`proxy_url: String(profile.proxy_url || "").trim()`,
 	} {
 		if !strings.Contains(script, expected) {
-			t.Fatalf("text profile proxy behavior %q is missing", expected)
+			t.Fatalf("model profile proxy behavior %q is missing", expected)
 		}
 	}
 }
@@ -1078,5 +1149,62 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 	}
 	if strings.Contains(style, ".break-armor-ai-grid") {
 		t.Fatal("removed AI rewrite style is still embedded")
+	}
+}
+
+func TestOpenClawDirectRouteRefreshesWithOpenCodeSupplier(t *testing.T) {
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	expected := `if (groupId === "opencode") return clientRouteEnabled.opencode === true || clientRouteEnabled.openclaw === true;`
+	if !strings.Contains(script, expected) {
+		t.Fatal("OpenClaw-only direct routing is not refreshed after an OpenCode supplier change")
+	}
+}
+
+func TestLegacyTextRoutingMarkerIsPreservedByFrontendSaves(t *testing.T) {
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		`legacyTextRouting = cfg.legacy_text_routing === true;`,
+		`data.legacy_text_routing = legacyTextRouting;`,
+		`async function persistTextProfileChanges(successMessage, affectedGroups) {
+  legacyTextRouting = false;`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("legacy text routing behavior %q is missing", expected)
+		}
+	}
+}
+
+func TestClientOneClickPreviewUsesDetectedCrossPlatformPaths(t *testing.T) {
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		`Object.values(payload?.config_paths || {})`,
+		`function configuredClientPreviewPath(client, fallback)`,
+		`const windowsSandbox = isWindowsClientConfigPath(codexConfigPath)`,
+		`configuredClientPreviewPath("claude-code"`,
+		`configuredClientPreviewPath("claude-cli"`,
+		`# Claude Desktop: ${desktopPath}`,
+		`# Claude CLI: ${cliPath}`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("cross-platform one-click preview behavior %q is missing", expected)
+		}
+	}
+	if strings.Contains(script, `# %USERPROFILE%\\.codex\\config.toml`) {
+		t.Fatal("Codex preview still hard-codes the Windows user profile path")
+	}
+	if strings.Contains(script, `# 当前项目 .codex\\config.toml`) {
+		t.Fatal("one-click preview must not claim that an unrequested project config is written")
 	}
 }

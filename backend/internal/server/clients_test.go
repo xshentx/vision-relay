@@ -87,6 +87,85 @@ base_url = "http://old.invalid/v1"
 	}
 }
 
+func TestConfigureEnabledClientRoutesRestoresSelectedProfilePerClient(t *testing.T) {
+	home := t.TempDir()
+	localAPIEnabled := false
+	codexPath := filepath.Join(home, "clients", "codex.toml")
+	openCodePath := filepath.Join(home, "clients", "opencode.json")
+	claudeDesktopPath := filepath.Join(home, "clients", "claude-desktop.json")
+	claudeCLIPath := filepath.Join(home, "clients", "claude-cli.json")
+	cfg := normalizeSeparateModelProfiles(config{
+		LocalAPIEnabled:     &localAPIEnabled,
+		ActiveTextProfileID: "legacy-global",
+		ActiveTextProfileByClient: map[string]string{
+			textProfileClientCodex:    "codex-selected",
+			textProfileClientClaude:   "claude-selected",
+			textProfileClientOpenCode: "opencode-selected",
+		},
+		TextModelProfiles: []textModelProfile{
+			{ID: "legacy-global", Name: "Legacy global", Client: textProfileClientOpenCode, Provider: "openai", BaseURL: "https://wrong.example/v1", APIKey: "sk-wrong", ModelMappings: []textModelMapping{{Name: "wrong", Model: "wrong"}}},
+			{ID: "codex-selected", Name: "Codex selected", Client: textProfileClientCodex, Provider: "openai", WireAPI: "responses", BaseURL: "https://codex.example/v1", APIKey: "sk-codex", ModelMappings: []textModelMapping{{Name: "codex-alias", Model: "codex-model"}}},
+			{ID: "claude-selected", Name: "Claude selected", Client: textProfileClientClaude, Provider: "anthropic", BaseURL: "https://claude.example/v1", APIKey: "sk-claude", ModelMappings: []textModelMapping{{Name: "claude-alias", Model: "claude-model"}}},
+			{ID: "opencode-selected", Name: "OpenCode selected", Client: textProfileClientOpenCode, Provider: "openai", BaseURL: "https://opencode.example/v1", APIKey: "sk-opencode", ModelMappings: []textModelMapping{{Name: "opencode-alias", Model: "opencode-model"}}},
+		},
+		ClientRouteEnabled: map[string]bool{
+			clientCodex: true, clientClaudeCode: true, clientOpenCode: true,
+		},
+		ClientConfigPaths: map[string]string{
+			clientCodex: codexPath, clientOpenCode: openCodePath,
+			clientClaudeCode: claudeDesktopPath, clientClaudeCLI: claudeCLIPath,
+		},
+	})
+	a := &app{cfg: cfg}
+
+	results, applyErrors := a.configureEnabledClientRoutes("http://127.0.0.1:8787/", home)
+	if len(applyErrors) != 0 || len(results) != 3 {
+		t.Fatalf("route synchronization results = %#v, errors = %#v", results, applyErrors)
+	}
+	for _, result := range results {
+		if !result.DirectUpstream {
+			t.Fatalf("route %q was not restored in direct mode: %#v", result.Client, result)
+		}
+	}
+
+	codexRaw, err := os.ReadFile(codexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codexConfig := string(codexRaw)
+	if !strings.Contains(codexConfig, `base_url = "https://codex.example/v1"`) ||
+		!strings.Contains(codexConfig, `experimental_bearer_token = "sk-codex"`) ||
+		!strings.Contains(codexConfig, `model = "codex-model"`) || strings.Contains(codexConfig, "wrong.example") {
+		t.Fatalf("Codex did not use its selected profile:\n%s", codexConfig)
+	}
+
+	var openCode map[string]any
+	if err := readJSON(openCodePath, &openCode); err != nil {
+		t.Fatal(err)
+	}
+	openCodeProvider := openCode["provider"].(map[string]any)[relayProviderID].(map[string]any)
+	openCodeOptions := openCodeProvider["options"].(map[string]any)
+	if openCodeOptions["baseURL"] != "https://opencode.example/v1" || openCodeOptions["apiKey"] != "sk-opencode" || openCode["model"] != "vision-relay/opencode-model" {
+		t.Fatalf("OpenCode did not use its selected profile: %#v", openCode)
+	}
+
+	var claudeDesktop map[string]any
+	if err := readJSON(claudeDesktopPath, &claudeDesktop); err != nil {
+		t.Fatal(err)
+	}
+	if claudeDesktop["inferenceGatewayBaseUrl"] != "https://claude.example" || claudeDesktop["inferenceGatewayApiKey"] != "sk-claude" {
+		t.Fatalf("Claude Desktop did not use its selected profile: %#v", claudeDesktop)
+	}
+	var claudeCLI map[string]any
+	if err := readJSON(claudeCLIPath, &claudeCLI); err != nil {
+		t.Fatal(err)
+	}
+	claudeEnv := claudeCLI["env"].(map[string]any)
+	if claudeEnv["ANTHROPIC_BASE_URL"] != "https://claude.example/v1" || claudeEnv["ANTHROPIC_AUTH_TOKEN"] != "sk-claude" || claudeEnv["ANTHROPIC_CUSTOM_MODEL_OPTION"] != "claude-model" {
+		t.Fatalf("Claude Code did not use its selected profile: %#v", claudeCLI)
+	}
+}
+
 func TestStartupRouteSyncPreservesCodexOfficialAuthAndSessionHistory(t *testing.T) {
 	home := t.TempDir()
 	codexDir := filepath.Join(home, ".codex")
@@ -841,6 +920,93 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	catalog := string(catalogRaw)
 	if !strings.Contains(catalog, `"slug": "gpt-5.5"`) || !strings.Contains(catalog, `"slug": "gpt-5.4"`) {
 		t.Fatalf("codex model catalog should include hot-switch models:\n%s", catalog)
+	}
+}
+
+func TestHandleClientConfigureWithProfileOnlyUpdatesSelectedClient(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	localAPIEnabled := false
+	codexPath := filepath.Join(home, "clients", "codex.toml")
+	openCodePath := filepath.Join(home, "clients", "opencode.json")
+	claudePath := filepath.Join(home, "clients", "claude.json")
+	if err := os.MkdirAll(filepath.Dir(codexPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	openCodeBefore := []byte(`{"sentinel":"opencode"}`)
+	claudeBefore := []byte(`{"sentinel":"claude"}`)
+	if err := os.WriteFile(openCodePath, openCodeBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(claudePath, claudeBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := normalizeSeparateModelProfiles(config{
+		Addr:            defaultAddr,
+		LocalAPIEnabled: &localAPIEnabled,
+		VisionEnabled:   boolPtr(true),
+		TextModelProfiles: []textModelProfile{
+			{ID: "codex-target", Name: "Codex target", Client: textProfileClientCodex, Provider: "openai", WireAPI: "responses", BaseURL: "https://codex.example/v1", APIKey: "sk-codex", ModelMappings: []textModelMapping{{Name: "gpt-target", Model: "gpt-target"}}},
+			{ID: "claude-current", Name: "Claude current", Client: textProfileClientClaude, Provider: "anthropic", BaseURL: "https://claude.example", ModelMappings: []textModelMapping{{Name: "claude-target", Model: "claude-target"}}},
+			{ID: "opencode-current", Name: "OpenCode current", Client: textProfileClientOpenCode, Provider: "openai", BaseURL: "https://opencode.example/v1", ModelMappings: []textModelMapping{{Name: "open-target", Model: "open-target"}}},
+		},
+		ActiveTextProfileID: "opencode-current",
+		ActiveTextProfileByClient: map[string]string{
+			textProfileClientCodex:    "codex-target",
+			textProfileClientClaude:   "claude-current",
+			textProfileClientOpenCode: "opencode-current",
+		},
+		ClientConfigPaths: map[string]string{
+			clientCodex:      codexPath,
+			clientOpenCode:   openCodePath,
+			clientClaudeCode: claudePath,
+		},
+	})
+	a := &app{
+		cfg:                     cfg,
+		configPath:              filepath.Join(home, "vision-relay.json"),
+		clientProgramController: &recordingClientProgramController{},
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/client/configure", bytes.NewBufferString(`{"client":"codex","profile_id":"codex-target"}`))
+	req.Host = "127.0.0.1:8787"
+	rec := httptest.NewRecorder()
+	a.handleClientConfigure(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bad status %d: %s", rec.Code, rec.Body.String())
+	}
+	codexRaw, err := os.ReadFile(codexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(codexRaw), `base_url = "https://codex.example/v1"`) {
+		t.Fatalf("Codex did not receive the selected supplier:\n%s", codexRaw)
+	}
+	assertFileBytes(t, openCodePath, openCodeBefore)
+	assertFileBytes(t, claudePath, claudeBefore)
+	got := a.currentConfig()
+	if got.ActiveTextProfileByClient[textProfileClientCodex] != "codex-target" ||
+		got.ActiveTextProfileByClient[textProfileClientClaude] != "claude-current" ||
+		got.ActiveTextProfileByClient[textProfileClientOpenCode] != "opencode-current" {
+		t.Fatalf("client supplier selections changed unexpectedly: %#v", got.ActiveTextProfileByClient)
+	}
+}
+
+func TestHandleClientConfigureRejectsProfileFromDifferentClientGroup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	cfg := defaultConfig()
+	cfg.TextModelProfiles = normalizeTextProfiles([]textModelProfile{{
+		ID: "claude-only", Name: "Claude only", Client: textProfileClientClaude, Provider: "anthropic",
+	}})
+	a := &app{cfg: cfg, configPath: filepath.Join(home, "vision-relay.json")}
+	req := httptest.NewRequest(http.MethodPost, "/api/client/configure", bytes.NewBufferString(`{"client":"codex","profile_id":"claude-only"}`))
+	rec := httptest.NewRecorder()
+	a.handleClientConfigure(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1660,5 +1826,130 @@ func TestWriteOpenCodeConfigAdvertisesReasoningModels(t *testing.T) {
 	}
 	if models["grok-4.5-chat-only"].(map[string]any)["reasoning"] != false {
 		t.Fatalf("explicit reasoning override should win over name inference: %#v", models["grok-4.5-chat-only"])
+	}
+}
+
+func TestTextConfigForClientRouteRejectsUnconfiguredGroup(t *testing.T) {
+	cfg := providerRouterTestConfig([]textModelProfile{{
+		ID: "open-selected", Client: textProfileClientOpenCode, Provider: "openai", WireAPI: "chat_completions", BaseURL: "https://open.example/v1",
+	}}, map[string]string{textProfileClientOpenCode: "open-selected"})
+	if _, err := textConfigForClientRoute(cfg, clientCodex); err == nil || !strings.Contains(err.Error(), "no model supplier configured for codex") {
+		t.Fatalf("Codex route must reject another group's supplier, err=%v", err)
+	}
+	selected, err := textConfigForClientRoute(cfg, clientOpenCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.ActiveTextProfileID != "open-selected" || selected.TextBaseURL != "https://open.example/v1" {
+		t.Fatalf("OpenCode selected wrong supplier: %#v", selected)
+	}
+}
+
+func TestConfigureClientRouteUsesSelectedProfileWithoutExplicitProfileID(t *testing.T) {
+	home := t.TempDir()
+	localAPIEnabled := false
+	openCodePath := filepath.Join(home, "opencode.json")
+	cfg := normalizeSeparateModelProfiles(config{
+		LocalAPIEnabled:     &localAPIEnabled,
+		ActiveTextProfileID: "wrong-global",
+		ActiveTextProfileByClient: map[string]string{
+			textProfileClientOpenCode: "opencode-selected",
+		},
+		TextModelProfiles: []textModelProfile{
+			{ID: "wrong-global", Client: textProfileClientCodex, Provider: "openai", WireAPI: "responses", BaseURL: "https://wrong.example/v1", APIKey: "sk-wrong", ModelMappings: []textModelMapping{{Name: "wrong", Model: "wrong"}}},
+			{ID: "opencode-selected", Client: textProfileClientOpenCode, Provider: "openai", BaseURL: "https://selected.example/v1", APIKey: "sk-selected", ModelMappings: []textModelMapping{{Name: "selected", Model: "selected"}}},
+		},
+		ClientConfigPaths: map[string]string{clientOpenCode: openCodePath},
+	})
+	a := &app{cfg: cfg}
+
+	if _, err := a.configureClientRoute(clientOpenCode, "", "http://127.0.0.1:8787", home); err != nil {
+		t.Fatal(err)
+	}
+	var openCode map[string]any
+	if err := readJSON(openCodePath, &openCode); err != nil {
+		t.Fatal(err)
+	}
+	provider := openCode["provider"].(map[string]any)[relayProviderID].(map[string]any)
+	options := provider["options"].(map[string]any)
+	if options["baseURL"] != "https://selected.example/v1" || options["apiKey"] != "sk-selected" || openCode["model"] != "vision-relay/selected" {
+		t.Fatalf("one-click route did not use the selected OpenCode profile: %#v", openCode)
+	}
+}
+
+func TestWriteCodexConfigOnDarwinDoesNotAddWindowsSandbox(t *testing.T) {
+	home := t.TempDir()
+	userPath := filepath.Join(home, ".codex", "config.toml")
+	projectDir := filepath.Join(home, "project")
+	ctx := clientConfigContext{
+		HomeDir:    home,
+		ProjectDir: projectDir,
+		ConfigPath: userPath,
+		Origin:     "http://127.0.0.1:8787",
+		Model:      "test-model",
+		GOOS:       "darwin",
+	}
+	projectPath, err := writeCodexConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{userPath, projectPath} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "[windows]") || strings.Contains(string(raw), "sandbox =") {
+			t.Fatalf("darwin Codex config contains Windows-only sandbox settings at %s:\n%s", path, raw)
+		}
+	}
+
+	existing := []string{"[windows]", "sandbox = \"elevated\""}
+	if got := upsertCodexPlatformSettings(existing, "darwin"); strings.Join(got, "\n") != strings.Join(existing, "\n") {
+		t.Fatalf("darwin rewrite changed an existing shared Windows section: %#v", got)
+	}
+}
+
+func TestClaudeOneClickReturnsDesktopAndCLIConfigPaths(t *testing.T) {
+	home := t.TempDir()
+	desktopPath := filepath.Join(home, "Library", "Application Support", "Claude-3p", "configLibrary", "vision-relay.json")
+	cliPath := filepath.Join(home, ".claude", "settings.json")
+	cfg := defaultConfig()
+	cfg.ClientConfigPaths = map[string]string{
+		clientClaudeCode: desktopPath,
+		clientClaudeCLI:  cliPath,
+	}
+	a := &app{cfg: cfg}
+	result, err := a.configureClientRoute(clientClaudeCode, "", "http://127.0.0.1:8787", home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ConfigPaths[clientClaudeCode] != desktopPath || result.ConfigPaths[clientClaudeCLI] != cliPath {
+		t.Fatalf("Claude one-click config paths = %#v", result.ConfigPaths)
+	}
+	for _, path := range []string{desktopPath, cliPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("Claude one-click did not write %s: %v", path, err)
+		}
+	}
+}
+
+func TestWriteClaudeCLIConfigUsesDarwinCLIPath(t *testing.T) {
+	home := t.TempDir()
+	clearClientPathEnvironment(t)
+	path, err := writeClaudeCodeConfig(clientConfigContext{
+		HomeDir: home,
+		Origin:  "http://127.0.0.1:8787",
+		Model:   "test-model",
+		GOOS:    "darwin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(home, ".claude", "settings.json")
+	if path != want {
+		t.Fatalf("darwin Claude CLI config path = %q, want %q", path, want)
+	}
+	if strings.Contains(path, "Claude-3p") {
+		t.Fatalf("Claude CLI config was written into the Desktop profile library: %s", path)
 	}
 }

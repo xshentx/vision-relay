@@ -237,7 +237,7 @@ func (a *app) logCompletedRequest(r *http.Request, body, responseBody []byte, st
 		FirstTokenMS: firstTokenMS,
 		RequestMode:  requestStreamMode(r, requestPayload),
 	}
-	log.UpstreamName, log.UpstreamProvider = a.upstreamLogIdentity()
+	log.UpstreamName, log.UpstreamProvider = a.upstreamLogIdentityForRequest(r)
 	if requestPayload != nil {
 		log.Model = a.effectiveRequestLogModel(r, requestPayload)
 	}
@@ -309,7 +309,19 @@ func inspectSSELogBody(body []byte) sseLogState {
 }
 
 func (a *app) upstreamLogIdentity() (string, string) {
-	cfg := a.currentConfig()
+	return upstreamLogIdentityFromConfig(a.currentConfig())
+}
+
+func (a *app) upstreamLogIdentityForRequest(r *http.Request) (string, string) {
+	if r != nil {
+		if selection, ok := providerRouteTraceFromContext(r.Context()).get(); ok {
+			return firstString(selection.Name, "\u5f53\u524d\u6587\u672c\u4e0a\u6e38"), normalizeProvider(selection.Provider)
+		}
+	}
+	return upstreamLogIdentityFromConfig(a.textConfigForRequest(r))
+}
+
+func upstreamLogIdentityFromConfig(cfg config) (string, string) {
 	for _, profile := range cfg.TextModelProfiles {
 		if profile.ID == cfg.ActiveTextProfileID {
 			return firstString(profile.Name, "未命名文本模型"), normalizeProvider(profile.Provider)
@@ -399,7 +411,7 @@ func (a *app) effectiveRequestLogModel(r *http.Request, payload map[string]any) 
 		isGeminiGeneratePath(r.URL.Path),
 		isOllamaChatPath(r.URL.Path),
 		isOllamaGeneratePath(r.URL.Path):
-		if model := effectiveTextModel(a.currentConfig(), requested); model != "" {
+		if model := effectiveTextModel(a.textConfigForRequest(r), requested); model != "" {
 			return model
 		}
 	}
@@ -489,59 +501,148 @@ func statusText(status int) string {
 	return "HTTP " + strconv.Itoa(status)
 }
 
+// tokenUsageSnapshot is deliberately a snapshot rather than an accumulator.
+// A streaming provider may repeat the same usage object in several SSE events;
+// adding each object is therefore incorrect. Protocol-specific collectors use
+// the authoritative final snapshot, while envelope fields are merged without
+// ever summing duplicated counters.
+type tokenUsageSnapshot struct {
+	Input            int64
+	Output           int64
+	Total            int64
+	CacheRead        int64
+	CacheWrite       int64
+	HasInput         bool
+	HasOutput        bool
+	HasTotal         bool
+	HasCacheRead     bool
+	HasCacheWrite    bool
+	HasSeparateCache bool
+}
+
 func fillUsageFromPayload(log *requestLog, payload map[string]any) {
-	var separateCacheTokens int64
 	if log.Model == "" {
 		log.Model = firstString(payload["model"])
 	}
+	applyTokenUsageSnapshot(log, collectTokenUsage(payload))
+}
+
+func collectTokenUsage(payload map[string]any) tokenUsageSnapshot {
+	var usage tokenUsageSnapshot
 	if response, _ := payload["response"].(map[string]any); response != nil {
-		fillUsageFromPayload(log, response)
+		usage = mergeTokenUsageSnapshots(usage, collectTokenUsage(response))
 	}
-	if usage, _ := payload["usage"].(map[string]any); usage != nil {
-		setIfNonZero(&log.InputTokens, firstInt64(usage["prompt_tokens"], usage["input_tokens"]))
-		setIfNonZero(&log.OutputTokens, firstInt64(usage["completion_tokens"], usage["output_tokens"]))
-		setIfNonZero(&log.TotalTokens, firstInt64(usage["total_tokens"]))
-		if details, _ := usage["prompt_tokens_details"].(map[string]any); details != nil {
-			log.CacheHitTokens += firstInt64(details["cached_tokens"], details["cache_read_tokens"])
-			log.CacheWriteTokens += firstInt64(details["cache_creation_tokens"], details["cache_write_tokens"])
+	if raw, _ := payload["usage"].(map[string]any); raw != nil {
+		input, hasInput := firstPresentInt64(raw["prompt_tokens"], raw["input_tokens"])
+		output, hasOutput := firstPresentInt64(raw["completion_tokens"], raw["output_tokens"])
+		total, hasTotal := firstPresentInt64(raw["total_tokens"])
+		current := tokenUsageSnapshot{
+			Input: input, Output: output, Total: total,
+			HasInput: hasInput, HasOutput: hasOutput, HasTotal: hasTotal,
 		}
-		if details, _ := usage["input_tokens_details"].(map[string]any); details != nil {
-			log.CacheHitTokens += firstInt64(details["cached_tokens"], details["cache_read_tokens"])
-			log.CacheWriteTokens += firstInt64(details["cache_creation_tokens"], details["cache_write_tokens"])
+		// Prefer top-level cache fields, then one nested details object. Some
+		// relays expose both aliases with the same value; they describe one
+		// cache read and must never be added together. Presence wins over value,
+		// so an explicit zero is not replaced by a lower-priority alias.
+		inputDetails, _ := raw["input_tokens_details"].(map[string]any)
+		promptDetails, _ := raw["prompt_tokens_details"].(map[string]any)
+		current.CacheRead, current.HasCacheRead = firstPresentInt64(
+			raw["cache_read_input_tokens"], raw["cache_read_tokens"],
+			inputDetails["cached_tokens"], inputDetails["cache_read_tokens"],
+			promptDetails["cached_tokens"], promptDetails["cache_read_tokens"],
+		)
+		current.CacheWrite, current.HasCacheWrite = firstPresentInt64(
+			raw["cache_creation_input_tokens"], raw["cache_creation_tokens"],
+			raw["cache_write_input_tokens"], raw["cache_write_tokens"],
+			inputDetails["cache_creation_tokens"], inputDetails["cache_write_tokens"],
+			promptDetails["cache_creation_tokens"], promptDetails["cache_write_tokens"],
+		)
+		current.HasSeparateCache = hasAnyTokenField(raw,
+			"cache_read_input_tokens", "cache_read_tokens",
+			"cache_creation_input_tokens", "cache_creation_tokens",
+			"cache_write_input_tokens", "cache_write_tokens",
+		)
+		usage = mergeTokenUsageSnapshots(usage, current)
+	}
+	if raw, _ := payload["usageMetadata"].(map[string]any); raw != nil {
+		input, hasInput := firstPresentInt64(raw["promptTokenCount"])
+		total, hasTotal := firstPresentInt64(raw["totalTokenCount"])
+		output, hasOutput := firstPresentInt64(raw["candidatesTokenCount"])
+		// Gemini's totalTokenCount includes candidates and thoughts. Match
+		// cc-switch by deriving output from total - input when total is present.
+		if hasTotal && hasInput {
+			output = maxInt64(total-input, 0)
+			hasOutput = true
 		}
-		separateCacheReadTokens := firstInt64(usage["cache_read_input_tokens"], usage["cache_read_tokens"])
-		separateCacheWriteTokens := firstInt64(usage["cache_creation_input_tokens"], usage["cache_creation_tokens"], usage["cache_write_input_tokens"], usage["cache_write_tokens"])
-		log.CacheHitTokens += separateCacheReadTokens
-		log.CacheWriteTokens += separateCacheWriteTokens
-		separateCacheTokens += separateCacheReadTokens + separateCacheWriteTokens
+		cacheRead, hasCacheRead := firstPresentInt64(raw["cachedContentTokenCount"])
+		usage = mergeTokenUsageSnapshots(usage, tokenUsageSnapshot{
+			Input: input, Output: output, Total: total, CacheRead: cacheRead,
+			HasInput: hasInput, HasOutput: hasOutput, HasTotal: hasTotal,
+			HasCacheRead: hasCacheRead,
+		})
 	}
-	if usage, _ := payload["usageMetadata"].(map[string]any); usage != nil {
-		setIfNonZero(&log.InputTokens, firstInt64(usage["promptTokenCount"]))
-		setIfNonZero(&log.OutputTokens, firstInt64(usage["candidatesTokenCount"]))
-		setIfNonZero(&log.TotalTokens, firstInt64(usage["totalTokenCount"]))
-		setIfNonZero(&log.CacheHitTokens, firstInt64(usage["cachedContentTokenCount"]))
+	if input, ok := firstPresentInt64(payload["prompt_eval_count"]); ok {
+		if !usage.HasInput || input > usage.Input {
+			usage.Input, usage.HasInput = input, true
+		}
 	}
-	if usage, _ := payload["usage"].(map[string]any); usage != nil {
-		setIfNonZero(&log.InputTokens, firstInt64(usage["input_tokens"]))
-		setIfNonZero(&log.OutputTokens, firstInt64(usage["output_tokens"]))
+	if output, ok := firstPresentInt64(payload["eval_count"]); ok {
+		if !usage.HasOutput || output > usage.Output {
+			usage.Output, usage.HasOutput = output, true
+		}
 	}
-	setIfNonZero(&log.InputTokens, firstInt64(payload["prompt_eval_count"]))
-	setIfNonZero(&log.OutputTokens, firstInt64(payload["eval_count"]))
-	if log.TotalTokens == 0 {
-		// Anthropic-style top-level cache fields are separate from input_tokens.
-		// Cached-token details nested under OpenAI-compatible input/prompt usage
-		// are already included in input_tokens and must not be counted twice.
-		log.TotalTokens = log.InputTokens + log.OutputTokens + separateCacheTokens
+	return usage
+}
+
+func hasAnyTokenField(payload map[string]any, fields ...string) bool {
+	for _, field := range fields {
+		if _, ok := payload[field]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeTokenUsageSnapshots(left, right tokenUsageSnapshot) tokenUsageSnapshot {
+	return tokenUsageSnapshot{
+		Input:            maxInt64(left.Input, right.Input),
+		Output:           maxInt64(left.Output, right.Output),
+		Total:            maxInt64(left.Total, right.Total),
+		CacheRead:        maxInt64(left.CacheRead, right.CacheRead),
+		CacheWrite:       maxInt64(left.CacheWrite, right.CacheWrite),
+		HasInput:         left.HasInput || right.HasInput,
+		HasOutput:        left.HasOutput || right.HasOutput,
+		HasTotal:         left.HasTotal || right.HasTotal,
+		HasCacheRead:     left.HasCacheRead || right.HasCacheRead,
+		HasCacheWrite:    left.HasCacheWrite || right.HasCacheWrite,
+		HasSeparateCache: left.HasSeparateCache || right.HasSeparateCache,
 	}
 }
 
-func setIfNonZero(target *int64, value int64) {
-	if value != 0 {
-		*target = value
+func applyTokenUsageSnapshot(log *requestLog, usage tokenUsageSnapshot) {
+	log.InputTokens = maxInt64(log.InputTokens, usage.Input)
+	log.OutputTokens = maxInt64(log.OutputTokens, usage.Output)
+	log.TotalTokens = maxInt64(log.TotalTokens, usage.Total)
+	log.CacheHitTokens = maxInt64(log.CacheHitTokens, usage.CacheRead)
+	log.CacheWriteTokens = maxInt64(log.CacheWriteTokens, usage.CacheWrite)
+	if log.TotalTokens == 0 {
+		// OpenAI-compatible input_tokens already includes cache reads, even when
+		// a provider also exposes Anthropic-style cache_* aliases. Anthropic's
+		// cache counters are separate billable input and are included in total.
+		provider := strings.TrimSpace(log.UpstreamProvider)
+		// Anthropic Messages responses use fresh input plus separate cache
+		// counters, including responses synthesized from an OpenAI upstream.
+		separate := usage.HasSeparateCache &&
+			(log.Protocol == "Anthropic Messages" || provider == "" || normalizeProvider(provider) != "openai")
+		log.TotalTokens = log.InputTokens + log.OutputTokens
+		if separate {
+			log.TotalTokens += log.CacheHitTokens + log.CacheWriteTokens
+		}
 	}
 }
 
 func fillUsageFromSSE(log *requestLog, body []byte) {
+	events := make([]map[string]any, 0)
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data:") {
@@ -555,18 +656,98 @@ func fillUsageFromSSE(log *requestLog, body []byte) {
 		if err := json.Unmarshal([]byte(data), &payload); err != nil {
 			continue
 		}
+		events = append(events, payload)
 		if log.Model == "" {
 			log.Model = firstString(payload["model"])
-		}
-		before := log.TotalTokens
-		fillUsageFromPayload(log, payload)
-		if log.TotalTokens != 0 && log.TotalTokens != before {
-			continue
+			if response, _ := payload["response"].(map[string]any); response != nil {
+				log.Model = firstString(response["model"], log.Model)
+			}
 		}
 		if errText := errorTextFromPayload(payload); errText != "" {
 			log.Error = errText
 		}
 	}
+
+	// Responses API has an authoritative terminal usage object. Ignore earlier
+	// deltas so an implementation that repeats usage cannot inflate the result.
+	for i := len(events) - 1; i >= 0; i-- {
+		typeName := strings.ToLower(firstString(events[i]["type"]))
+		if typeName == "response.completed" || typeName == "response.done" || typeName == "response.incomplete" {
+			fillUsageFromPayload(log, events[i])
+			return
+		}
+	}
+
+	// Anthropic splits usage between message_start and message_delta. Match
+	// cc-switch's pair-aware merge: a later smaller input is the fresh-input
+	// correction, and its cache counters must be adopted as a pair instead of
+	// being max-merged with the initial context usage.
+	var anthropic tokenUsageSnapshot
+	seenAnthropic := false
+	inputFromDelta := false
+	for _, event := range events {
+		typeName := strings.ToLower(firstString(event["type"]))
+		switch typeName {
+		case "message_start":
+			seenAnthropic = true
+			message, _ := event["message"].(map[string]any)
+			if message != nil {
+				if log.Model == "" {
+					log.Model = firstString(message["model"])
+				}
+				anthropic = collectTokenUsage(message)
+			}
+		case "message_delta":
+			seenAnthropic = true
+			current := collectTokenUsage(event)
+			if current.HasOutput {
+				anthropic.Output, anthropic.HasOutput = current.Output, true
+			}
+			if current.HasTotal {
+				anthropic.Total, anthropic.HasTotal = current.Total, true
+			}
+			if current.HasInput {
+				input := current.Input
+				shouldUseDelta := !anthropic.HasInput || input < anthropic.Input ||
+					(inputFromDelta && input <= anthropic.Input)
+				if shouldUseDelta {
+					anthropic.Input, anthropic.HasInput = input, true
+					inputFromDelta = true
+					if current.HasCacheRead {
+						anthropic.CacheRead, anthropic.HasCacheRead = current.CacheRead, true
+					}
+					if current.HasCacheWrite {
+						anthropic.CacheWrite, anthropic.HasCacheWrite = current.CacheWrite, true
+					}
+				}
+			}
+			// Some compatible providers only attach cache fields to the delta.
+			// Keep them as a best-effort fallback when the start event had none.
+			if anthropic.CacheRead == 0 && current.HasCacheRead {
+				anthropic.CacheRead, anthropic.HasCacheRead = current.CacheRead, true
+			}
+			if anthropic.CacheWrite == 0 && current.HasCacheWrite {
+				anthropic.CacheWrite, anthropic.HasCacheWrite = current.CacheWrite, true
+			}
+			anthropic.HasSeparateCache = anthropic.HasSeparateCache || current.HasSeparateCache
+		}
+	}
+	if seenAnthropic {
+		applyTokenUsageSnapshot(log, anthropic)
+		return
+	}
+
+	// OpenAI Chat, Gemini and Ollama providers emit a cumulative usage object
+	// in their final usage-bearing event. Use that final snapshot, matching
+	// cc-switch, instead of taking a per-field maximum across unrelated
+	// intermediate snapshots.
+	for i := len(events) - 1; i >= 0; i-- {
+		if hasTokenUsagePayload(events[i]) {
+			applyTokenUsageSnapshot(log, collectTokenUsage(events[i]))
+			return
+		}
+	}
+	applyTokenUsageSnapshot(log, tokenUsageSnapshot{})
 }
 
 func ensureStreamUsage(payload map[string]any) {
@@ -584,13 +765,37 @@ func ensureStreamUsage(payload map[string]any) {
 	}
 }
 
-func firstInt64(values ...any) int64 {
-	for _, value := range values {
-		if n := numberAsInt64(value); n != 0 {
-			return n
+func hasTokenUsagePayload(payload map[string]any) bool {
+	if _, ok := payload["usage"].(map[string]any); ok {
+		return true
+	}
+	if _, ok := payload["usageMetadata"].(map[string]any); ok {
+		return true
+	}
+	for _, key := range []string{"prompt_eval_count", "eval_count"} {
+		if _, ok := firstPresentInt64(payload[key]); ok {
+			return true
 		}
 	}
-	return 0
+	return false
+}
+
+func firstPresentInt64(values ...any) (int64, bool) {
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		switch value.(type) {
+		case int, int64, float64, json.Number:
+			return numberAsInt64(value), true
+		}
+	}
+	return 0, false
+}
+
+func firstInt64(values ...any) int64 {
+	value, _ := firstPresentInt64(values...)
+	return value
 }
 
 func firstInt64FromSlice(values []int64) int64 {
