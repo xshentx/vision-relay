@@ -15,12 +15,18 @@ import (
 var breakArmorTemplatesMu sync.RWMutex
 
 type breakArmorSavedTemplate struct {
-	ID        string    `json:"id"`
-	Client    string    `json:"client"`
-	Name      string    `json:"name"`
-	Prompt    string    `json:"prompt"`
-	Builtin   bool      `json:"builtin"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	Client         string    `json:"client"`
+	Name           string    `json:"name"`
+	Description    string    `json:"description,omitempty"`
+	Prompt         string    `json:"prompt"`
+	Builtin        bool      `json:"builtin"`
+	Bundled        bool      `json:"bundled,omitempty"`
+	ReadOnly       bool      `json:"read_only,omitempty"`
+	Source         string    `json:"source,omitempty"`
+	SourceURL      string    `json:"source_url,omitempty"`
+	SourceRevision string    `json:"source_revision,omitempty"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 type breakArmorTemplateStore struct {
 	Version   int                       `json:"version"`
@@ -38,7 +44,11 @@ func breakArmorTemplatesPath(home string) string {
 	return filepath.Join(home, ".vision-relay", "break-armor", "templates.json")
 }
 func builtinBreakArmorTemplates(client string) []breakArmorSavedTemplate {
-	return []breakArmorSavedTemplate{{ID: "v5", Client: client, Name: "v5 稳定版", Prompt: strings.TrimSpace(breakArmorV5Prompt), Builtin: true}, {ID: "v35", Client: client, Name: "v35 特殊任务版", Prompt: strings.TrimSpace(breakArmorV35Prompt), Builtin: true}}
+	items := []breakArmorSavedTemplate{
+		{ID: "v5", Client: client, Name: "v5 稳定版", Prompt: strings.TrimSpace(breakArmorV5Prompt), Builtin: true, Bundled: true, ReadOnly: true},
+		{ID: "v35", Client: client, Name: "v35 特殊任务版", Prompt: strings.TrimSpace(breakArmorV35Prompt), Builtin: true, Bundled: true, ReadOnly: true},
+	}
+	return append(items, bundledBreakArmorCodexXTemplates(client)...)
 }
 func loadBreakArmorTemplatesUnlocked(home string) (breakArmorTemplateStore, error) {
 	raw, err := os.ReadFile(breakArmorTemplatesPath(home))
@@ -115,14 +125,34 @@ func listBreakArmorTemplates(home, client string) ([]breakArmorSavedTemplate, er
 		return nil, err
 	}
 	out := builtinBreakArmorTemplates(client)
+	builtinByID := make(map[string]int, len(out))
+	for i, item := range out {
+		builtinByID[item.ID] = i
+	}
 	for _, item := range store.Templates {
-		if item.Client == client {
-			out = append(out, item)
+		if item.Client != client {
+			continue
 		}
+		if index, ok := builtinByID[item.ID]; ok && item.Source == breakArmorCodexXSource {
+			bundled := out[index]
+			item.Name = bundled.Name
+			item.Builtin = true
+			item.Bundled = false
+			item.ReadOnly = true
+			if item.Description == "" {
+				item.Description = bundled.Description
+			}
+			out[index] = item
+			continue
+		}
+		out = append(out, item)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Builtin != out[j].Builtin {
 			return out[i].Builtin
+		}
+		if out[i].Builtin {
+			return false
 		}
 		return out[i].UpdatedAt.After(out[j].UpdatedAt)
 	})
@@ -143,7 +173,7 @@ func upsertBreakArmorTemplate(home string, req breakArmorTemplateRequest) (break
 		return breakArmorSavedTemplate{}, errors.New("模板内容不能超过 128 KB")
 	}
 	id := strings.TrimSpace(req.ID)
-	if id == "" || id == "v5" || id == "v35" {
+	if id == "" || isReadOnlyBreakArmorTemplateID(id) {
 		id = time.Now().Format("tpl-20060102-150405.000000000")
 	}
 	breakArmorTemplatesMu.Lock()
@@ -170,7 +200,7 @@ func upsertBreakArmorTemplate(home string, req breakArmorTemplateRequest) (break
 func deleteBreakArmorTemplate(home string, req breakArmorTemplateRequest) error {
 	id := strings.TrimSpace(req.ID)
 	client := normalizeBreakArmorClient(req.Client)
-	if id == "" || id == "v5" || id == "v35" {
+	if id == "" || isReadOnlyBreakArmorTemplateID(id) {
 		return errors.New("请选择可删除的自定义模板")
 	}
 	breakArmorTemplatesMu.Lock()
@@ -221,6 +251,25 @@ func (a *app) handleBreakArmorTemplates(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			writeJSON(w, 200, map[string]any{"success": true})
+			return
+		}
+		if strings.EqualFold(req.Action, "sync_codex_x") {
+			client := normalizeBreakArmorClient(req.Client)
+			if client == "" {
+				writeError(w, http.StatusBadRequest, errors.New("请选择要同步模板的客户端"))
+				return
+			}
+			httpClient, clientErr := a.upstreamHTTPClient(a.currentConfig().ProxyURL)
+			if clientErr != nil {
+				writeError(w, http.StatusBadRequest, clientErr)
+				return
+			}
+			items, syncErr := syncBreakArmorCodexXTemplates(r.Context(), httpClient, home, client)
+			if syncErr != nil {
+				writeError(w, http.StatusBadGateway, syncErr)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"success": true, "synced": len(items), "templates": items})
 			return
 		}
 		item, err := upsertBreakArmorTemplate(home, req)

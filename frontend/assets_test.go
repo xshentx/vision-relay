@@ -1090,6 +1090,7 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 		`data-break-armor-mode="codex"`,
 		`id="breakArmorSessionList"`,
 		`id="breakArmorTemplateList"`,
+		`id="syncCodexXTemplates"`,
 		">\u4e00\u952e\u7834\u7532 Codex</button>",
 		">\u4e00\u952e\u7834\u7532 Claude</button>",
 		">\u4e00\u952e\u7834\u7532 OpenCode</button>",
@@ -1120,6 +1121,13 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 		`/api/break-armor/session/backups`,
 		`/api/break-armor/session/restore`,
 		`/api/break-armor/templates`,
+		`sync_codex_x`,
+		`item.source === "codex-x"`,
+		`item.bundled`,
+		`item.description ||`,
+		"Codex-X · 离线内置",
+		"Codex-X · GitHub 更新",
+		"Codex-X 模板已是最新版本",
 		`injection_mode`,
 		`[data-break-armor-client]`,
 		`[data-break-armor-panel]`,
@@ -1142,7 +1150,7 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	style := string(styleRaw)
-	for _, expected := range []string{".break-armor-page", ".break-armor-test-badge", ".nav-test-badge", ".break-armor-tabs", ".break-armor-flow", ".break-armor-code", ".break-armor-function-tabs", ".break-armor-session-grid", ".break-armor-template-grid", ".break-armor-backup-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end;", ".break-armor-backup-row > label { min-width:0; margin:0; }", ".break-armor-backup-row > label > .vr-component-select { margin-bottom:0; }", ".break-armor-backup-row > button { min-height:44px; margin:0; }", ".break-armor-mode-note { border-color:#bae6fd; color:#36556f; background:#f0f9ff; font-size:13px; font-weight:600; }", ".break-armor-mode-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; font-weight:800; }"} {
+	for _, expected := range []string{".break-armor-page", ".break-armor-test-badge", ".nav-test-badge", ".break-armor-tabs", ".break-armor-flow", ".break-armor-code", ".break-armor-function-tabs", ".break-armor-session-grid", ".break-armor-template-grid", ".break-armor-template-source-note", ".break-armor-template-library-actions", ".break-armor-backup-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end;", ".break-armor-backup-row > label { min-width:0; margin:0; }", ".break-armor-backup-row > label > .vr-component-select { margin-bottom:0; }", ".break-armor-backup-row > button { min-height:44px; margin:0; }", ".break-armor-mode-note { border-color:#bae6fd; color:#36556f; background:#f0f9ff; font-size:13px; font-weight:600; }", ".break-armor-mode-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; font-weight:800; }"} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("break armor style %q is missing", expected)
 		}

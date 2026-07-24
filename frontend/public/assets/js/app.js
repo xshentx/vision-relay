@@ -1,4 +1,4 @@
-﻿const form = document.querySelector("#configForm");
+const form = document.querySelector("#configForm");
 const statusEl = document.querySelector("#status");
 const toast = document.querySelector("#toast");
 const serviceState = document.querySelector("#serviceState");
@@ -759,10 +759,14 @@ function resetBreakArmorTemplateEditor() {
 function renderBreakArmorTemplates() {
   if (!breakArmorTemplateList) return;
   document.querySelector("#breakArmorTemplateSummary").textContent = `${breakArmorTemplates.length} 个模板`;
-  breakArmorTemplateList.innerHTML = breakArmorTemplates.map((item) => `
+  breakArmorTemplateList.innerHTML = breakArmorTemplates.map((item) => {
+    const badge = item.source === "codex-x" ? (item.bundled ? "Codex-X · 离线内置" : "Codex-X · GitHub 更新") : (item.builtin ? "内置" : "自定义");
+    const summary = item.description || (item.prompt || "").slice(0, 110);
+    return `
     <button class="break-armor-template-item${breakArmorSelectedTemplate?.id === item.id ? " active" : ""}" type="button" data-break-armor-template-id="${escapeHTML(item.id)}">
-      <span><b>${escapeHTML(item.name)}</b>${item.builtin ? "<em>内置</em>" : "<em>自定义</em>"}</span><small>${escapeHTML((item.prompt || "").slice(0, 110))}</small>
-    </button>`).join("");
+      <span><b>${escapeHTML(item.name)}</b><em>${badge}</em></span><small>${escapeHTML(summary)}</small>
+    </button>`;
+  }).join("");
   breakArmorTemplateList.querySelectorAll("[data-break-armor-template-id]").forEach((button) => button.addEventListener("click", () => selectBreakArmorTemplate(button.dataset.breakArmorTemplateId)));
 }
 
@@ -773,10 +777,11 @@ function selectBreakArmorTemplate(id) {
   document.querySelector("#breakArmorTemplateID").value = breakArmorSelectedTemplate.id;
   document.querySelector("#breakArmorTemplateName").value = breakArmorSelectedTemplate.name || "";
   document.querySelector("#breakArmorTemplatePrompt").value = breakArmorSelectedTemplate.prompt || "";
-  document.querySelector("#breakArmorTemplateName").disabled = breakArmorSelectedTemplate.builtin === true;
-  document.querySelector("#breakArmorTemplatePrompt").disabled = breakArmorSelectedTemplate.builtin === true;
-  document.querySelector("#saveBreakArmorTemplate").disabled = breakArmorSelectedTemplate.builtin === true;
-  document.querySelector("#deleteBreakArmorTemplate").disabled = breakArmorSelectedTemplate.builtin === true;
+  const readOnly = breakArmorSelectedTemplate.builtin === true || breakArmorSelectedTemplate.read_only === true || Boolean(breakArmorSelectedTemplate.source);
+  document.querySelector("#breakArmorTemplateName").disabled = readOnly;
+  document.querySelector("#breakArmorTemplatePrompt").disabled = readOnly;
+  document.querySelector("#saveBreakArmorTemplate").disabled = readOnly;
+  document.querySelector("#deleteBreakArmorTemplate").disabled = readOnly;
 }
 
 async function loadBreakArmorTemplates() {
@@ -789,6 +794,24 @@ async function loadBreakArmorTemplates() {
   renderBreakArmorTemplates();
   if (breakArmorSelectedTemplate) selectBreakArmorTemplate(breakArmorSelectedTemplate.id); else resetBreakArmorTemplateEditor();
   return breakArmorTemplates;
+}
+
+async function syncBreakArmorCodexXTemplates(button) {
+  const client = document.querySelector("#breakArmorTemplateClient").value;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "同步中...";
+  try {
+    const res = await fetch("/api/break-armor/templates", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({action: "sync_codex_x", client})});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const payload = await res.json();
+    await loadBreakArmorTemplates();
+    const synced = Number(payload.synced || 0);
+    showToast(synced > 0 ? `已从 GitHub 更新 ${synced} 个 Codex-X 模板` : "Codex-X 模板已是最新版本", "success");
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
 }
 
 async function saveBreakArmorTemplate(button) {
@@ -853,6 +876,7 @@ document.querySelector("#patchBreakArmorSession")?.addEventListener("click", (ev
 breakArmorBackupSelect?.addEventListener("change", () => { const button = document.querySelector("#restoreBreakArmorSession"); if (button) button.disabled = !breakArmorBackupSelect.value; });
 document.querySelector("#restoreBreakArmorSession")?.addEventListener("click", (event) => restoreBreakArmorSession(event.currentTarget).catch((err) => showToast(`恢复失败：${err.message || err}`, "error")));
 document.querySelector("#breakArmorTemplateClient")?.addEventListener("change", () => { resetBreakArmorTemplateEditor(); loadBreakArmorTemplates().catch((err) => showToast(`读取模板失败：${err.message || err}`, "error")); });
+document.querySelector("#syncCodexXTemplates")?.addEventListener("click", (event) => syncBreakArmorCodexXTemplates(event.currentTarget).catch((err) => showToast(`同步 Codex-X 失败：${err.message || err}`, "error")));
 document.querySelector("#newBreakArmorTemplate")?.addEventListener("click", resetBreakArmorTemplateEditor);
 document.querySelector("#saveBreakArmorTemplate")?.addEventListener("click", (event) => saveBreakArmorTemplate(event.currentTarget).catch((err) => showToast(`保存模板失败：${err.message || err}`, "error")));
 document.querySelector("#deleteBreakArmorTemplate")?.addEventListener("click", (event) => deleteBreakArmorTemplate(event.currentTarget).catch((err) => showToast(`删除模板失败：${err.message || err}`, "error")));

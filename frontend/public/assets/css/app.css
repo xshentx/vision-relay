@@ -5203,13 +5203,17 @@ body.model-test-open {
 .break-armor-template-grid { grid-template-columns:minmax(260px,.72fr) minmax(0,1.45fr); align-items:start; }
 .break-armor-template-list { display:flex; flex-direction:column; gap:8px; max-height:560px; margin-top:13px; overflow:auto; }
 .break-armor-template-actions { justify-content:space-between; margin-top:13px; }
+.break-armor-template-library-actions { display:flex; align-items:center; gap:8px; }
+.break-armor-template-source-note { margin:11px 0 0; color:var(--muted); font-size:12px; line-height:1.55; }
+.break-armor-template-source-note a { color:#2563eb; font-weight:700; }
+.break-armor-template-source-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; }
 .break-armor-codex-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:15px 0 8px; }
 .break-armor-mode-note { margin-bottom:16px; padding:10px 12px; border:1px solid rgba(34,211,238,.18); border-radius:10px; color:#a5f3fc; background:rgba(8,145,178,.07); font-size:12px; line-height:1.55; }
 .break-armor-mode-note code { color:#67e8f9; }
 .break-armor-inline-select { min-width:185px; margin-bottom:0; }
 .break-armor-inline-select > .vr-component-select { margin-bottom:0; }
 @media (max-width:1050px) { .break-armor-session-grid,.break-armor-template-grid { grid-template-columns:1fr; } .break-armor-session-list { max-height:340px; } }
-@media (max-width:760px) { .break-armor-tool-heading,.break-armor-section-title { align-items:stretch; flex-direction:column; } .break-armor-segmented { overflow-x:auto; } .break-armor-compare,.break-armor-change-list,.break-armor-codex-options { grid-template-columns:1fr; } .break-armor-session-options { align-items:stretch; flex-direction:column; } .break-armor-template-actions { align-items:stretch; flex-direction:column; } .break-armor-backup-row { grid-template-columns:1fr; align-items:stretch; } .break-armor-backup-row > button { width:100%; } }
+@media (max-width:760px) { .break-armor-tool-heading,.break-armor-section-title { align-items:stretch; flex-direction:column; } .break-armor-segmented { overflow-x:auto; } .break-armor-compare,.break-armor-change-list,.break-armor-codex-options { grid-template-columns:1fr; } .break-armor-session-options { align-items:stretch; flex-direction:column; } .break-armor-template-actions { align-items:stretch; flex-direction:column; } .break-armor-template-library-actions { flex-wrap:wrap; } .break-armor-backup-row { grid-template-columns:1fr; align-items:stretch; } .break-armor-backup-row > button { width:100%; } }
 
 /* Break Armor light-shell compatibility and overflow guard. */
 .break-armor-mode { position:relative; }

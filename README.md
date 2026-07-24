@@ -14,13 +14,21 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 - 支持为 Codex、OpenCode、Claude、OpenClaw 等客户端生成接入配置
 - 文本供应商按 Codex、Claude、OpenCode 独立分组，并提供运行状态与熔断保护
 - 支持一键配置 Codex、OpenCode、Claude、OpenClaw
-- 提供 Codex、Claude、OpenCode 相互独立的一键破甲、提示词模板、会话清理与备份恢复测试工具
+- 提供 Codex、Claude、OpenCode 相互独立的一键破甲、提示词模板、会话清理与备份恢复测试工具；模板页离线内置 5 个 Codex-X 模板，并可按需从 GitHub 检查更新
 - 支持切换 Codex 第三方模型时保留官方登录，并可统一官方与第三方会话历史
 - 内置请求日志、Token 统计、首 token 耗时、缓存命中等记录
 - 支持网络代理 URL，适配本地代理或 fake-ip 网络环境
 - 上游不支持流式响应时，可自动降级为同步请求并重新适配为客户端所需的 SSE、NDJSON 或 JSON 数组流
 
 ## 版本更新
+
+### v2.1.1
+
+- 新增 5 个 Codex-X Markdown 破甲模板，固定于上游提交 `e8b0e5b73c508484cfb636339c82d70360487442` 随程序离线内置，并保留原始 MIT 许可与模板来源说明。
+- 提示词模板管理新增显式“GitHub 更新”操作：仅在用户点击后检查 Codex-X `examples/`，按当前客户端缓存新版；更新模板保持只读，不覆盖本地自定义模板。
+- 模板列表新增来源、离线内置 / GitHub 更新状态、用途描述与原始文件链接，载入只读模板时会禁用保存和删除操作。
+- 强化远程模板同步校验：限定仓库、HTTPS 下载域名、目录和文件白名单，禁止重定向，限制目录项数与单文件大小，并使用 Git Blob SHA-1 验证下载内容。
+- 补充 Codex-X 模板内置、同步替换、缓存去重、只读边界、下载完整性与前端交互回归测试，同时完善 README 使用和授权说明。
 
 ### v2.1.0
 
@@ -281,7 +289,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.1.0 --arch arm64
+bash ./tools/build-macos.sh --version v2.1.1 --arch arm64
 ```
 
 支持的架构参数：
@@ -299,13 +307,13 @@ bash ./tools/build-macos.sh --version v2.1.0 --arch arm64
 Windows 发布构建：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.1.0
+.\tools\build-windows.ps1 -Version v2.1.1
 ```
 
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.1.0 --arch universal
+bash ./tools/build-macos.sh --version v2.1.1 --arch universal
 ```
 
 生成的 Release 附件：
@@ -320,14 +328,14 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.1.0
-git push origin v2.1.0
+git tag v2.1.1
+git push origin v2.1.1
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.1.0
+Vision Relay v2.1.1
 ```
 
 附件上传时应包含对应平台的程序包和同名 `.sha256` 文件。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
@@ -497,6 +505,20 @@ http://127.0.0.1:7890
 
 在文本模型配置的“模型映射”列表中，为具体模型勾选“支持多模态”。勾选后图片会直接发送给该模型；同一供应商下未勾选的模型仍会在视觉能力开启时先调用视觉模型解析。
 
+## 参考项目与授权
+
+- 以下破甲模板来自 [yynxxxxx/Codex-X](https://github.com/yynxxxxx/Codex-X)（MIT License），固定于提交 `e8b0e5b73c508484cfb636339c82d70360487442` 随程序离线内置。Vision Relay 不会在后台静默拉取；只有用户点击“GitHub 更新”时才检查并缓存上游 `examples/` 新版。
+
+| 离线模板 | 用途 |
+| --- | --- |
+| `gpt5.5-unrestricted.md` | 短小通用，适合日常编码与常规技术任务 |
+| `gpt5.4-unrestricted.md` | 面向 GPT-5.4 / Codex CLI，偏 CTF 与安全研究工作流 |
+| `gpt5.5-jeli.md` | 大白话通用版本，提供更完整的工程与逆向执行流程 |
+| `gpt-5.6-sol-unrestricted.md` | GPT-5.6-sol 破甲提示词，偏直接执行与中英文任务 |
+| `海鸥3.0破甲.md` | 中文技术操作员人格，覆盖编码、CTF、逆向、内存与协议任务路由 |
+
+Codex-X 的原始 MIT 许可文本保存在 `backend/internal/server/break_armor_codex_x_templates/LICENSE.codex-x`。
+
 ## License
 
 请在发布前根据项目实际授权方式补充 License。
@@ -513,7 +535,7 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 发布构建时请传入与 Git tag 相同的版本号：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.1.0
+.\tools\build-windows.ps1 -Version v2.1.1
 ```
 
 构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时应同时上传这两个文件。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。
