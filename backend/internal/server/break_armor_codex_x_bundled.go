@@ -49,7 +49,7 @@ func bundledBreakArmorCodexXTemplates(client string) []breakArmorSavedTemplate {
 			Client:         client,
 			Name:           descriptor.FileName,
 			Description:    descriptor.Description,
-			Prompt:         strings.TrimSpace(string(raw)),
+			Prompt:         strings.TrimSpace(strings.ReplaceAll(string(raw), "\r\n", "\n")),
 			Builtin:        true,
 			Bundled:        true,
 			ReadOnly:       true,

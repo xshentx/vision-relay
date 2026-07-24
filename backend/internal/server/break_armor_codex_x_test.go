@@ -23,11 +23,11 @@ func breakArmorHTTPResponse(status int, body string) *http.Response {
 
 func TestBundledBreakArmorCodexXTemplatesMatchPinnedUpstream(t *testing.T) {
 	wantHashes := map[string]string{
-		"gpt5.5-unrestricted.md":      "328dbc246ba9fd7a4ee0dcd286d0eb3e4911759f336795f5c57ebd630e894bae",
-		"gpt5.4-unrestricted.md":      "41d67151affa5568de0d2f5aa872e470e5a81e4213691ceda74767f6346c2dc3",
-		"gpt5.5-jeli.md":              "8d717e58512f92f4117cd9811297e9553b164dc9dd8fedc6f2b290d73f7e8f7b",
-		"gpt-5.6-sol-unrestricted.md": "f5d3cd38cac1c66f11bd54ca1fab08ad195a99f578b1752edef8015683debbb7",
-		"海鸥3.0破甲.md":                  "ccfd2b8f702e0428d5e43c799c5d276d7dd1078d82cf583a08ec279027100af5",
+		"gpt5.5-unrestricted.md":      "9dd61978522d4f3fd6247348ae5e44be57774173861c34e5778401be44562a16",
+		"gpt5.4-unrestricted.md":      "f68aea9afd065eefd9486e6fb14b7f93ef94aaab3634063bd65d115e43e06388",
+		"gpt5.5-jeli.md":              "9d57577869557e1a18b1df412be7c4bfd85ba64db5fa70ed863397a84b497094",
+		"gpt-5.6-sol-unrestricted.md": "5867af4e6d039fb331e2368ec13499b01c8e93d189e072631f31a226108becf7",
+		"海鸥3.0破甲.md":                  "0f41b90e995ec4bffea7d093b424df98ba2c1f142c9540b7a662558e8d13bafc",
 	}
 	items := bundledBreakArmorCodexXTemplates(breakArmorClientCodex)
 	if len(items) != len(wantHashes) {
@@ -42,7 +42,8 @@ func TestBundledBreakArmorCodexXTemplatesMatchPinnedUpstream(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != wantHash {
+		normalized := []byte(strings.ReplaceAll(string(raw), "\r\n", "\n"))
+		if got := fmt.Sprintf("%x", sha256.Sum256(normalized)); got != wantHash {
 			t.Fatalf("%s hash=%s want=%s", item.Name, got, wantHash)
 		}
 		if item.ID != codexXTemplateID(item.Name) || item.Client != breakArmorClientCodex || item.Description == "" || item.Prompt == "" || !item.Builtin || !item.Bundled || !item.ReadOnly || item.Source != breakArmorCodexXSource || item.SourceRevision != breakArmorCodexXBundledRevision {
