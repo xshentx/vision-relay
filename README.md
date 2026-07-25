@@ -27,9 +27,9 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 - 重构 Windows 自动更新流程：运行中的程序直接备份自身并从固定的非 EXE 暂存文件 `vision-relay.update` 写入新版本，不再创建或执行点开头、随机名称的临时 helper EXE；新进程启动失败或提前退出时自动回滚并保持旧实例运行。
 - 强制 Windows 自动更新同时下载并验证 `vision-relay.exe.sha256`，新增父进程等待、启动存活检查和更新文件白名单清理，只处理程序目录内允许的 `.old`、暂存文件及旧版兼容文件，降低更新误报与误删风险。
-- Windows 构建脚本会根据版本号重新生成图标与 `VERSIONINFO` 资源，并支持 Authenticode 签名、时间戳和签名验证；GitHub 标签发布要求配置签名证书 Secret，签名完成后再生成 SHA-256。
+- Windows 构建脚本会根据版本号重新生成图标与 `VERSIONINFO` 资源，并保留可选的 Authenticode 签名、时间戳和签名验证能力；v2.2.1 GitHub 标签发布按无签名模式直接编译，并为最终 EXE 生成 SHA-256。
 - Codex-X 模板改为只在程序内保留 5 个受信任目录项，不再把安全研究模板正文嵌入 EXE；用户点击“GitHub 更新”后才下载、校验并缓存只读模板，以减少安全软件静态扫描误报。
-- 新增项目根目录 MIT License，更新模板来源、自动更新、Windows 签名和发布文档，并补充更新回滚、安全清理、模板同步及前端提示的回归测试。
+- 新增项目根目录 MIT License，更新模板来源、自动更新、Windows 构建和发布文档，并补充更新回滚、安全清理、模板同步及前端提示的回归测试。
 
 ### v2.2.0
 
@@ -318,7 +318,7 @@ Vue 3 和 Element Plus 会复制到 `frontend/public/assets/vendor`，程序运�
 - `-H windowsgui` 会生成 Windows GUI 子系统程序，双击运行时不会弹出控制台窗口。
 - 前端页面、图标和 Windows 版本信息会随 Go 编译一起打进 `vision-relay.exe`。
 - 构建依赖 MinGW-w64 的 `windres.exe`；找不到资源编译器时脚本会直接失败，避免沿用旧版本的 VERSIONINFO。
-- 公开发布应使用 Authenticode 代码签名；可设置 `WINDOWS_SIGNING_CERTIFICATE_PATH` 与 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`，或向构建脚本传入 `-SigningCertificatePath`。未签名的本地构建会警告，标签发布工作流则强制要求有效签名。
+- 构建脚本支持可选 Authenticode 代码签名：可设置 `WINDOWS_SIGNING_CERTIFICATE_PATH` 与 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`，或传入 `-SigningCertificatePath`。当前 GitHub 标签工作流按无签名模式直接构建，下载运行时可能出现 Windows SmartScreen 或未知发布者提示。
 
 如果需要调试日志窗口，可以去掉 `-H windowsgui`：
 
@@ -347,12 +347,10 @@ bash ./tools/build-macos.sh --version v2.2.1 --arch arm64
 
 ## 打包发布
 
-Windows 发布构建（公开发布使用 `-RequireSignature`，签名失败时不生成产物）：
+Windows 无签名发布构建（当前 GitHub 标签工作流使用此模式）：
 
 ```powershell
-$env:WINDOWS_SIGNING_CERTIFICATE_PATH = 'C:\secure\vision-relay-code-signing.pfx'
-$env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD = '<PFX 密码>'
-.\tools\build-windows.ps1 -Version v2.2.1 -RequireSignature
+.\tools\build-windows.ps1 -Version v2.2.1
 ```
 
 ### Windows Authenticode 签名
@@ -381,16 +379,7 @@ $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter s
 
 `Status` 必须为 `Valid`。如果证书私钥位于 USB 硬件令牌或云签名服务中、无法导出 PFX，应使用证书颁发机构提供的 CSP/KSP 或云签名 GitHub Action；完成签名后必须重新生成 `.sha256`，不要把私钥导出到仓库。
 
-GitHub 标签发布默认强制签名。对于可导出的 PFX，在仓库 **Settings → Secrets and variables → Actions** 中配置：
-
-- `WINDOWS_SIGNING_CERTIFICATE_BASE64`：PFX 文件的 Base64；
-- `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`：PFX 密码。
-
-在本机把 PFX 的 Base64 直接复制到剪贴板（Base64 不是加密，必须只保存到 Secret）：
-
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\secure\vision-relay-code-signing.pfx')) | Set-Clipboard
-```
+当前 GitHub 标签发布按用户要求执行无签名构建，不读取证书 Secret。以后若要恢复签名发布，应在工作流中安全接入证书或云签名服务，并在生成 `.sha256` 前完成签名和验证；不要把证书私钥提交到仓库。
 
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
@@ -622,7 +611,7 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 发布构建时请传入与 Git tag 相同的版本号：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.2.1 -RequireSignature
+.\tools\build-windows.ps1 -Version v2.2.1
 ```
 
-构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时必须同时上传这两个文件。公开发布还应使用受信任证书进行 Authenticode 签名；SHA-256 用于保证下载完整性，代码签名与证书信誉才是降低 Windows SmartScreen 和安全软件误报的关键。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。
+构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时必须同时上传这两个文件。v2.2.1 Windows Release 为无签名构建，SHA-256 仅用于验证下载完整性，首次运行可能出现 Windows SmartScreen 或未知发布者提示；代码签名与证书信誉仍是降低此类提示和安全软件误报的关键。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。

@@ -46,31 +46,12 @@ jobs:
           } else {
             & $windres.Source --version
           }
-      - name: Build Windows executable
+      - name: Build unsigned Windows executable
         shell: pwsh
-        env:
-          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
-          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)) {
-            throw "WINDOWS_SIGNING_CERTIFICATE_BASE64 is required for public tag releases."
-          }
-          $certificatePath = Join-Path $env:RUNNER_TEMP "vision-relay-signing.pfx"
-          try {
-            [IO.File]::WriteAllBytes(
-              $certificatePath,
-              [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)
-            )
-            ./tools/build-windows.ps1 `
-              -Output dist/vision-relay.exe `
-              -Version "${{ github.ref_name }}" `
-              -SigningCertificatePath $certificatePath `
-              -RequireSignature
-          } finally {
-            if ($certificatePath) {
-              Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
-            }
-          }
+          ./tools/build-windows.ps1 `
+            -Output dist/vision-relay.exe `
+            -Version "${{ github.ref_name }}"
       - uses: actions/upload-artifact@v4
         with:
           name: vision-relay-windows
