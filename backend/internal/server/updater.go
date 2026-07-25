@@ -183,8 +183,13 @@ func (a *app) runUpdate() {
 			Message:         message,
 		})
 	}
+	target, err := os.Executable()
+	if err != nil {
+		a.failUpdate(fmt.Errorf("定位当前程序失败: %w", err))
+		return
+	}
 	report("downloading", 0, info.AssetSize)
-	downloaded, err := a.downloadUpdate(ctx, info, report)
+	downloaded, err := a.downloadUpdate(ctx, info, filepath.Dir(target), report)
 	if err != nil {
 		a.failUpdate(err)
 		return
@@ -198,12 +203,6 @@ func (a *app) runUpdate() {
 		TotalBytes:      completed.TotalBytes,
 		Message:         "校验通过，正在准备安装…",
 	})
-	target, err := os.Executable()
-	if err != nil {
-		_ = os.Remove(downloaded)
-		a.failUpdate(err)
-		return
-	}
 	if err := startUpdateHelper(downloaded, target, os.Getpid(), os.Args[1:]); err != nil {
 		_ = os.Remove(downloaded)
 		a.failUpdate(fmt.Errorf("启动更新程序失败: %w", err))
@@ -265,7 +264,7 @@ func (a *app) fetchLatestRelease(ctx context.Context) (githubRelease, error) {
 	return release, nil
 }
 
-func (a *app) downloadUpdate(ctx context.Context, info updateInfo, report func(state string, downloaded, total int64)) (string, error) {
+func (a *app) downloadUpdate(ctx context.Context, info updateInfo, destinationDir string, report func(state string, downloaded, total int64)) (string, error) {
 	if info.asset.BrowserDownloadURL == "" {
 		return "", errors.New("Release 中没有 Windows 可执行程序")
 	}
@@ -292,9 +291,12 @@ func (a *app) downloadUpdate(ctx context.Context, info updateInfo, report func(s
 	if report != nil {
 		report("downloading", 0, total)
 	}
-	file, err := os.CreateTemp("", "vision-relay-update-*.exe")
+	// Keep the verified payload beside the running executable instead of in the
+	// system temporary directory. A stable copy of the current executable acts
+	// as the helper; this downloaded file is never passed to CreateProcess.
+	file, err := os.CreateTemp(destinationDir, ".vision-relay-payload-*.download")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("在程序目录创建更新文件失败: %w", err)
 	}
 	path := file.Name()
 	ok := false

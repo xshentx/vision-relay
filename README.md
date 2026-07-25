@@ -22,6 +22,14 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 ## 版本更新
 
+### v2.1.2
+
+- 重构 Windows 自动更新助手：使用当前可信程序的临时副本执行更新，下载的新版本仅作为替换载荷，不再直接启动刚下载的 EXE，降低 Windows Defender 或端点安全软件拦截更新进程的问题。
+- 将经过校验的更新载荷和助手文件存放在程序目录，补充助手、载荷环境变量与延迟删除机制；无法立即删除时会安排在系统重启后清理。
+- 强化更新失败恢复：写入新版本或重启失败时自动移除不完整文件、恢复 `.old` 旧版本并尝试重新启动，错误详情保存到 `.update-error.txt`。
+- 改进更新页面交互：开始安装后自动进入更新页面，任务执行期间保持相关按钮禁用，并完整展示启动失败与后台更新进度。
+- 增加更新载荷目录、可信助手复制、环境变量、替换重启、失败回滚、旧版本恢复以及前端状态的回归测试。
+
 ### v2.1.1
 
 - 新增 5 个 Codex-X Markdown 破甲模板，固定于上游提交 `e8b0e5b73c508484cfb636339c82d70360487442` 随程序离线内置，并保留原始 MIT 许可与模板来源说明。
@@ -290,7 +298,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.1.1 --arch arm64
+bash ./tools/build-macos.sh --version v2.1.2 --arch arm64
 ```
 
 支持的架构参数：
@@ -308,13 +316,13 @@ bash ./tools/build-macos.sh --version v2.1.1 --arch arm64
 Windows 发布构建：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.1.1
+.\tools\build-windows.ps1 -Version v2.1.2
 ```
 
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.1.1 --arch universal
+bash ./tools/build-macos.sh --version v2.1.2 --arch universal
 ```
 
 生成的 Release 附件：
@@ -329,14 +337,14 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.1.1
-git push origin v2.1.1
+git tag v2.1.2
+git push origin v2.1.2
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.1.1
+Vision Relay v2.1.2
 ```
 
 附件上传时应包含对应平台的程序包和同名 `.sha256` 文件。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
@@ -536,7 +544,7 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 发布构建时请传入与 Git tag 相同的版本号：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.1.1
+.\tools\build-windows.ps1 -Version v2.1.2
 ```
 
 构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时应同时上传这两个文件。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。

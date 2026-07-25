@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 )
@@ -70,13 +71,17 @@ func TestDownloadUpdateReportsProgress(t *testing.T) {
 	info := updateInfo{AssetSize: asset.Size, asset: asset, release: githubRelease{Assets: []githubAsset{asset}}}
 	a := &app{httpClient: server.Client()}
 	var reports []updateProgress
-	path, err := a.downloadUpdate(context.Background(), info, func(state string, downloaded, total int64) {
+	destinationDir := t.TempDir()
+	path, err := a.downloadUpdate(context.Background(), info, destinationDir, func(state string, downloaded, total int64) {
 		reports = append(reports, updateProgress{State: state, DownloadedBytes: downloaded, TotalBytes: total})
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(path)
+	if filepath.Dir(path) != destinationDir {
+		t.Fatalf("download directory = %q, want %q", filepath.Dir(path), destinationDir)
+	}
 	if len(reports) < 3 {
 		t.Fatalf("progress report count = %d, want at least 3", len(reports))
 	}

@@ -429,7 +429,7 @@ func TestUpdateUIIsEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := string(scriptRaw)
+	script := strings.ReplaceAll(string(scriptRaw), "\r\n", "\n")
 	if !strings.Contains(script, `fetch("/api/update"`) || !strings.Contains(script, `method: "POST"`) {
 		t.Fatal("update UI is not wired to the update API")
 	}
@@ -437,11 +437,14 @@ func TestUpdateUIIsEmbedded(t *testing.T) {
 		`fetch("/api/update/progress", {cache: "no-store"})`,
 		`updatePromptedVersion !== info.latest_version`,
 		`title: ` + "`发现新版本 ${info.latest_version}`",
+		"if (!confirmed) return;\n  }\n  showPage(\"update\");\n  installUpdateButton.disabled = true;",
 		`renderUpdateProgress`,
 		`scheduleUpdateProgressPoll`,
 		`if (res.status === 409 && result?.progress)`,
 		`renderUpdateProgress(result.progress);`,
+		`renderUpdateProgress({state: "error", message: "启动更新失败", error: message});`,
 		`let updateInstallAvailable = false;`,
+		`checkUpdateButton.disabled = updateProgressIsActive(lastUpdateProgressState);`,
 		`installUpdateButton.disabled = active || !updateInstallAvailable;`,
 		`scheduleUpdateProgressPoll(1000);`,
 		`data.auto_check_updates = programSettings.autoCheckUpdates;`,

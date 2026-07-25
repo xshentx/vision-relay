@@ -3779,7 +3779,7 @@ async function checkForUpdate(showErrors = false) {
     updateState.textContent = `${updateText("&#26816;&#26597;&#26356;&#26032;&#22833;&#36133;&#65306;")}${err.message || err}`;
     if (showErrors) showToast(updateState.textContent, "error");
   } finally {
-    checkUpdateButton.disabled = false;
+    checkUpdateButton.disabled = updateProgressIsActive(lastUpdateProgressState);
   }
 }
 
@@ -3874,6 +3874,7 @@ async function startUpdateDownload(requireConfirmation = true) {
     });
     if (!confirmed) return;
   }
+  showPage("update");
   installUpdateButton.disabled = true;
   checkUpdateButton.disabled = true;
   renderUpdateProgress({state: "checking", message: "正在启动更新任务…"});
@@ -3891,10 +3892,9 @@ async function startUpdateDownload(requireConfirmation = true) {
     renderUpdateProgress(result.progress || {state: "checking", message: result.message});
     scheduleUpdateProgressPoll(120);
   } catch (err) {
-    updateState.textContent = `${updateText("&#26356;&#26032;&#22833;&#36133;&#65306;")}${err.message || err}`;
-    showToast(updateState.textContent, "error");
-    installUpdateButton.disabled = !updateInstallAvailable;
-    checkUpdateButton.disabled = false;
+    const message = err?.message || String(err);
+    renderUpdateProgress({state: "error", message: "启动更新失败", error: message});
+    showToast(`启动更新失败：${message}`, "error");
   }
 }
 
