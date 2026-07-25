@@ -543,18 +543,8 @@ func relayModelName(cfg config) string {
 	return model
 }
 
-func requestOrigin(r *http.Request, cfg config) string {
-	if host := strings.TrimSpace(r.Host); host != "" {
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded != "" {
-			scheme = strings.Split(forwarded, ",")[0]
-		}
-		return scheme + "://" + host
-	}
-	return "http://" + cfg.Addr
+func requestOrigin(_ *http.Request, cfg config) string {
+	return strings.TrimRight(localServerURL(cfg.Addr), "/")
 }
 
 func clientWorkDir(workDir, fallback string) string {

@@ -50,15 +50,18 @@ func TestActivateExistingDesktopPostsToRunningInstance(t *testing.T) {
 	}
 }
 
-func TestExistingVisionRelayHealthyRequiresApplicationIdentity(t *testing.T) {
+func TestVisionRelayHealthRequiresExpectedSurface(t *testing.T) {
 	tests := []struct {
-		name string
-		body string
-		want bool
+		name           string
+		body           string
+		wantManagement bool
+		wantRelay      bool
 	}{
-		{name: "vision relay", body: `{"status":"ok","application":"vision-relay"}`, want: true},
-		{name: "legacy or unrelated health", body: `{"status":"ok"}`},
-		{name: "wrong application", body: `{"status":"ok","application":"other"}`},
+		{name: "legacy management", body: `{"status":"ok","application":"vision-relay"}`, wantManagement: true},
+		{name: "management surface", body: `{"status":"ok","application":"vision-relay","surface":"management"}`, wantManagement: true},
+		{name: "relay surface", body: `{"status":"ok","application":"vision-relay","surface":"relay"}`, wantRelay: true},
+		{name: "missing application", body: `{"status":"ok","surface":"management"}`},
+		{name: "wrong application", body: `{"status":"ok","application":"other","surface":"management"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -70,8 +73,11 @@ func TestExistingVisionRelayHealthyRequiresApplicationIdentity(t *testing.T) {
 				_, _ = w.Write([]byte(test.body))
 			}))
 			defer server.Close()
-			if got := existingVisionRelayHealthy(server.URL); got != test.want {
-				t.Fatalf("healthy = %t, want %t", got, test.want)
+			if got := existingVisionRelayHealthy(server.URL); got != test.wantManagement {
+				t.Fatalf("management healthy = %t, want %t", got, test.wantManagement)
+			}
+			if got := relayVisionRelayHealthy(server.URL); got != test.wantRelay {
+				t.Fatalf("relay healthy = %t, want %t", got, test.wantRelay)
 			}
 		})
 	}

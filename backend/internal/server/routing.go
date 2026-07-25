@@ -9,18 +9,15 @@ import (
 )
 
 func (a *app) handleRoute(w http.ResponseWriter, r *http.Request) {
+	if isManagementRequest(r) {
+		http.NotFound(w, r)
+		return
+	}
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if isStaticRequest(r) {
-		a.handleWeb(w, r)
-		return
-	}
-	if strings.HasPrefix(r.URL.Path, "/api/break-armor/") {
-		writeError(w, http.StatusNotFound, errors.New("break armor interface not found"))
-		return
-	}
+
 	if !localAPIEnabled(a.currentConfig()) {
 		writeError(w, http.StatusServiceUnavailable, errors.New("local API interface is disabled"))
 		return

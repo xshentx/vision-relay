@@ -6,7 +6,8 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 ## 功能特性
 
-- 本地 HTTP 中转服务，默认监听 `http://127.0.0.1:8787`
+- Go 主程序管理界面默认监听 `http://127.0.0.1:18473`，与中转 API 端口相互独立
+- 本地 HTTP 中转 API 默认监听 `http://127.0.0.1:8787`
 - Windows 桌面 WebView 与系统托盘菜单；macOS 菜单栏与系统浏览器管理页面
 - 支持文本模型与视觉模型分开配置，并保存多套模型方案
 - 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Gemini、Ollama 等常见接口形态
@@ -21,6 +22,14 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 - 上游不支持流式响应时，可自动降级为同步请求并重新适配为客户端所需的 SSE、NDJSON 或 JSON 数组流
 
 ## 版本更新
+
+### v2.2.0
+
+- 将 Go 主程序管理界面与本地中转 API 拆分为两个独立监听器：管理界面默认使用 `127.0.0.1:18473`，中转 API 继续使用 `127.0.0.1:8787`；管理页面和管理接口不会暴露在中转端口，模型路由也不会进入管理端口。
+- 新增管理地址配置、`-management-addr` 启动参数和 `VISION_RELAY_MANAGEMENT_ADDR` 环境变量，阻止管理端口与中转端口冲突；桌面窗口、浏览器和托盘激活固定连接管理端口，客户端配置固定使用中转 API 地址。
+- 增加管理端与中转端的独立健康标识及中转状态检查接口，前端可单独显示中转 API 在线状态，并完善 IPv4、IPv6 与通配监听地址的本地可访问 URL 处理。
+- 扩展一键破甲首页的“其他方案”：Codex、Claude 和 OpenCode 可直接选择离线内置或 GitHub 更新的 Codex-X 模板，并保留自定义模板、当前选择摘要、响应式布局与键盘焦点状态。
+- 更新设置界面、接入地址说明和 README，并增加双监听器隔离、端口校验、桌面激活、路由来源、中转状态以及破甲模板交互的回归测试。
 
 ### v2.1.3
 
@@ -247,7 +256,13 @@ Windows PowerShell 或 macOS Terminal 均可直接运行：
 go run ./backend/cmd/vision-relay
 ```
 
-启动后默认访问：
+启动后管理界面默认访问：
+
+```text
+http://127.0.0.1:18473
+```
+
+中转 API 继续监听：
 
 ```text
 http://127.0.0.1:8787
@@ -256,8 +271,11 @@ http://127.0.0.1:8787
 常用启动参数：
 
 ```powershell
-# 指定监听地址
+# 指定中转 API 监听地址
 .\vision-relay.exe -addr 127.0.0.1:8787
+
+# 指定 Go 主程序管理界面监听地址
+.\vision-relay.exe -management-addr 127.0.0.1:18473
 
 # 只运行后台中转服务，不打开桌面窗口
 .\vision-relay.exe -no-window
@@ -304,7 +322,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.1.3 --arch arm64
+bash ./tools/build-macos.sh --version v2.2.0 --arch arm64
 ```
 
 支持的架构参数：
@@ -322,13 +340,13 @@ bash ./tools/build-macos.sh --version v2.1.3 --arch arm64
 Windows 发布构建：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.1.3
+.\tools\build-windows.ps1 -Version v2.2.0
 ```
 
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.1.3 --arch universal
+bash ./tools/build-macos.sh --version v2.2.0 --arch universal
 ```
 
 生成的 Release 附件：
@@ -343,14 +361,14 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.1.3
-git push origin v2.1.3
+git tag v2.2.0
+git push origin v2.2.0
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.1.3
+Vision Relay v2.2.0
 ```
 
 附件上传时应包含对应平台的程序包和同名 `.sha256` 文件。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
@@ -367,6 +385,7 @@ Vision Relay v2.1.3
 
 ```text
 VISION_RELAY_ADDR=127.0.0.1:8787
+VISION_RELAY_MANAGEMENT_ADDR=127.0.0.1:18473
 
 TEXT_PROVIDER=openai|anthropic|gemini|ollama
 TEXT_BASE_URL=https://api.openai.com
@@ -406,8 +425,9 @@ OPEN_BROWSER=false
 
 左侧“设置”菜单可以管理 Vision Relay 的运行参数：
 
-- 可修改本地 API 的监听地址和端口。保存后需重启 Vision Relay 才会按新地址重新绑定。
-- 可独立关闭或开启本地 API 转发接口。关闭时 `/v1/*` 等客户端接口返回 `503`，但管理页面、设置 API 和 `/healthz` 仍可使用；该开关保存后立即生效。
+- 可独立修改 Go 主程序管理界面与本地中转 API 的监听地址和端口；两者必须使用不同端口，保存后需重启 Vision Relay 才会重新绑定。
+- 桌面 WebView、系统浏览器、托盘激活与管理接口只连接管理端口；Codex、Claude、OpenCode、OpenClaw 及模型请求只连接中转 API 端口，修改其中一个不会改写另一个。
+- 可独立关闭或开启本地 API 转发接口。关闭时，中转端口上的 `/v1/*` 等模型接口返回 `503`；管理端口上的管理页面、设置 API 和 `/healthz` 仍可使用。该开关保存后立即生效。
 - 关闭本地 API 后，一键配置和文本供应商切换会让已配置客户端直连当前文本供应商，并写入供应商 API 地址、上游令牌和已添加模型的真实模型名（不会自动导入上游全部模型）；视觉模型中转不可用，文本模型的图片能力按每个模型的“支持多模态”设置写入客户端。 直连时 Codex 仅支持使用 Responses 协议的 OpenAI 兼容供应商，Claude 仅支持 Anthropic 协议供应商；协议不兼容或当前供应商未添加模型时会停止写入并给出提示。
 - 可查看和修改 Codex、Codex CLI、OpenCode、Claude、Claude CLI、OpenClaw 的配置文件位置与客户端程序位置；Codex 桌面端与 CLI 共用配置，Claude 桌面端与 CLI 使用独立配置。
 - Codex 桌面客户端支持自动检测 Microsoft Store 的 `OpenAI.Codex_*\app\ChatGPT.exe` 安装位置，不依赖固定版本号。
@@ -550,7 +570,7 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 发布构建时请传入与 Git tag 相同的版本号：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.1.3
+.\tools\build-windows.ps1 -Version v2.2.0
 ```
 
 构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时应同时上传这两个文件。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。

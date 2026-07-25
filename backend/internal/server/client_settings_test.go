@@ -243,9 +243,10 @@ func TestDisabledLocalAPIStillServesManagementUI(t *testing.T) {
 	if !strings.Contains(apiRecorder.Body.String(), "local API interface is disabled") {
 		t.Fatalf("unexpected disabled API response: %s", apiRecorder.Body.String())
 	}
-
 	uiRecorder := httptest.NewRecorder()
-	a.handleRoute(uiRecorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	uiRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:18473/", nil)
+	uiRequest.RemoteAddr = "127.0.0.1:5000"
+	newManagementHandler(a, make(chan struct{}, 1)).ServeHTTP(uiRecorder, uiRequest)
 	if uiRecorder.Code != http.StatusOK {
 		t.Fatalf("management UI status = %d, want %d", uiRecorder.Code, http.StatusOK)
 	}

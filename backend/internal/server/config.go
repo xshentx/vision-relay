@@ -15,6 +15,7 @@ const (
 	appSlug                   = "vision-relay"
 	legacyAppSlug             = "codex-proxy"
 	defaultAddr               = "127.0.0.1:8787"
+	defaultManagementAddr     = "127.0.0.1:18473"
 	defaultTextProvider       = "openai"
 	defaultTextWireAPI        = "chat_completions"
 	textProfileClientCodex    = "codex"
@@ -29,6 +30,7 @@ var codexAccountModelAliases = []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 func defaultConfig() config {
 	cfg := config{
 		Addr:                              envAny(defaultAddr, "VISION_RELAY_ADDR", "CODEX_PROXY_ADDR"),
+		ManagementAddr:                    env("VISION_RELAY_MANAGEMENT_ADDR", defaultManagementAddr),
 		TextProvider:                      env("TEXT_PROVIDER", defaultTextProvider),
 		TextBaseURL:                       env("TEXT_BASE_URL", "https://api.openai.com"),
 		TextAPIKey:                        env("TEXT_API_KEY", ""),
@@ -113,6 +115,9 @@ func saveConfig(path string, cfg config) error {
 func mergeConfig(base, loaded config) config {
 	if loaded.Addr != "" {
 		base.Addr = loaded.Addr
+	}
+	if loaded.ManagementAddr != "" {
+		base.ManagementAddr = loaded.ManagementAddr
 	}
 	if loaded.ActiveModelProfileID != "" {
 		base.ActiveModelProfileID = loaded.ActiveModelProfileID
@@ -258,6 +263,17 @@ func (a *app) setConfig(cfg config) error {
 		return err
 	}
 	cfg.Addr = addr
+	if cfg.ManagementAddr == "" {
+		cfg.ManagementAddr = defaultManagementAddr
+	}
+	managementAddr, err := normalizeManagementListenAddress(cfg.ManagementAddr)
+	if err != nil {
+		return err
+	}
+	cfg.ManagementAddr = managementAddr
+	if listenPort(cfg.Addr) == listenPort(cfg.ManagementAddr) {
+		return fmt.Errorf("管理端口和中转 API 端口必须不同")
+	}
 	if cfg.TextProvider == "" {
 		cfg.TextProvider = defaultTextProvider
 	}
@@ -312,19 +328,35 @@ func (a *app) setConfig(cfg config) error {
 }
 
 func normalizeListenAddress(value string) (string, error) {
+	return normalizeServerAddress(value, defaultAddr, "API")
+}
+
+func normalizeManagementListenAddress(value string) (string, error) {
+	return normalizeServerAddress(value, defaultManagementAddr, "管理界面")
+}
+
+func normalizeServerAddress(value, fallback, label string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		value = defaultAddr
+		value = fallback
 	}
 	host, port, err := net.SplitHostPort(value)
 	if err != nil {
-		return "", fmt.Errorf("API 监听地址必须使用 主机:端口 格式: %w", err)
+		return "", fmt.Errorf("%s监听地址必须使用 主机:端口 格式: %w", label, err)
 	}
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return "", fmt.Errorf("API 端口必须在 1 到 65535 之间")
+		return "", fmt.Errorf("%s端口必须在 1 到 65535 之间", label)
 	}
 	return net.JoinHostPort(strings.TrimSpace(host), strconv.Itoa(portNumber)), nil
+}
+
+func listenPort(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	return port
 }
 func boolPtr(value bool) *bool {
 	return &value

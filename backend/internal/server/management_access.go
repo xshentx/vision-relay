@@ -34,6 +34,8 @@ func isManagementAPIPath(path string) bool {
 	}
 	switch path {
 	case "/api/desktop/activate",
+		"/api/relay/status",
+		"/api/provider-router/status",
 		"/api/config",
 		"/api/dashboard",
 		"/api/update",

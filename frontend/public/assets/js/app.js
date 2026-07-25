@@ -39,6 +39,8 @@ const clientRouteInputs = {
 };
 const settingsLocalAPIEnabled = document.querySelector("#settingsLocalAPIEnabled");
 const localAPIWarning = document.querySelector("#localAPIWarning");
+const settingsManagementHost = document.querySelector("#settingsManagementHost");
+const settingsManagementPort = document.querySelector("#settingsManagementPort");
 const settingsAPIHost = document.querySelector("#settingsAPIHost");
 const settingsAPIPort = document.querySelector("#settingsAPIPort");
 const saveProgramSettings = document.querySelector("#saveProgramSettings");
@@ -199,6 +201,7 @@ let currentConfig = {};
 let clientRouteEnabled = normalizeClientRoutes({});
 let programSettings = {
   addr: "127.0.0.1:8787",
+  managementAddr: "127.0.0.1:18473",
   localAPIEnabled: true,
   autoCheckUpdates: true,
   openWindow: true,
@@ -241,23 +244,40 @@ let breakArmorSelectedSession = null;
 let breakArmorSessionPreview = null;
 let breakArmorTemplates = [];
 let breakArmorSelectedTemplate = null;
+let breakArmorHomeTemplates = {codex: [], claude: [], opencode: []};
+let breakArmorSelectedHomeTemplateIDs = {codex: "", claude: "", opencode: ""};
 
-const endpoints = {
-  openaiBaseEndpoint: `${location.origin}/v1`,
-  responsesEndpoint: `${location.origin}/v1/responses`,
-  chatEndpoint: `${location.origin}/v1/chat/completions`,
-  anthropicBaseEndpoint: location.origin,
-  anthropicMessagesEndpoint: `${location.origin}/v1/messages`,
-  geminiBaseEndpoint: location.origin,
-  geminiGenerateEndpoint: `${location.origin}/v1beta/models/{model}:generateContent`,
-  ollamaChatEndpoint: `${location.origin}/api/chat`,
-  ollamaGenerateEndpoint: `${location.origin}/api/generate`
-};
+const endpoints = {};
 
-for (const [id, value] of Object.entries(endpoints)) {
-  const el = document.querySelector(`#${id}`);
-  if (el) el.textContent = value;
+function relayOrigin() {
+  const address = splitListenAddress(programSettings.addr || "127.0.0.1:8787");
+  let host = String(address.host || "").trim().replace(/^\[|\]$/g, "");
+  if (!host || host === "0.0.0.0") host = "127.0.0.1";
+  if (host === "::") host = "::1";
+  const urlHost = host.includes(":") ? `[${host}]` : host;
+  return `http://${urlHost}:${address.port || "8787"}`;
 }
+
+function renderRelayEndpoints() {
+  const origin = relayOrigin();
+  Object.assign(endpoints, {
+    openaiBaseEndpoint: `${origin}/v1`,
+    responsesEndpoint: `${origin}/v1/responses`,
+    chatEndpoint: `${origin}/v1/chat/completions`,
+    anthropicBaseEndpoint: origin,
+    anthropicMessagesEndpoint: `${origin}/v1/messages`,
+    geminiBaseEndpoint: origin,
+    geminiGenerateEndpoint: `${origin}/v1beta/models/{model}:generateContent`,
+    ollamaChatEndpoint: `${origin}/api/chat`,
+    ollamaGenerateEndpoint: `${origin}/api/generate`
+  });
+  for (const [id, value] of Object.entries(endpoints)) {
+    const el = document.querySelector(`#${id}`);
+    if (el) el.textContent = value;
+  }
+}
+
+renderRelayEndpoints();
 
 navItems.forEach((item) => {
   item.addEventListener("click", () => {
@@ -327,7 +347,119 @@ function switchBreakArmorClient(client) {
 }
 
 function selectedBreakArmorTemplate(client) {
+  if (selectedBreakArmorHomeTemplate(client)) return "custom";
   return document.querySelector(`[data-break-armor-template="${client}"]:checked`)?.value || "v5";
+}
+
+function breakArmorOtherTemplates(items) {
+  return (Array.isArray(items) ? items : []).filter((item) => !["v5", "v35"].includes(item.id));
+}
+
+function breakArmorOtherTemplateBadge(item) {
+  if (item.source === "codex-x") return "CODEX-X";
+  if (item.builtin) return "内置";
+  return "自定义";
+}
+
+function selectedBreakArmorHomeTemplate(client) {
+  const selectedID = breakArmorSelectedHomeTemplateIDs[client] || "";
+  return breakArmorOtherTemplates(breakArmorHomeTemplates[client]).find((item) => item.id === selectedID) || null;
+}
+
+function updateBreakArmorTemplateSelectionUI(client) {
+  const selectedLibraryTemplate = selectedBreakArmorHomeTemplate(client);
+  const template = selectedBreakArmorTemplate(client);
+  document.querySelectorAll(`[data-break-armor-template="${client}"]`).forEach((candidate) => {
+    const option = candidate.closest(".break-armor-mode, .break-armor-other-option");
+    const active = candidate.checked && !(candidate.value === "custom" && selectedLibraryTemplate);
+    option?.classList.toggle("active", Boolean(active));
+  });
+  document.querySelectorAll(`[data-break-armor-other-template="${client}"]`).forEach((button) => {
+    const active = button.dataset.breakArmorOtherTemplateId === selectedLibraryTemplate?.id;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const customWrap = document.querySelector(`[data-break-armor-custom-wrap="${client}"]`);
+  if (customWrap) customWrap.hidden = template !== "custom" || Boolean(selectedLibraryTemplate);
+  const current = document.querySelector(`[data-break-armor-current-option="${client}"]`);
+  if (current) current.hidden = !selectedLibraryTemplate;
+  const currentName = document.querySelector(`[data-break-armor-current-name="${client}"]`);
+  const currentDescription = document.querySelector(`[data-break-armor-current-description="${client}"]`);
+  if (currentName) currentName.textContent = selectedLibraryTemplate?.name || "";
+  if (currentDescription) currentDescription.textContent = selectedLibraryTemplate?.description || "已载入模板内容，将按自定义指令执行。";
+}
+
+function renderBreakArmorHomeTemplates(client, items = breakArmorHomeTemplates[client]) {
+  breakArmorHomeTemplates[client] = Array.isArray(items) ? items : [];
+  const templates = breakArmorOtherTemplates(breakArmorHomeTemplates[client]);
+  if (breakArmorSelectedHomeTemplateIDs[client] && !templates.some((item) => item.id === breakArmorSelectedHomeTemplateIDs[client])) {
+    breakArmorSelectedHomeTemplateIDs[client] = "";
+    const customRadio = document.querySelector(`[data-break-armor-template="${client}"][value="custom"]`);
+    if (customRadio) customRadio.checked = true;
+  }
+  const count = document.querySelector(`[data-break-armor-other-count="${client}"]`);
+  if (count) count.textContent = `共 ${templates.length + 1} 个方案`;
+  const library = document.querySelector(`[data-break-armor-other-library="${client}"]`);
+  if (!library) return;
+  library.innerHTML = templates.map((item) => {
+    const description = item.description || (item.prompt || "").slice(0, 70) || "已安装破甲方案";
+    return `
+      <button class="break-armor-other-option" type="button" aria-pressed="false" data-break-armor-other-template="${escapeHTML(client)}" data-break-armor-other-template-id="${escapeHTML(item.id)}" title="${escapeHTML(item.name || "")}">
+        <span class="break-armor-radio"></span>
+        <span class="break-armor-other-copy"><span class="break-armor-other-title"><b>${escapeHTML(item.name || "未命名方案")}</b><em>${escapeHTML(breakArmorOtherTemplateBadge(item))}</em></span><small>${escapeHTML(description)}</small></span>
+      </button>`;
+  }).join("");
+  library.querySelectorAll(`[data-break-armor-other-template="${client}"]`).forEach((button) => {
+    button.addEventListener("click", () => {
+      const item = templates.find((candidate) => candidate.id === button.dataset.breakArmorOtherTemplateId);
+      if (item) selectBreakArmorHomeTemplate(client, item);
+    });
+  });
+  updateBreakArmorTemplateSelectionUI(client);
+  const selectedLibraryTemplate = selectedBreakArmorHomeTemplate(client);
+  const textarea = document.querySelector(`[data-break-armor-custom="${client}"]`);
+  const selectedPrompt = selectedLibraryTemplate?.prompt || "";
+  if (selectedLibraryTemplate && textarea && textarea.value !== selectedPrompt) {
+    textarea.value = selectedPrompt;
+    scheduleBreakArmorPreview(client, 0);
+  }
+}
+
+async function loadBreakArmorHomeTemplatesFor(client) {
+  const count = document.querySelector(`[data-break-armor-other-count="${client}"]`);
+  if (count) count.textContent = "正在加载";
+  try {
+    const res = await fetch(`/api/break-armor/templates?client=${encodeURIComponent(client)}`, {cache: "no-store"});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const payload = await res.json();
+    const items = Array.isArray(payload.templates) ? payload.templates : [];
+    renderBreakArmorHomeTemplates(client, items);
+    return items;
+  } catch (err) {
+    if (count) count.textContent = "加载失败";
+    const library = document.querySelector(`[data-break-armor-other-library="${client}"]`);
+    if (library) library.innerHTML = '<div class="break-armor-other-error">其他方案暂时无法读取</div>';
+    console.error(err);
+    return [];
+  }
+}
+
+async function loadBreakArmorHomeTemplates() {
+  return Promise.all(["codex", "claude", "opencode"].map(loadBreakArmorHomeTemplatesFor));
+}
+
+function selectBreakArmorHomeTemplate(client, item) {
+  if (!item) return;
+  breakArmorSelectedHomeTemplateIDs[client] = item.id;
+  if (!breakArmorHomeTemplates[client].some((candidate) => candidate.id === item.id)) {
+    breakArmorHomeTemplates[client] = [...breakArmorHomeTemplates[client], item];
+    renderBreakArmorHomeTemplates(client);
+  }
+  const textarea = document.querySelector(`[data-break-armor-custom="${client}"]`);
+  if (textarea) textarea.value = item.prompt || "";
+  document.querySelectorAll(`[data-break-armor-template="${client}"]`).forEach((radio) => { radio.checked = false; });
+  updateBreakArmorTemplateSelectionUI(client);
+  scheduleBreakArmorPreview(client);
 }
 
 function breakArmorRequestBody(client) {
@@ -534,11 +666,19 @@ breakArmorTabs.forEach((tab) => {
 breakArmorTemplateInputs.forEach((input) => {
   input.addEventListener("change", () => {
     const client = input.dataset.breakArmorTemplate;
-    document.querySelectorAll(`[data-break-armor-template="${client}"]`).forEach((candidate) => {
-      candidate.closest(".break-armor-mode")?.classList.toggle("active", candidate.checked);
-    });
-    const customWrap = document.querySelector(`[data-break-armor-custom-wrap="${client}"]`);
-    if (customWrap) customWrap.hidden = selectedBreakArmorTemplate(client) !== "custom";
+    if (input.value !== "custom") breakArmorSelectedHomeTemplateIDs[client] = "";
+    updateBreakArmorTemplateSelectionUI(client);
+    scheduleBreakArmorPreview(client);
+  });
+});
+
+document.querySelectorAll("[data-break-armor-custom-option]").forEach((option) => {
+  option.addEventListener("click", () => {
+    const client = option.dataset.breakArmorCustomOption;
+    breakArmorSelectedHomeTemplateIDs[client] = "";
+    const radio = document.querySelector(`[data-break-armor-template="${client}"][value="custom"]`);
+    if (radio) radio.checked = true;
+    updateBreakArmorTemplateSelectionUI(client);
     scheduleBreakArmorPreview(client);
   });
 });
@@ -578,7 +718,8 @@ async function loadBreakArmorView(view) {
   setBreakArmorView(view);
   if (view === "sessions") return loadBreakArmorSessions();
   if (view === "templates") return loadBreakArmorTemplates();
-  return loadBreakArmorStatus();
+  const [status] = await Promise.all([loadBreakArmorStatus(), loadBreakArmorHomeTemplates()]);
+  return status;
 }
 
 function updateBreakArmorModeNote() {
@@ -791,6 +932,7 @@ async function loadBreakArmorTemplates() {
   const payload = await res.json();
   breakArmorTemplates = Array.isArray(payload.templates) ? payload.templates : [];
   breakArmorSelectedTemplate = breakArmorTemplates.find((item) => item.id === breakArmorSelectedTemplate?.id) || breakArmorTemplates[0] || null;
+  renderBreakArmorHomeTemplates(client, breakArmorTemplates);
   renderBreakArmorTemplates();
   if (breakArmorSelectedTemplate) selectBreakArmorTemplate(breakArmorSelectedTemplate.id); else resetBreakArmorTemplateEditor();
   return breakArmorTemplates;
@@ -849,10 +991,7 @@ function useBreakArmorTemplate() {
     const radio = document.querySelector(`[data-break-armor-template="${client}"][value="${breakArmorSelectedTemplate.id}"]`);
     if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change")); }
   } else {
-    const radio = document.querySelector(`[data-break-armor-template="${client}"][value="custom"]`);
-    const textarea = document.querySelector(`[data-break-armor-custom="${client}"]`);
-    if (textarea) textarea.value = breakArmorSelectedTemplate.prompt || "";
-    if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change")); }
+    selectBreakArmorHomeTemplate(client, breakArmorSelectedTemplate);
   }
   switchBreakArmorClient(client); setBreakArmorView("prompt");
   showToast(`已载入 ${breakArmorSelectedTemplate.name}`, "success");
@@ -904,6 +1043,24 @@ function setServiceOnline(online) {
     serviceCard.classList.toggle("online", localAPIEnabled && online);
     serviceCard.classList.toggle("offline", localAPIEnabled && !online);
     serviceCard.classList.toggle("disabled", !localAPIEnabled);
+  }
+}
+
+async function refreshRelayStatus() {
+  if (programSettings.localAPIEnabled === false) {
+    setServiceOnline(false);
+    return false;
+  }
+  try {
+    const res = await fetch("/api/relay/status", {cache: "no-store"});
+    const payload = await res.json().catch(() => ({}));
+    const online = res.ok && payload?.online === true && payload?.surface === "relay";
+    setServiceOnline(online);
+    return online;
+  } catch (err) {
+    console.error(err);
+    setServiceOnline(false);
+    return false;
   }
 }
 
@@ -1174,9 +1331,12 @@ function syncLocalAPIWarning() {
 
 function syncProgramSettingsInputs() {
   const address = splitListenAddress(programSettings.addr);
+  const managementAddress = splitListenAddress(programSettings.managementAddr);
   if (settingsLocalAPIEnabled) settingsLocalAPIEnabled.checked = programSettings.localAPIEnabled;
   if (autoCheckUpdates) autoCheckUpdates.checked = programSettings.autoCheckUpdates;
   syncLocalAPIWarning();
+  if (settingsManagementHost) settingsManagementHost.value = managementAddress.host;
+  if (settingsManagementPort) settingsManagementPort.value = managementAddress.port || "18473";
   if (settingsAPIHost) settingsAPIHost.value = address.host;
   if (settingsAPIPort) settingsAPIPort.value = address.port || "8787";
   Object.entries(clientConfigPathInputs).forEach(([client, input]) => {
@@ -1211,6 +1371,7 @@ async function loadConfig() {
   currentConfig = cfg;
   programSettings = {
     addr: cfg.addr || "127.0.0.1:8787",
+    managementAddr: cfg.management_addr || "127.0.0.1:18473",
     localAPIEnabled: cfg.local_api_enabled !== false,
     autoCheckUpdates: cfg.auto_check_updates !== false,
     openWindow: cfg.open_window !== false,
@@ -1221,6 +1382,7 @@ async function loadConfig() {
     clientAutoStart: normalizeClientBehavior(cfg.client_auto_start, false),
     clientPathsDetected: cfg.client_paths_detected === true
   };
+  renderRelayEndpoints();
   syncProgramSettingsInputs();
   clientRouteEnabled = normalizeClientRoutes(cfg.client_route_enabled);
   syncClientRouteInputs();
@@ -1264,7 +1426,7 @@ async function loadConfig() {
   applyTextProfile(activeTextProfileId);
   renderVisionProfiles();
   applyVisionProfile(activeVisionProfileId);
-  setServiceOnline(true);
+  await refreshRelayStatus();
   renderOverview();
   setStatus("已加载");
 }
@@ -1511,6 +1673,7 @@ profileModalForm.addEventListener("submit", (event) => {
 async function persistConfig(successMessage = "配置已自动保存") {
   const data = {};
   data.addr = programSettings.addr;
+  data.management_addr = programSettings.managementAddr;
   data.local_api_enabled = programSettings.localAPIEnabled;
   data.auto_check_updates = programSettings.autoCheckUpdates;
   data.client_config_paths = normalizeClientConfigPaths(programSettings.clientConfigPaths);
@@ -1552,7 +1715,6 @@ async function persistConfig(successMessage = "配置已自动保存") {
   }
   const payload = await res.json();
   currentConfig = payload?.config || {...currentConfig, ...data};
-  setServiceOnline(true);
   setStatus("已保存");
   if (successMessage) {
     showToast(successMessage, "success");
@@ -1567,17 +1729,30 @@ settingsLocalAPIEnabled?.addEventListener("change", () => {
 });
 
 saveProgramSettings?.addEventListener("click", async () => {
+  const managementPort = Number(settingsManagementPort?.value);
+  if (!Number.isInteger(managementPort) || managementPort < 1 || managementPort > 65535) {
+    showToast("管理端口必须是 1 到 65535 之间的整数", "error");
+    settingsManagementPort?.focus();
+    return;
+  }
   const port = Number(settingsAPIPort?.value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     showToast("API \u7aef\u53e3\u5fc5\u987b\u662f 1 \u5230 65535 \u4e4b\u95f4\u7684\u6574\u6570", "error");
     settingsAPIPort?.focus();
     return;
   }
+  if (managementPort === port) {
+    showToast("主程序管理端口不能与中转 API 端口相同", "error");
+    settingsManagementPort?.focus();
+    return;
+  }
   const previousAddress = programSettings.addr;
+  const previousManagementAddress = programSettings.managementAddr;
   const previousLocalAPIEnabled = programSettings.localAPIEnabled;
   programSettings = {
     ...programSettings,
     addr: joinListenAddress(settingsAPIHost?.value, port),
+    managementAddr: joinListenAddress(settingsManagementHost?.value, managementPort),
     localAPIEnabled: settingsLocalAPIEnabled?.checked !== false,
     clientConfigPaths: collectClientPaths(clientConfigPathInputs),
     clientProgramPaths: collectClientPaths(clientProgramPathInputs),
@@ -1593,18 +1768,21 @@ saveProgramSettings?.addEventListener("click", async () => {
     settingsSaved = true;
     const updatedClients = localAPIModeChanged ? await applyEnabledClientRoutes() : [];
     syncProgramSettingsInputs();
+    renderRelayEndpoints();
     renderOpenCodeSnippet();
-    const restartRequired = previousAddress !== programSettings.addr;
+    await refreshRelayStatus();
+    const restartRequired = previousAddress !== programSettings.addr ||
+      previousManagementAddress !== programSettings.managementAddr;
     const clientNames = updatedClients.map((client) => client.name || client.client).filter(Boolean).join("、");
     if (!programSettings.localAPIEnabled) {
       const routeMessage = clientNames ? `已将 ${clientNames} 改为直连供应商，请重启客户端程序。` : "";
       showToast(`设置已保存。${routeMessage}关闭本地服务后视觉模型将不可用；未勾选多模态的文本模型将无法实现图片识别。`, "warning");
     } else if (localAPIModeChanged && clientNames) {
-      const restartMessage = restartRequired ? "API 地址或端口将在重启 Vision Relay 后生效；" : "";
+      const restartMessage = restartRequired ? "管理界面或中转 API 地址/端口将在重启 Vision Relay 后生效；" : "";
       showToast(`设置已保存；${restartMessage}已将 ${clientNames} 接入本地 API，请重启客户端程序`, "success");
     } else {
       showToast(restartRequired
-        ? "\u8bbe\u7f6e\u5df2\u4fdd\u5b58\uff1bAPI \u5730\u5740\u6216\u7aef\u53e3\u5c06\u5728\u91cd\u542f Vision Relay \u540e\u751f\u6548"
+        ? "设置已保存；管理界面或中转 API 地址/端口将在重启 Vision Relay 后生效"
         : "\u7a0b\u5e8f\u8bbe\u7f6e\u5df2\u4fdd\u5b58", "success");
     }
     setStatus(restartRequired ? "\u8bbe\u7f6e\u5df2\u4fdd\u5b58\uff0c\u7b49\u5f85\u91cd\u542f\u751f\u6548" : "\u7a0b\u5e8f\u8bbe\u7f6e\u5df2\u4fdd\u5b58");
@@ -3320,7 +3498,7 @@ function renderOpenCodeSnippet() {
             npm: openCodeProviderNPM(profile, directUpstream),
             name: providerDisplayName,
             options: {
-              baseURL: directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`,
+              baseURL: directUpstream ? clientVersionedBaseURL(profile) : `${relayOrigin()}/v1`,
               ...(directUpstream ? {apiKey: upstreamKey} : {})
             },
             models: Object.fromEntries(snippetMappings.map((mapping) => {
@@ -3369,7 +3547,7 @@ function renderOpenCodeSnippet() {
           mode: "merge",
           providers: {
             "vision-relay": {
-              baseUrl: directUpstream ? openClawDirectBaseURL(profile) : `${location.origin}/v1`,
+              baseUrl: directUpstream ? openClawDirectBaseURL(profile) : `${relayOrigin()}/v1`,
               ...(directUpstream ? {apiKey: upstreamKey} : {}),
               api: directUpstream ? openClawDirectAPI(profile) : "openai-completions",
               models: openclawModels
@@ -3453,7 +3631,7 @@ function renderOpenCodeSnippet() {
         `name = "${providerDisplayName}"`,
         `wire_api = "responses"`,
         `requires_openai_auth = ${codexRequiresOpenAIAuth}`,
-        `base_url = "${directUpstream ? clientVersionedBaseURL(profile) : `${location.origin}/v1`}"`,
+        `base_url = "${directUpstream ? clientVersionedBaseURL(profile) : `${relayOrigin()}/v1`}"`,
         ...(codexBearerToken ? [`experimental_bearer_token = "${codexBearerToken}"`] : []),
         ...windowsSandbox,
         ``,
@@ -3477,7 +3655,7 @@ function renderOpenCodeSnippet() {
       const directAnthropic = directUpstream && normalizedDirectProvider(profile) === "anthropic";
       const claudeDesktopConfig = {
         inferenceProvider: "gateway",
-        inferenceGatewayBaseUrl: directUpstream ? claudeDesktopGatewayBaseURL(profile) : location.origin,
+        inferenceGatewayBaseUrl: directUpstream ? claudeDesktopGatewayBaseURL(profile) : relayOrigin(),
         inferenceGatewayAuthScheme: directAnthropic ? "x-api-key" : "bearer",
         inferenceGatewayApiKey: directUpstream ? upstreamKey : "vision-relay",
         inferenceModels: claudeModels,
@@ -3487,7 +3665,7 @@ function renderOpenCodeSnippet() {
       const claudeCLIEnv = {
         ANTHROPIC_BASE_URL: directUpstream
           ? String(profile.base_url || defaultBaseURL(profile.provider)).trim().replace(/\/+$/, "")
-          : location.origin,
+          : relayOrigin(),
         ...(directUpstream ? {ANTHROPIC_AUTH_TOKEN: upstreamKey} : {})
       };
       [

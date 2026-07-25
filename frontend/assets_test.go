@@ -28,6 +28,19 @@ func TestClientConfigureActionsAreEmbedded(t *testing.T) {
 			t.Fatalf("client configure button %q is missing", buttonID)
 		}
 	}
+	for _, expected := range []string{
+		`id="configureCodex" type="button">一键配置 Codex</button>`,
+		`id="configureClaudeCode" type="button">一键配置 Claude</button>`,
+	} {
+		if !strings.Contains(index, expected) {
+			t.Fatalf("simplified client configure label %q is missing", expected)
+		}
+	}
+	for _, forbidden := range []string{`Codex 桌面端 + CLI`, `Claude 桌面端 + CLI`} {
+		if strings.Contains(index, forbidden) {
+			t.Fatalf("client configure label still contains %q", forbidden)
+		}
+	}
 
 	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
 	if err != nil {
@@ -543,7 +556,9 @@ func TestTopbarRemovedAndServiceStatusMovedToSidebar(t *testing.T) {
 		`"本地 API 服务连接失败"`,
 		`"本地 API 服务已关闭"`,
 		`serviceCard.classList.toggle("disabled", !localAPIEnabled);`,
-		`setServiceOnline(true);`,
+		`const res = await fetch("/api/relay/status", {cache: "no-store"});`,
+		`payload?.online === true && payload?.surface === "relay"`,
+		`await refreshRelayStatus();`,
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("local API service status behavior %q is missing", expected)
@@ -679,6 +694,8 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 		`class="page standard-page settings-page span-12"`,
 		`class="dashboard-heading settings-page-heading"`,
 		`<h3>设置</h3>`,
+		`id="settingsManagementHost"`,
+		`id="settingsManagementPort"`,
 		`id="settingsLocalAPIEnabled"`,
 		`id="settingsAPIHost"`,
 		`id="settingsAPIPort"`,
@@ -716,6 +733,9 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 	}
 	script := string(scriptRaw)
 	for _, expected := range []string{
+		`data.management_addr = programSettings.managementAddr;`,
+		`managementAddr: cfg.management_addr || "127.0.0.1:18473"`,
+		`managementPort === port`,
 		`data.local_api_enabled = programSettings.localAPIEnabled;`,
 		`const previousLocalAPIEnabled = programSettings.localAPIEnabled;`,
 		`const updatedClients = localAPIModeChanged ? await applyEnabledClientRoutes() : [];`,
@@ -1140,6 +1160,9 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 		`item.source === "codex-x"`,
 		`item.bundled`,
 		`item.description ||`,
+		`aria-pressed="false"`,
+		`button.setAttribute("aria-pressed", String(active));`,
+		`textarea.value = selectedPrompt;`,
 		"Codex-X · 离线内置",
 		"Codex-X · GitHub 更新",
 		"Codex-X 模板已是最新版本",
@@ -1165,7 +1188,7 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	style := string(styleRaw)
-	for _, expected := range []string{".break-armor-page", ".break-armor-test-badge", ".nav-test-badge", ".break-armor-tabs", ".break-armor-flow", ".break-armor-code", ".break-armor-function-tabs", ".break-armor-session-grid", ".break-armor-template-grid", ".break-armor-template-source-note", ".break-armor-template-library-actions", ".break-armor-backup-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end;", ".break-armor-backup-row > label { min-width:0; margin:0; }", ".break-armor-backup-row > label > .vr-component-select { margin-bottom:0; }", ".break-armor-backup-row > button { min-height:44px; margin:0; }", ".break-armor-mode-note { border-color:#bae6fd; color:#36556f; background:#f0f9ff; font-size:13px; font-weight:600; }", ".break-armor-mode-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; font-weight:800; }"} {
+	for _, expected := range []string{".break-armor-page", ".break-armor-test-badge", ".nav-test-badge", ".break-armor-tabs", ".break-armor-flow", ".break-armor-code", ".break-armor-function-tabs", ".break-armor-mode:focus-within,", ".break-armor-other-option:focus-visible,", ".break-armor-session-grid", ".break-armor-template-grid", ".break-armor-template-source-note", ".break-armor-template-library-actions", ".break-armor-backup-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end;", ".break-armor-backup-row > label { min-width:0; margin:0; }", ".break-armor-backup-row > label > .vr-component-select { margin-bottom:0; }", ".break-armor-backup-row > button { min-height:44px; margin:0; }", ".break-armor-mode-note { border-color:#bae6fd; color:#36556f; background:#f0f9ff; font-size:13px; font-weight:600; }", ".break-armor-mode-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; font-weight:800; }"} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("break armor style %q is missing", expected)
 		}
@@ -1229,5 +1252,38 @@ func TestClientOneClickPreviewUsesDetectedCrossPlatformPaths(t *testing.T) {
 	}
 	if strings.Contains(script, `# 当前项目 .codex\\config.toml`) {
 		t.Fatal("one-click preview must not claim that an unrequested project config is written")
+	}
+}
+
+func TestRelayEndpointsAndClientPreviewsUseConfiguredRelayAddress(t *testing.T) {
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		`function relayOrigin() {`,
+		`splitListenAddress(programSettings.addr || "127.0.0.1:8787")`,
+		`if (!host || host === "0.0.0.0") host = "127.0.0.1";`,
+		`if (host === "::") host = "::1";`,
+		"const urlHost = host.includes(\":\") ? `[${host}]` : host;",
+		"return `http://${urlHost}:${address.port || \"8787\"}`;",
+		"openaiBaseEndpoint: `${origin}/v1`",
+		"responsesEndpoint: `${origin}/v1/responses`",
+		"baseURL: directUpstream ? clientVersionedBaseURL(profile) : `${relayOrigin()}/v1`",
+		"baseUrl: directUpstream ? openClawDirectBaseURL(profile) : `${relayOrigin()}/v1`",
+		`inferenceGatewayBaseUrl: directUpstream ? claudeDesktopGatewayBaseURL(profile) : relayOrigin()`,
+		`: relayOrigin(),`,
+		`renderRelayEndpoints();`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("relay address behavior %q is missing", expected)
+		}
+	}
+	if strings.Contains(script, "location.origin") {
+		t.Fatal("management-page origin must not be used as the relay API origin")
+	}
+	if strings.Contains(script, "setServiceOnline(true)") {
+		t.Fatal("management API success must not directly mark the relay API online")
 	}
 }

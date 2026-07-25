@@ -55,6 +55,23 @@ func (a *app) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *app) handleRelayStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	relayURL := localServerURL(a.currentConfig().Addr)
+	online := relayVisionRelayHealthy(relayURL)
+	status := http.StatusOK
+	if !online {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, map[string]any{
+		"online":  online,
+		"surface": "relay",
+	})
+}
+
 func (a *app) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {

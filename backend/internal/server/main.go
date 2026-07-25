@@ -40,7 +40,8 @@ func runDesktopInstance(acquire desktopInstanceAcquirer, startPrimary func(chan 
 func runPrimaryInstance(desktopActivation chan struct{}) {
 	cleanupUpdateHelper()
 	cfg := defaultConfig()
-	addrFlag := flag.String("addr", "", "listen address, for example 127.0.0.1:8787")
+	addrFlag := flag.String("addr", "", "relay API listen address, for example 127.0.0.1:8787")
+	managementAddrFlag := flag.String("management-addr", "", "management UI listen address, for example 127.0.0.1:18473")
 	noOpen := flag.Bool("no-open", false, "do not open a client window or browser on start")
 	noWindow := flag.Bool("no-window", false, "do not open the desktop client window")
 	browserFlag := flag.Bool("browser", false, "also open the default browser")
@@ -105,6 +106,22 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	if *addrFlag != "" {
 		cfg.Addr = *addrFlag
 	}
+	if *managementAddrFlag != "" {
+		cfg.ManagementAddr = *managementAddrFlag
+	}
+	relayAddr, err := normalizeListenAddress(cfg.Addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	managementAddr, err := normalizeManagementListenAddress(cfg.ManagementAddr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if listenPort(relayAddr) == listenPort(managementAddr) {
+		log.Fatal("management UI and relay API must use different ports")
+	}
+	cfg.Addr = relayAddr
+	cfg.ManagementAddr = managementAddr
 	if *noOpen {
 		cfg.OpenWindow = false
 		cfg.OpenBrowser = false
@@ -124,9 +141,104 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 		httpClient: &http.Client{Timeout: 180 * time.Second},
 	}
 
+	managementHandler := newManagementHandler(a, desktopActivation)
+	relayHandler := newRelayHandler(a)
+	managementServer := &http.Server{
+		Addr:              cfg.ManagementAddr,
+		Handler:           managementHandler,
+		ReadHeaderTimeout: 15 * time.Second,
+	}
+	relayServer := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           relayHandler,
+		ReadHeaderTimeout: 15 * time.Second,
+	}
+
+	managementURL := localServerURL(cfg.ManagementAddr)
+	relayURL := localServerURL(cfg.Addr)
+	managementListener, err := net.Listen("tcp", cfg.ManagementAddr)
+	if err != nil {
+		if existingVisionRelayHealthy(managementURL) {
+			log.Printf("%s already running on %s", appSlug, managementURL)
+			if cfg.OpenWindow {
+				if activateErr := activateExistingDesktop(managementURL); activateErr != nil {
+					log.Printf("existing window activation warning: %v", activateErr)
+				}
+			} else if cfg.OpenBrowser {
+				_ = openBrowser(managementURL)
+			}
+			return
+		}
+		log.Fatalf("management UI listen failed on %s: %v", cfg.ManagementAddr, err)
+	}
+	relayListener, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		_ = managementListener.Close()
+		log.Fatalf("relay API listen failed on %s: %v", cfg.Addr, err)
+	}
+	log.Printf("%s management UI listening on %s", appSlug, managementURL)
+	log.Printf("%s relay API listening on %s", appSlug, relayURL)
+	log.Printf("database: %s", dbPath)
+
+	if cfg.OpenBrowser {
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			_ = openBrowser(managementURL)
+		}()
+	}
+	type serverResult struct {
+		name string
+		err  error
+	}
+	serverErr := make(chan serverResult, 2)
+	serve := func(name string, server *http.Server, listener net.Listener) {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErr <- serverResult{name: name, err: err}
+			return
+		}
+		serverErr <- serverResult{name: name}
+	}
+	go serve("management UI", managementServer, managementListener)
+	go serve("relay API", relayServer, relayListener)
+
+	// Client routes must always point at the relay API, never at the management UI.
+	go runStartupMaintenance(a, cfg, relayURL)
+
+	shutdownServers := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = managementServer.Shutdown(ctx)
+		_ = relayServer.Shutdown(ctx)
+	}
+	if cfg.OpenWindow {
+		runTrayApp(managementURL, desktopActivation, func() {
+			shutdownServers()
+			for range 2 {
+				result := <-serverErr
+				if result.err != nil {
+					log.Printf("%s shutdown warning: %v", result.name, result.err)
+				}
+			}
+		})
+		return
+	}
+
+	result := <-serverErr
+	shutdownServers()
+	other := <-serverErr
+	if result.err != nil {
+		log.Fatalf("%s server failed: %v", result.name, result.err)
+	}
+	if other.err != nil {
+		log.Fatalf("%s server failed: %v", other.name, other.err)
+	}
+}
+
+func newManagementHandler(a *app, desktopActivation chan<- struct{}) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/desktop/activate", desktopActivationHandler(desktopActivation))
 	mux.HandleFunc("/api/config", a.handleConfig)
+	mux.HandleFunc("/api/relay/status", a.handleRelayStatus)
 	mux.HandleFunc("/api/provider-router/status", a.handleProviderRouterStatus)
 	mux.HandleFunc("/api/update", a.handleUpdate)
 	mux.HandleFunc("/api/update/progress", a.handleUpdateProgress)
@@ -149,71 +261,33 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	mux.HandleFunc("/api/logs", a.handleLogs)
 	mux.HandleFunc("/api/models", a.handleListModels)
 	mux.HandleFunc("/api/model-test", a.handleModelTest)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "application": appSlug})
+	mux.HandleFunc("/healthz", healthHandler("management"))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if !isStaticRequest(r) {
+			http.NotFound(w, r)
+			return
+		}
+		a.handleWeb(w, r)
 	})
-	mux.HandleFunc("/", a.handleRoute)
-
-	server := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           withManagementAccess(withCORS(mux)),
-		ReadHeaderTimeout: 15 * time.Second,
-	}
-
-	localURL := localManagementURL(cfg.Addr)
-	ln, err := net.Listen("tcp", cfg.Addr)
-	if err != nil {
-		if existingVisionRelayHealthy(localURL) {
-			log.Printf("%s already running on %s", appSlug, localURL)
-			if cfg.OpenWindow {
-				if activateErr := activateExistingDesktop(localURL); activateErr != nil {
-					log.Printf("existing window activation warning: %v", activateErr)
-				}
-			} else if cfg.OpenBrowser {
-				_ = openBrowser(localURL)
-			}
-			return
-		}
-		log.Fatal(err)
-	}
-	log.Printf("%s listening on %s", appSlug, localURL)
-	log.Printf("database: %s", dbPath)
-
-	if cfg.OpenBrowser {
-		go func() {
-			time.Sleep(500 * time.Millisecond)
-			_ = openBrowser(localURL)
-		}()
-	}
-	serverErr := make(chan error, 1)
-	go func() {
-		if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErr <- err
-			return
-		}
-		serverErr <- nil
-	}()
-	// Session reconciliation and route synchronization can scan or rewrite a
-	// number of client files. They are maintenance work, not prerequisites for
-	// serving the management UI, so keep them off the critical startup path.
-	go runStartupMaintenance(a, cfg, localURL)
-
-	if cfg.OpenWindow {
-		runTrayApp(localURL, desktopActivation, func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_ = server.Shutdown(ctx)
-			if err := <-serverErr; err != nil {
-				log.Printf("server shutdown warning: %v", err)
-			}
-		})
-		return
-	}
-	if err := <-serverErr; err != nil {
-		log.Fatal(err)
-	}
+	return withManagementAccess(withCORS(mux))
 }
 
+func newRelayHandler(a *app) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", healthHandler("relay"))
+	mux.HandleFunc("/", a.handleRoute)
+	return withCORS(mux)
+}
+
+func healthHandler(surface string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status":      "ok",
+			"application": appSlug,
+			"surface":     surface,
+		})
+	}
+}
 func runStartupMaintenance(a *app, cfg config, localURL string) {
 	// Give the desktop shell and its first API requests priority over background
 	// filesystem work. Maintenance remains sequential to avoid overlapping its
@@ -241,14 +315,16 @@ func runStartupMaintenance(a *app, cfg config, localURL string) {
 		log.Printf("client route synchronization warning: %s", routeErr)
 	}
 }
-func localManagementURL(addr string) string {
+func localServerURL(addr string) string {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return "http://" + addr + "/"
 	}
 	switch strings.TrimSpace(host) {
-	case "", "0.0.0.0", "::":
+	case "", "0.0.0.0":
 		host = "127.0.0.1"
+	case "::":
+		host = "::1"
 	}
 	return "http://" + net.JoinHostPort(host, port) + "/"
 }

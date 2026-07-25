@@ -190,9 +190,9 @@
           <article class="component-card client-config-card">
             <div class="component-card-head client-config-heading"><div><h4>客户端配置</h4><p>一键配置由程序直接写入本地文件，不再启动终端；开启路由后，切换供应商会自动同步配置。</p></div><span class="component-tag">程序内置</span></div>
             <div class="client-tabs" role="tablist" aria-label="客户端类型"><button class="client-tab active" type="button" role="tab" aria-selected="true" data-client-tab="codex">Codex</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="opencode">OpenCode</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="claude-code">Claude</button><button class="client-tab" type="button" role="tab" aria-selected="false" data-client-tab="openclaw">OpenClaw</button></div>
-            <div class="client-tab-panel active" data-client-panel="codex"><div class="client-panel-intro"><div><h4>Codex</h4><p>使用 Codex 分组当前选中的供应商，同时配置桌面端与 CLI。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeCodex" type="checkbox"><span aria-hidden="true"></span></span></label><button class="secondary small-action" id="restoreCodex" type="button">恢复官方模式</button><button class="primary-action small-action" id="configureCodex" type="button">一键配置 Codex 桌面端 + CLI</button></div></div><pre><code id="codexConfig"></code></pre></div>
+            <div class="client-tab-panel active" data-client-panel="codex"><div class="client-panel-intro"><div><h4>Codex</h4><p>使用 Codex 分组当前选中的供应商完成配置。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeCodex" type="checkbox"><span aria-hidden="true"></span></span></label><button class="secondary small-action" id="restoreCodex" type="button">恢复官方模式</button><button class="primary-action small-action" id="configureCodex" type="button">一键配置 Codex</button></div></div><pre><code id="codexConfig"></code></pre></div>
             <div class="client-tab-panel" data-client-panel="opencode" hidden><div class="client-panel-intro"><div><h4>OpenCode</h4><p>配置 OpenAI-compatible 模型的图片附件能力，避免客户端在本地拦截图片。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeOpenCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureOpenCode" type="button">一键配置 OpenCode</button></div></div><pre><code id="opencodeConfig"></code></pre></div>
-            <div class="client-tab-panel" data-client-panel="claude-code" hidden><div class="client-panel-intro"><div><h4>Claude</h4><p>使用 Claude 分组当前选中的供应商，同时配置 Claude Desktop 与 Claude CLI。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureClaudeCode" type="button">一键配置 Claude 桌面端 + CLI</button></div></div><pre><code id="claudeCodeConfig"></code></pre></div>
+            <div class="client-tab-panel" data-client-panel="claude-code" hidden><div class="client-panel-intro"><div><h4>Claude</h4><p>使用 Claude 分组当前选中的供应商完成配置。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeClaudeCode" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureClaudeCode" type="button">一键配置 Claude</button></div></div><pre><code id="claudeCodeConfig"></code></pre></div>
             <div class="client-tab-panel" data-client-panel="openclaw" hidden><div class="client-panel-intro"><div><h4>OpenClaw</h4><p>使用 OpenCode 分组当前选中的供应商，写入 OpenAI-compatible 模型与图片能力。</p></div><div class="panel-actions"><label class="client-route-control"><span>路由</span><span class="switch-control"><input id="routeOpenClaw" type="checkbox"><span aria-hidden="true"></span></span></label><button class="primary-action small-action" id="configureOpenClaw" type="button">一键配置 OpenClaw</button></div></div><pre><code id="openclawConfig"></code></pre></div>
           </article>
         </section>
@@ -203,6 +203,13 @@
             <div class="panel-actions"><button class="primary-action" id="saveProgramSettings" type="button">保存设置</button></div>
           </div>
 
+          <article class="component-card settings-management-card">
+            <div class="component-card-head"><div><h4>主程序管理界面</h4><p>Go 主程序、桌面窗口和管理主页使用此地址，与中转 API 完全分离。</p></div><span class="component-tag">独立端口</span></div>
+            <div class="settings-grid api-settings-grid">
+              <label><span>管理监听地址</span><input id="settingsManagementHost" type="text" autocomplete="off" placeholder="127.0.0.1"><small>管理界面仅允许本机访问，建议保持 127.0.0.1。</small></label>
+              <label><span>主程序端口（Go）</span><input id="settingsManagementPort" type="number" min="1" max="65535" step="1" placeholder="18473"><small>默认 18473；修改后重启 Vision Relay 生效。</small></label>
+            </div>
+          </article>
           <article class="component-card settings-api-card">
             <div class="component-card-head"><div><h4>本地 API 接口</h4><p>设置客户端访问 Vision Relay 的监听地址；关闭后，一键配置与供应商切换会把客户端改为直连当前文本供应商。</p></div><label class="client-route-control"><span>启用接口</span><span class="switch-control"><input id="settingsLocalAPIEnabled" type="checkbox"><span aria-hidden="true"></span></span></label></div>
             <div class="settings-grid api-settings-grid">
@@ -422,8 +429,13 @@
                 <div class="break-armor-modes">
                   <label class="break-armor-mode active"><input type="radio" name="breakArmorTemplateCodex" value="v5" checked data-break-armor-template="codex"><span class="break-armor-radio"></span><span><b>v5 稳定版 <em class="is-green">推荐</em></b><small>简洁稳定，适用于大多数本地测试任务。</small></span></label>
                   <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateCodex" value="v35" data-break-armor-template="codex"><span class="break-armor-radio"></span><span><b>v35 特殊任务版 <em class="is-amber">谨慎</em></b><small>更完整的执行流程与复合任务指令。</small></span></label>
-                  <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateCodex" value="custom" data-break-armor-template="codex"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的一键破甲指令。</small></span></label>
                 </div>
+                <div class="break-armor-other-heading"><h6>其他方案</h6><span data-break-armor-other-count="codex">正在加载</span></div>
+                <div class="break-armor-other-options" data-break-armor-other-options="codex">
+                  <div class="break-armor-other-library" data-break-armor-other-library="codex"></div>
+                  <label class="break-armor-other-option is-custom" data-break-armor-custom-option="codex"><input type="radio" name="breakArmorTemplateCodex" value="custom" data-break-armor-template="codex"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的破甲指令。</small></span></label>
+                </div>
+                <div class="break-armor-current-option" data-break-armor-current-option="codex" hidden><span>当前选中</span><b data-break-armor-current-name="codex"></b><small data-break-armor-current-description="codex"></small></div>
                 <label class="break-armor-custom" data-break-armor-custom-wrap="codex" hidden><span>自定义破甲模板</span><textarea rows="7" data-break-armor-custom="codex" placeholder="输入 Codex 自定义一键破甲指令"></textarea></label>
                 <div class="break-armor-launch"><div><b>准备就绪</b><span>执行前自动创建独立快照</span></div><button class="primary-action" type="button" data-break-armor-apply="codex">一键破甲 Codex</button></div>
               </div>
@@ -446,8 +458,13 @@
                 <div class="break-armor-modes">
                   <label class="break-armor-mode active"><input type="radio" name="breakArmorTemplateClaude" value="v5" checked data-break-armor-template="claude"><span class="break-armor-radio"></span><span><b>v5 稳定版 <em class="is-green">推荐</em></b><small>简洁稳定，适用于大多数本地测试任务。</small></span></label>
                   <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateClaude" value="v35" data-break-armor-template="claude"><span class="break-armor-radio"></span><span><b>v35 特殊任务版 <em class="is-amber">谨慎</em></b><small>更完整的执行流程与复合任务指令。</small></span></label>
-                  <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateClaude" value="custom" data-break-armor-template="claude"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的一键破甲指令。</small></span></label>
                 </div>
+                <div class="break-armor-other-heading"><h6>其他方案</h6><span data-break-armor-other-count="claude">正在加载</span></div>
+                <div class="break-armor-other-options" data-break-armor-other-options="claude">
+                  <div class="break-armor-other-library" data-break-armor-other-library="claude"></div>
+                  <label class="break-armor-other-option is-custom" data-break-armor-custom-option="claude"><input type="radio" name="breakArmorTemplateClaude" value="custom" data-break-armor-template="claude"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的破甲指令。</small></span></label>
+                </div>
+                <div class="break-armor-current-option" data-break-armor-current-option="claude" hidden><span>当前选中</span><b data-break-armor-current-name="claude"></b><small data-break-armor-current-description="claude"></small></div>
                 <label class="break-armor-custom" data-break-armor-custom-wrap="claude" hidden><span>自定义破甲模板</span><textarea rows="7" data-break-armor-custom="claude" placeholder="输入 Claude 自定义一键破甲指令"></textarea></label>
                 <div class="break-armor-launch"><div><b>准备就绪</b><span>执行前自动创建独立快照</span></div><button class="primary-action" type="button" data-break-armor-apply="claude">一键破甲 Claude</button></div>
               </div>
@@ -470,8 +487,13 @@
                 <div class="break-armor-modes">
                   <label class="break-armor-mode active"><input type="radio" name="breakArmorTemplateOpenCode" value="v5" checked data-break-armor-template="opencode"><span class="break-armor-radio"></span><span><b>v5 稳定版 <em class="is-green">推荐</em></b><small>简洁稳定，适用于大多数本地测试任务。</small></span></label>
                   <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateOpenCode" value="v35" data-break-armor-template="opencode"><span class="break-armor-radio"></span><span><b>v35 特殊任务版 <em class="is-amber">谨慎</em></b><small>更完整的执行流程与复合任务指令。</small></span></label>
-                  <label class="break-armor-mode"><input type="radio" name="breakArmorTemplateOpenCode" value="custom" data-break-armor-template="opencode"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的一键破甲指令。</small></span></label>
                 </div>
+                <div class="break-armor-other-heading"><h6>其他方案</h6><span data-break-armor-other-count="opencode">正在加载</span></div>
+                <div class="break-armor-other-options" data-break-armor-other-options="opencode">
+                  <div class="break-armor-other-library" data-break-armor-other-library="opencode"></div>
+                  <label class="break-armor-other-option is-custom" data-break-armor-custom-option="opencode"><input type="radio" name="breakArmorTemplateOpenCode" value="custom" data-break-armor-template="opencode"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的破甲指令。</small></span></label>
+                </div>
+                <div class="break-armor-current-option" data-break-armor-current-option="opencode" hidden><span>当前选中</span><b data-break-armor-current-name="opencode"></b><small data-break-armor-current-description="opencode"></small></div>
                 <label class="break-armor-custom" data-break-armor-custom-wrap="opencode" hidden><span>自定义破甲模板</span><textarea rows="7" data-break-armor-custom="opencode" placeholder="输入 OpenCode 自定义一键破甲指令"></textarea></label>
                 <div class="break-armor-launch"><div><b>准备就绪</b><span>执行前自动创建独立快照</span></div><button class="primary-action" type="button" data-break-armor-apply="opencode">一键破甲 OpenCode</button></div>
               </div>

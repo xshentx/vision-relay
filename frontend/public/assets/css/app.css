@@ -4869,6 +4869,175 @@ body.model-test-open {
   color: #c2410c;
 }
 
+.break-armor-other-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 17px 0 9px;
+}
+
+.break-armor-other-heading h6 {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.break-armor-other-heading > span {
+  color: #6b8dc3;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.break-armor-other-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.break-armor-other-library {
+  display: contents;
+}
+
+.break-armor-other-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  min-width: 0;
+  min-height: 68px;
+  padding: 10px;
+  border: 1px solid #dfe7ee;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
+}
+
+.break-armor-other-option:hover {
+  border-color: #b6c9e9;
+  background: #f8fbff;
+}
+
+.break-armor-mode:focus-within,
+.break-armor-other-option:focus-visible,
+.break-armor-other-option:focus-within {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.break-armor-other-option.active {
+  border-color: #82aaff;
+  background: #f2f6ff;
+  box-shadow: inset 0 0 0 1px rgba(79, 130, 246, .08);
+}
+
+.break-armor-other-option input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.break-armor-other-option.active .break-armor-radio {
+  border: 5px solid var(--blue);
+}
+
+.break-armor-other-option > span:last-child,
+.break-armor-other-copy {
+  min-width: 0;
+}
+
+.break-armor-other-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.break-armor-other-option b {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.break-armor-other-title em {
+  flex: none;
+  padding: 2px 5px;
+  border-radius: 999px;
+  color: #087c91;
+  background: #dff8fb;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.break-armor-other-option small {
+  display: -webkit-box;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.break-armor-other-error {
+  grid-column: 1 / -1;
+  padding: 13px;
+  border: 1px dashed #d7e1ea;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+}
+
+.break-armor-current-option {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 11px 12px;
+  border: 1px solid #a8c3ff;
+  border-radius: 10px;
+  background: #f2f6ff;
+}
+
+.break-armor-current-option[hidden] {
+  display: none;
+}
+
+.break-armor-current-option span {
+  color: #3975cf;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.break-armor-current-option b {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.break-armor-current-option small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .break-armor-custom {
   display: grid;
   gap: 7px;
@@ -5213,7 +5382,7 @@ body.model-test-open {
 .break-armor-inline-select { min-width:185px; margin-bottom:0; }
 .break-armor-inline-select > .vr-component-select { margin-bottom:0; }
 @media (max-width:1050px) { .break-armor-session-grid,.break-armor-template-grid { grid-template-columns:1fr; } .break-armor-session-list { max-height:340px; } }
-@media (max-width:760px) { .break-armor-tool-heading,.break-armor-section-title { align-items:stretch; flex-direction:column; } .break-armor-segmented { overflow-x:auto; } .break-armor-compare,.break-armor-change-list,.break-armor-codex-options { grid-template-columns:1fr; } .break-armor-session-options { align-items:stretch; flex-direction:column; } .break-armor-template-actions { align-items:stretch; flex-direction:column; } .break-armor-template-library-actions { flex-wrap:wrap; } .break-armor-backup-row { grid-template-columns:1fr; align-items:stretch; } .break-armor-backup-row > button { width:100%; } }
+@media (max-width:760px) { .break-armor-tool-heading,.break-armor-section-title { align-items:stretch; flex-direction:column; } .break-armor-segmented { overflow-x:auto; } .break-armor-compare,.break-armor-change-list,.break-armor-codex-options,.break-armor-other-options { grid-template-columns:1fr; } .break-armor-session-options { align-items:stretch; flex-direction:column; } .break-armor-template-actions { align-items:stretch; flex-direction:column; } .break-armor-template-library-actions { flex-wrap:wrap; } .break-armor-backup-row { grid-template-columns:1fr; align-items:stretch; } .break-armor-backup-row > button { width:100%; } }
 
 /* Break Armor light-shell compatibility and overflow guard. */
 .break-armor-mode { position:relative; }

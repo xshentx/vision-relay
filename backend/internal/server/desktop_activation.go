@@ -40,6 +40,14 @@ func activateExistingDesktop(localURL string) error {
 }
 
 func existingVisionRelayHealthy(localURL string) bool {
+	return visionRelaySurfaceHealthy(localURL, "management", true)
+}
+
+func relayVisionRelayHealthy(localURL string) bool {
+	return visionRelaySurfaceHealthy(localURL, "relay", false)
+}
+
+func visionRelaySurfaceHealthy(localURL, expectedSurface string, allowLegacySurface bool) bool {
 	client := &http.Client{Timeout: 2 * time.Second}
 	response, err := client.Get(strings.TrimRight(localURL, "/") + "/healthz")
 	if err != nil {
@@ -52,9 +60,16 @@ func existingVisionRelayHealthy(localURL string) bool {
 	var health struct {
 		Status      string `json:"status"`
 		Application string `json:"application"`
+		Surface     string `json:"surface"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&health); err != nil {
 		return false
 	}
-	return health.Status == "ok" && health.Application == appSlug
+	if health.Status != "ok" || health.Application != appSlug {
+		return false
+	}
+	if health.Surface == expectedSurface {
+		return true
+	}
+	return allowLegacySurface && health.Surface == ""
 }
