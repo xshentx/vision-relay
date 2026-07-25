@@ -714,8 +714,8 @@ func TestOverviewUsesSeparateManagementAndRelayAddresses(t *testing.T) {
 		`const relayRestartRequired = previousAddress !== programSettings.addr;`,
 		`const managementRestartRequired = previousManagementAddress !== programSettings.managementAddr;`,
 		`const restartRequired = relayRestartRequired || managementRestartRequired;`,
-		`await refreshRelayStatus();
-    renderOverview();`,
+		`await refreshRelayStatus();`,
+		`renderOverview();`,
 		`if (relayRestartRequired && homeRelayState && programSettings.localAPIEnabled) {`,
 	} {
 		if !strings.Contains(script, expected) {
