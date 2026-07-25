@@ -18,9 +18,59 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Prepare Windows resource compiler
+        shell: pwsh
+        run: |
+          $windres = Get-Command windres.exe -ErrorAction SilentlyContinue
+          if ($null -eq $windres) {
+            $knownPaths = @(
+              "C:\msys64\mingw64\bin\windres.exe",
+              "C:\msys64\ucrt64\bin\windres.exe",
+              "C:\tools\mingw64\bin\windres.exe"
+            )
+            $windresPath = $knownPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+            if ([string]::IsNullOrWhiteSpace($windresPath)) {
+              choco install mingw --yes --no-progress
+              if ($LASTEXITCODE -ne 0) {
+                throw "Unable to install MinGW-w64."
+              }
+              $windresPath = Get-ChildItem "C:\tools\mingw64", "C:\ProgramData\chocolatey\lib\mingw" `
+                -Filter windres.exe -File -Recurse -ErrorAction SilentlyContinue |
+                Select-Object -First 1 -ExpandProperty FullName
+            }
+            if ([string]::IsNullOrWhiteSpace($windresPath)) {
+              throw "windres.exe was not found after installing MinGW-w64."
+            }
+            Split-Path -Parent $windresPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            & $windresPath --version
+          } else {
+            & $windres.Source --version
+          }
       - name: Build Windows executable
         shell: pwsh
-        run: ./tools/build-windows.ps1 -Output dist/vision-relay.exe -Version "${{ github.ref_name }}"
+        env:
+          WINDOWS_SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)) {
+            throw "WINDOWS_SIGNING_CERTIFICATE_BASE64 is required for public tag releases."
+          }
+          $certificatePath = Join-Path $env:RUNNER_TEMP "vision-relay-signing.pfx"
+          try {
+            [IO.File]::WriteAllBytes(
+              $certificatePath,
+              [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE_BASE64)
+            )
+            ./tools/build-windows.ps1 `
+              -Output dist/vision-relay.exe `
+              -Version "${{ github.ref_name }}" `
+              -SigningCertificatePath $certificatePath `
+              -RequireSignature
+          } finally {
+            if ($certificatePath) {
+              Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
+            }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: vision-relay-windows

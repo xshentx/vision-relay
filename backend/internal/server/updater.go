@@ -203,9 +203,9 @@ func (a *app) runUpdate() {
 		TotalBytes:      completed.TotalBytes,
 		Message:         "校验通过，正在准备安装…",
 	})
-	if err := startUpdateHelper(downloaded, target, os.Getpid(), os.Args[1:]); err != nil {
+	if err := installUpdate(downloaded, target, os.Args[1:]); err != nil {
 		_ = os.Remove(downloaded)
-		a.failUpdate(fmt.Errorf("启动更新程序失败: %w", err))
+		a.failUpdate(fmt.Errorf("安装并重启更新失败: %w", err))
 		return
 	}
 	a.setUpdateProgress(updateProgress{
@@ -291,14 +291,14 @@ func (a *app) downloadUpdate(ctx context.Context, info updateInfo, destinationDi
 	if report != nil {
 		report("downloading", 0, total)
 	}
-	// Keep the verified payload beside the running executable instead of in the
-	// system temporary directory. A stable copy of the current executable acts
-	// as the helper; this downloaded file is never passed to CreateProcess.
-	file, err := os.CreateTemp(destinationDir, ".vision-relay-payload-*.download")
+	// Keep one predictably named, non-executable staging file beside the running
+	// application. The staging path is never passed to CreateProcess.
+	path := filepath.Join(destinationDir, "vision-relay.update")
+	_ = os.Remove(path)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("在程序目录创建更新文件失败: %w", err)
 	}
-	path := file.Name()
 	ok := false
 	defer func() {
 		_ = file.Close()
@@ -333,7 +333,9 @@ func (a *app) downloadUpdate(ctx context.Context, info updateInfo, destinationDi
 	}
 	if expected, found, err := a.fetchChecksum(ctx, info.release.Assets, info.asset.Name); err != nil {
 		return "", err
-	} else if found && !strings.EqualFold(expected, hex.EncodeToString(hash.Sum(nil))) {
+	} else if !found {
+		return "", errors.New("Release 缺少更新文件的 SHA-256 校验文件")
+	} else if !strings.EqualFold(expected, hex.EncodeToString(hash.Sum(nil))) {
 		return "", errors.New("更新文件 SHA-256 校验失败")
 	}
 	ok = true
@@ -383,6 +385,9 @@ func (a *app) fetchChecksum(ctx context.Context, assets []githubAsset, exeName s
 		}
 		fields := strings.Fields(string(data))
 		if len(fields) == 0 || len(fields[0]) != 64 {
+			return "", true, errors.New("SHA-256 校验文件格式无效")
+		}
+		if _, err := hex.DecodeString(fields[0]); err != nil {
 			return "", true, errors.New("SHA-256 校验文件格式无效")
 		}
 		return fields[0], true, nil

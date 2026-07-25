@@ -129,6 +129,10 @@ func listBreakArmorTemplates(home, client string) ([]breakArmorSavedTemplate, er
 	for i, item := range out {
 		builtinByID[item.ID] = i
 	}
+	codexXByID := make(map[string]breakArmorCodexXBundledDescriptor, len(breakArmorCodexXBundledCatalog))
+	for _, descriptor := range breakArmorCodexXBundledCatalog {
+		codexXByID[codexXTemplateID(descriptor.FileName)] = descriptor
+	}
 	for _, item := range store.Templates {
 		if item.Client != client {
 			continue
@@ -144,6 +148,14 @@ func listBreakArmorTemplates(home, client string) ([]breakArmorSavedTemplate, er
 			}
 			out[index] = item
 			continue
+		}
+		if descriptor, ok := codexXByID[item.ID]; ok && item.Source == breakArmorCodexXSource {
+			item.Name = descriptor.FileName
+			item.Description = descriptor.Description
+			item.SourceURL = codexXTemplateSourceURL(descriptor.FileName)
+			item.Builtin = true
+			item.Bundled = false
+			item.ReadOnly = true
 		}
 		out = append(out, item)
 	}

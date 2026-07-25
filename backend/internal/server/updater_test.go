@@ -3,12 +3,15 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -61,14 +64,21 @@ func TestSelectWindowsAssetPrefersCanonicalName(t *testing.T) {
 
 func TestDownloadUpdateReportsProgress(t *testing.T) {
 	payload := append([]byte("MZ"), bytes.Repeat([]byte{0x5a}, 256*1024)...)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	digest := sha256.Sum256(payload)
+	checksum := hex.EncodeToString(digest[:])
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/checksum" {
+			_, _ = w.Write([]byte(checksum + "  vision-relay.exe\n"))
+			return
+		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
 		_, _ = w.Write(payload)
 	}))
 	defer server.Close()
 
 	asset := githubAsset{Name: "vision-relay.exe", BrowserDownloadURL: server.URL, Size: int64(len(payload))}
-	info := updateInfo{AssetSize: asset.Size, asset: asset, release: githubRelease{Assets: []githubAsset{asset}}}
+	checksumAsset := githubAsset{Name: "vision-relay.exe.sha256", BrowserDownloadURL: server.URL + "/checksum"}
+	info := updateInfo{AssetSize: asset.Size, asset: asset, release: githubRelease{Assets: []githubAsset{asset, checksumAsset}}}
 	a := &app{httpClient: server.Client()}
 	var reports []updateProgress
 	destinationDir := t.TempDir()
@@ -82,12 +92,35 @@ func TestDownloadUpdateReportsProgress(t *testing.T) {
 	if filepath.Dir(path) != destinationDir {
 		t.Fatalf("download directory = %q, want %q", filepath.Dir(path), destinationDir)
 	}
+	if filepath.Base(path) != "vision-relay.update" {
+		t.Fatalf("download filename = %q, want stable non-executable staging name", filepath.Base(path))
+	}
 	if len(reports) < 3 {
 		t.Fatalf("progress report count = %d, want at least 3", len(reports))
 	}
 	last := reports[len(reports)-1]
 	if last.State != "verifying" || last.DownloadedBytes != int64(len(payload)) || last.TotalBytes != int64(len(payload)) {
 		t.Fatalf("unexpected final progress: %#v", last)
+	}
+}
+
+func TestDownloadUpdateRequiresChecksum(t *testing.T) {
+	payload := append([]byte("MZ"), bytes.Repeat([]byte{0x5a}, 1024)...)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	asset := githubAsset{Name: "vision-relay.exe", BrowserDownloadURL: server.URL, Size: int64(len(payload))}
+	info := updateInfo{AssetSize: asset.Size, asset: asset, release: githubRelease{Assets: []githubAsset{asset}}}
+	a := &app{httpClient: server.Client()}
+	path, err := a.downloadUpdate(context.Background(), info, t.TempDir(), nil)
+	if err == nil {
+		_ = os.Remove(path)
+		t.Fatal("downloadUpdate accepted a release without a checksum")
+	}
+	if !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("missing-checksum error = %q", err)
 	}
 }
 

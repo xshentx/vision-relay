@@ -15,7 +15,7 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 - 支持为 Codex、OpenCode、Claude、OpenClaw 等客户端生成接入配置
 - 文本供应商按 Codex、Claude、OpenCode 独立分组，并提供运行状态与熔断保护
 - 支持一键配置 Codex、OpenCode、Claude、OpenClaw
-- 提供 Codex、Claude、OpenCode 相互独立的一键破甲、提示词模板、会话清理与备份恢复测试工具；模板页离线内置 5 个 Codex-X 模板，并可按需从 GitHub 检查更新
+- 提供 Codex、Claude、OpenCode 相互独立的一键破甲、提示词模板、会话清理与备份恢复测试工具；模板页内置 5 个 Codex-X 模板的受信任目录，并可按需从 GitHub 下载缓存正文
 - 支持切换 Codex 第三方模型时保留官方登录，并可统一官方与第三方会话历史
 - 内置请求日志、Token 统计、首 token 耗时、缓存命中等记录
 - 支持网络代理 URL，适配本地代理或 fake-ip 网络环境
@@ -23,12 +23,20 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 ## 版本更新
 
+### v2.2.1
+
+- 重构 Windows 自动更新流程：运行中的程序直接备份自身并从固定的非 EXE 暂存文件 `vision-relay.update` 写入新版本，不再创建或执行点开头、随机名称的临时 helper EXE；新进程启动失败或提前退出时自动回滚并保持旧实例运行。
+- 强制 Windows 自动更新同时下载并验证 `vision-relay.exe.sha256`，新增父进程等待、启动存活检查和更新文件白名单清理，只处理程序目录内允许的 `.old`、暂存文件及旧版兼容文件，降低更新误报与误删风险。
+- Windows 构建脚本会根据版本号重新生成图标与 `VERSIONINFO` 资源，并支持 Authenticode 签名、时间戳和签名验证；GitHub 标签发布要求配置签名证书 Secret，签名完成后再生成 SHA-256。
+- Codex-X 模板改为只在程序内保留 5 个受信任目录项，不再把安全研究模板正文嵌入 EXE；用户点击“GitHub 更新”后才下载、校验并缓存只读模板，以减少安全软件静态扫描误报。
+- 新增项目根目录 MIT License，更新模板来源、自动更新、Windows 签名和发布文档，并补充更新回滚、安全清理、模板同步及前端提示的回归测试。
+
 ### v2.2.0
 
 - 将 Go 主程序管理界面与本地中转 API 拆分为两个独立监听器：管理界面默认使用 `127.0.0.1:18473`，中转 API 继续使用 `127.0.0.1:8787`；管理页面和管理接口不会暴露在中转端口，模型路由也不会进入管理端口。
 - 新增管理地址配置、`-management-addr` 启动参数和 `VISION_RELAY_MANAGEMENT_ADDR` 环境变量，阻止管理端口与中转端口冲突；桌面窗口、浏览器和托盘激活固定连接管理端口，客户端配置固定使用中转 API 地址。
 - 增加管理端与中转端的独立健康标识及中转状态检查接口，前端可单独显示中转 API 在线状态，并完善 IPv4、IPv6 与通配监听地址的本地可访问 URL 处理。
-- 扩展一键破甲首页的“其他方案”：Codex、Claude 和 OpenCode 可直接选择离线内置或 GitHub 更新的 Codex-X 模板，并保留自定义模板、当前选择摘要、响应式布局与键盘焦点状态。
+- 扩展一键破甲首页的“其他方案”：Codex、Claude 和 OpenCode 可直接选择按需从 GitHub 缓存的 Codex-X 模板，并保留自定义模板、当前选择摘要、响应式布局与键盘焦点状态。
 - 更新设置界面、接入地址说明和 README，并增加双监听器隔离、端口校验、桌面激活、路由来源、中转状态以及破甲模板交互的回归测试。
 
 ### v2.1.3
@@ -39,19 +47,19 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 ### v2.1.2
 
-- 重构 Windows 自动更新助手：使用当前可信程序的临时副本执行更新，下载的新版本仅作为替换载荷，不再直接启动刚下载的 EXE，降低 Windows Defender 或端点安全软件拦截更新进程的问题。
-- 将经过校验的更新载荷和助手文件存放在程序目录，补充助手、载荷环境变量与延迟删除机制；无法立即删除时会安排在系统重启后清理。
-- 强化更新失败恢复：写入新版本或重启失败时自动移除不完整文件、恢复 `.old` 旧版本并尝试重新启动，错误详情保存到 `.update-error.txt`。
+- 重构 Windows 自动更新流程：运行中的主程序直接将自身换名备份并启动规范名称的新版本，不再创建或执行点开头、随机名称的临时 helper EXE，降低端点安全软件把更新行为误判为投放器的问题。
+- 更新下载使用固定的非 EXE 暂存名 `vision-relay.update`，强制要求 Release 提供同名 `.sha256` 校验文件；旧版本备份与暂存文件会在新版本启动后清理，无法立即删除时安排在系统重启后清理。
+- 强化更新失败恢复：写入、创建新进程失败，或新进程在启动存活检查期间提前退出时，自动移除不完整文件并恢复 `.old`；旧实例保持运行，不再依赖额外 helper 或 `.update-error.txt`。
 - 改进更新页面交互：开始安装后自动进入更新页面，任务执行期间保持相关按钮禁用，并完整展示启动失败与后台更新进度。
-- 增加更新载荷目录、可信助手复制、环境变量、替换重启、失败回滚、旧版本恢复以及前端状态的回归测试。
+- 增加固定暂存文件、强制 SHA-256、无 helper 替换重启、失败回滚、旧版本恢复以及前端状态的回归测试。
 
 ### v2.1.1
 
-- 新增 5 个 Codex-X Markdown 破甲模板，固定于上游提交 `e8b0e5b73c508484cfb636339c82d70360487442` 随程序离线内置，并保留原始 MIT 许可与模板来源说明。
+- 新增 5 个 Codex-X Markdown 破甲模板的固定受信任目录；模板正文不再嵌入 Windows EXE，以降低安全软件对安全研究术语的静态误报，并保留原始 MIT 许可与模板来源说明。
 - 提示词模板管理新增显式“GitHub 更新”操作：仅在用户点击后检查 Codex-X `examples/`，按当前客户端缓存新版；更新模板保持只读，不覆盖本地自定义模板。
-- 模板列表新增来源、离线内置 / GitHub 更新状态、用途描述与原始文件链接，载入只读模板时会禁用保存和删除操作。
+- 模板列表新增来源、GitHub 缓存状态、用途描述与原始文件链接，载入只读模板时会禁用保存和删除操作。
 - 强化远程模板同步校验：限定仓库、HTTPS 下载域名、目录和文件白名单，禁止重定向，限制目录项数与单文件大小，并使用 Git Blob SHA-1 验证下载内容。
-- 补充 Codex-X 模板内置、同步替换、缓存去重、只读边界、下载完整性与前端交互回归测试，同时完善 README 使用和授权说明。
+- 补充 Codex-X 受信任目录、按需同步、缓存替换与去重、只读边界、下载完整性与前端交互回归测试，同时完善 README 使用和授权说明。
 - 统一内置模板的换行格式与跨平台哈希校验，修复 macOS Release 构建因 Windows / Unix 换行差异失败的问题。
 
 ### v2.1.0
@@ -308,7 +316,9 @@ Vue 3 和 Element Plus 会复制到 `frontend/public/assets/vendor`，程序运�
 
 - `-s -w` 用于减小二进制体积。
 - `-H windowsgui` 会生成 Windows GUI 子系统程序，双击运行时不会弹出控制台窗口。
-- 前端页面和图标资源会随 Go 编译一起打进 `vision-relay.exe`。
+- 前端页面、图标和 Windows 版本信息会随 Go 编译一起打进 `vision-relay.exe`。
+- 构建依赖 MinGW-w64 的 `windres.exe`；找不到资源编译器时脚本会直接失败，避免沿用旧版本的 VERSIONINFO。
+- 公开发布应使用 Authenticode 代码签名；可设置 `WINDOWS_SIGNING_CERTIFICATE_PATH` 与 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`，或向构建脚本传入 `-SigningCertificatePath`。未签名的本地构建会警告，标签发布工作流则强制要求有效签名。
 
 如果需要调试日志窗口，可以去掉 `-H windowsgui`：
 
@@ -322,7 +332,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.2.0 --arch arm64
+bash ./tools/build-macos.sh --version v2.2.1 --arch arm64
 ```
 
 支持的架构参数：
@@ -337,16 +347,55 @@ bash ./tools/build-macos.sh --version v2.2.0 --arch arm64
 
 ## 打包发布
 
-Windows 发布构建：
+Windows 发布构建（公开发布使用 `-RequireSignature`，签名失败时不生成产物）：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.2.0
+$env:WINDOWS_SIGNING_CERTIFICATE_PATH = 'C:\secure\vision-relay-code-signing.pfx'
+$env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD = '<PFX 密码>'
+.\tools\build-windows.ps1 -Version v2.2.1 -RequireSignature
+```
+
+### Windows Authenticode 签名
+
+1. 从受 Windows 信任的代码签名 CA 申请以个人或组织身份签发的 Authenticode 证书。自签名证书只适合内部测试，不能建立 SmartScreen 信誉，也通常不能降低第三方安全软件误报。
+2. 安装 **Windows SDK**（提供 `signtool.exe`）和 **MinGW-w64**（提供 `windres.exe`）。构建脚本会自动查找 Windows SDK 中的 x64 `signtool.exe`。
+3. 如果证书可导出为 PFX，使用上面的环境变量或以下参数构建：
+
+```powershell
+.\tools\build-windows.ps1 `
+  -Output dist\vision-relay.exe `
+  -Version v2.2.1 `
+  -SigningCertificatePath C:\secure\vision-relay-code-signing.pfx `
+  -SigningCertificatePassword '<PFX 密码>' `
+  -RequireSignature
+```
+
+脚本先嵌入当前版本资源，再构建、执行 SHA-256/RFC 3161 时间戳签名、验证签名，最后生成已签名文件对应的 `.sha256`。可以再次手动验证：
+
+```powershell
+Get-AuthenticodeSignature .\dist\vision-relay.exe | Format-List Status,StatusMessage,SignerCertificate,TimeStamperCertificate
+$signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter signtool.exe -Recurse |
+  Where-Object FullName -Match '\\x64\\signtool\.exe$' | Sort-Object FullName -Descending | Select-Object -First 1
+& $signtool.FullName verify /pa /all /v .\dist\vision-relay.exe
+```
+
+`Status` 必须为 `Valid`。如果证书私钥位于 USB 硬件令牌或云签名服务中、无法导出 PFX，应使用证书颁发机构提供的 CSP/KSP 或云签名 GitHub Action；完成签名后必须重新生成 `.sha256`，不要把私钥导出到仓库。
+
+GitHub 标签发布默认强制签名。对于可导出的 PFX，在仓库 **Settings → Secrets and variables → Actions** 中配置：
+
+- `WINDOWS_SIGNING_CERTIFICATE_BASE64`：PFX 文件的 Base64；
+- `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`：PFX 密码。
+
+在本机把 PFX 的 Base64 直接复制到剪贴板（Base64 不是加密，必须只保存到 Secret）：
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes('C:\secure\vision-relay-code-signing.pfx')) | Set-Clipboard
 ```
 
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.2.0 --arch universal
+bash ./tools/build-macos.sh --version v2.2.1 --arch universal
 ```
 
 生成的 Release 附件：
@@ -361,14 +410,14 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.2.0
-git push origin v2.2.0
+git tag v2.2.1
+git push origin v2.2.1
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.2.0
+Vision Relay v2.2.1
 ```
 
 附件上传时应包含对应平台的程序包和同名 `.sha256` 文件。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
@@ -542,9 +591,9 @@ http://127.0.0.1:7890
 
 ## 参考项目与授权
 
-- 以下破甲模板来自 [yynxxxxx/Codex-X](https://github.com/yynxxxxx/Codex-X)（MIT License），固定于提交 `e8b0e5b73c508484cfb636339c82d70360487442` 随程序离线内置。Vision Relay 不会在后台静默拉取；只有用户点击“GitHub 更新”时才检查并缓存上游 `examples/` 新版。
+- 以下破甲模板来自 [yynxxxxx/Codex-X](https://github.com/yynxxxxx/Codex-X)（MIT License）。Vision Relay 的 EXE 仅内置文件名与用途组成的受信任目录，不嵌入模板正文，以降低安全软件对安全研究术语的静态误报。程序不会在后台静默拉取；只有用户点击“GitHub 更新”时才检查、校验并缓存上游 `examples/` 正文。
 
-| 离线模板 | 用途 |
+| 受信任目录项 | 用途 |
 | --- | --- |
 | `gpt5.5-unrestricted.md` | 短小通用，适合日常编码与常规技术任务 |
 | `gpt5.4-unrestricted.md` | 面向 GPT-5.4 / Codex CLI，偏 CTF 与安全研究工作流 |
@@ -556,21 +605,24 @@ Codex-X 的原始 MIT 许可文本保存在 `backend/internal/server/break_armor
 
 ## License
 
-请在发布前根据项目实际授权方式补充 License。
+Vision Relay 采用 [MIT License](LICENSE) 开源。
+
+项目包含的第三方依赖、资源和模板仍遵循其各自许可证。Codex-X 模板的原始 MIT 许可见 [`backend/internal/server/break_armor_codex_x_templates/LICENSE.codex-x`](backend/internal/server/break_armor_codex_x_templates/LICENSE.codex-x)。
 
 ## 自动更新
 
 Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查新版本，可在左侧“更新”页面关闭自动检测，也可以随时手动检查。Windows 版支持“下载更新并重启”；macOS 首版会匹配当前架构的 Release 压缩包并引导手动下载，不会直接替换 `.app`（避免破坏 Developer ID 签名与 notarization）。Windows 自动更新流程如下：
 
 1. 从 `xshentx/vision-relay` 的最新 GitHub Release 下载 `vision-relay.exe`；
-2. 如果 Release 同时包含 `vision-relay.exe.sha256`，自动验证 SHA-256；
-3. 备份当前程序为 `vision-relay.exe.old`，替换程序并自动重启；
-4. 替换或重启失败时自动恢复旧版本。
+2. 必须下载 `vision-relay.exe.sha256` 并验证 SHA-256；缺少或校验失败时拒绝安装；
+3. 将当前程序直接换名备份为 `vision-relay.exe.old`，从固定的非可执行暂存文件 `vision-relay.update` 写入新版本并启动规范名称的新程序；
+4. 旧实例会确认新进程在启动检查窗口内没有提前退出；若安全软件隔离新文件或新程序立即崩溃，则恢复旧文件并保持旧实例运行；
+5. 新程序等待旧实例退出后获取单实例锁，并只清理程序目录内经过白名单验证的 `.old`、`vision-relay.update` 或旧版兼容暂存文件。
 
 发布构建时请传入与 Git tag 相同的版本号：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.2.0
+.\tools\build-windows.ps1 -Version v2.2.1 -RequireSignature
 ```
 
-构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时应同时上传这两个文件。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。
+构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时必须同时上传这两个文件。公开发布还应使用受信任证书进行 Authenticode 签名；SHA-256 用于保证下载完整性，代码签名与证书信誉才是降低 Windows SmartScreen 和安全软件误报的关键。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。

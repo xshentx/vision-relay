@@ -15,6 +15,10 @@ import (
 type desktopInstanceAcquirer func(chan<- struct{}) (bool, func(), error)
 
 func Run() {
+	if err := waitForUpdateParent(); err != nil {
+		log.Printf("update restart wait failed: %v", err)
+		return
+	}
 	runDesktopInstance(acquireDesktopInstance, runPrimaryInstance)
 }
 
@@ -38,7 +42,7 @@ func runDesktopInstance(acquire desktopInstanceAcquirer, startPrimary func(chan 
 }
 
 func runPrimaryInstance(desktopActivation chan struct{}) {
-	cleanupUpdateHelper()
+	cleanupUpdateFiles()
 	cfg := defaultConfig()
 	addrFlag := flag.String("addr", "", "relay API listen address, for example 127.0.0.1:8787")
 	managementAddrFlag := flag.String("management-addr", "", "management UI listen address, for example 127.0.0.1:18473")

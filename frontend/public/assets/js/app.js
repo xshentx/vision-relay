@@ -901,7 +901,7 @@ function renderBreakArmorTemplates() {
   if (!breakArmorTemplateList) return;
   document.querySelector("#breakArmorTemplateSummary").textContent = `${breakArmorTemplates.length} 个模板`;
   breakArmorTemplateList.innerHTML = breakArmorTemplates.map((item) => {
-    const badge = item.source === "codex-x" ? (item.bundled ? "Codex-X · 离线内置" : "Codex-X · GitHub 更新") : (item.builtin ? "内置" : "自定义");
+    const badge = item.source === "codex-x" ? "Codex-X · 已缓存" : (item.builtin ? "内置" : "自定义");
     const summary = item.description || (item.prompt || "").slice(0, 110);
     return `
     <button class="break-armor-template-item${breakArmorSelectedTemplate?.id === item.id ? " active" : ""}" type="button" data-break-armor-template-id="${escapeHTML(item.id)}">
