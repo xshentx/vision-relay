@@ -1789,6 +1789,31 @@ async function switchTextProvider(profile) {
   const clientGroup = normalizeTextProfileClient(profile?.client, profile);
   const group = textProfileClientGroups.find((item) => item.id === clientGroup);
   if (!group) throw new Error("\u4e0d\u652f\u6301\u7684\u5ba2\u6237\u7aef\u5206\u7ec4");
+  const providerName = profile.name || profile.provider || "\u672a\u547d\u540d\u4f9b\u5e94\u5546";
+  if (programSettings.localAPIEnabled) {
+    const previousProfileID = activeTextProfileByClient[clientGroup] || "";
+    const previousLegacyTextRouting = legacyTextRouting;
+    activeTextProfileByClient[clientGroup] = profile.id;
+    legacyTextRouting = false;
+    try {
+      // Requests routed through the local API read the selected supplier from
+      // the live server config, so rewriting or restarting the client would be
+      // unnecessary and would interrupt an active session.
+      await persistConfig("");
+    } catch (err) {
+      if (previousProfileID) {
+        activeTextProfileByClient[clientGroup] = previousProfileID;
+      } else {
+        delete activeTextProfileByClient[clientGroup];
+      }
+      legacyTextRouting = previousLegacyTextRouting;
+      throw err;
+    }
+    renderTextProfiles();
+    showToast("\u5207\u6362\u6210\u529f", "success");
+    setStatus(`${group.label} \u4f9b\u5e94\u5546\u5df2\u66f4\u65b0`);
+    return;
+  }
   const res = await fetch("/api/client/configure", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -1804,7 +1829,6 @@ async function switchTextProvider(profile) {
   }
   syncClientRouteInputs();
   renderTextProfiles();
-  const providerName = profile.name || profile.provider || "\u672a\u547d\u540d\u4f9b\u5e94\u5546";
   const actionHint = payload?.restarted || payload?.started
     ? "\u5ba2\u6237\u7aef\u5df2\u81ea\u52a8\u5e94\u7528\u914d\u7f6e"
     : "\u8bf7\u91cd\u542f\u5ba2\u6237\u7aef\u7a0b\u5e8f\u540e\u751f\u6548";

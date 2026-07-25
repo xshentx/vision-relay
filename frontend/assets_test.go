@@ -205,6 +205,9 @@ func TestClientProviderRoutesAreEmbedded(t *testing.T) {
 		`fetch("/api/client/routes/apply", {method: "POST"})`,
 		`const textProfileClientGroups = [`,
 		`active_text_profile_by_client`,
+		`if (programSettings.localAPIEnabled) {`,
+		`await persistConfig("");`,
+		`showToast("\u5207\u6362\u6210\u529f", "success");`,
 		`fetch("/api/client/configure", {`,
 		`body: JSON.stringify({client: group.routeClient, profile_id: profile.id})`,
 		`activeTextProfileByClient[clientGroup] = profile.id;`,
@@ -225,6 +228,15 @@ func TestClientProviderRoutesAreEmbedded(t *testing.T) {
 	switchBody := script[switchStart : switchStart+switchEnd]
 	if strings.Contains(switchBody, "applyEnabledClientRoutes") || strings.Contains(switchBody, "/api/client/routes/apply") {
 		t.Fatal("supplier switch must only configure its own client, not all enabled client routes")
+	}
+	localRouteStart := strings.Index(switchBody, "if (programSettings.localAPIEnabled) {")
+	clientConfigureStart := strings.Index(switchBody, `fetch("/api/client/configure", {`)
+	if localRouteStart < 0 || clientConfigureStart < 0 {
+		t.Fatal("supplier switch must handle local and direct API modes")
+	}
+	localRouteReturn := strings.Index(switchBody[localRouteStart:clientConfigureStart], "return;")
+	if localRouteReturn < 0 {
+		t.Fatal("local API supplier switches must return before client configuration and restart handling")
 	}
 }
 

@@ -22,6 +22,12 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 ## 版本更新
 
+### v2.1.3
+
+- 修复启用本地 API 时切换文本供应商仍会重写客户端配置并触发客户端重启的问题；现在仅持久化服务端实时配置，避免中断当前会话。
+- 本地 API 模式切换保存失败时自动恢复先前供应商与旧版路由状态，避免界面状态和服务配置不一致。
+- 保持直连模式原有的客户端配置与重启流程，并增加本地 API / 直连分支、提前返回和切换成功提示的前端资源回归测试。
+
 ### v2.1.2
 
 - 重构 Windows 自动更新助手：使用当前可信程序的临时副本执行更新，下载的新版本仅作为替换载荷，不再直接启动刚下载的 EXE，降低 Windows Defender 或端点安全软件拦截更新进程的问题。
@@ -298,7 +304,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.1.2 --arch arm64
+bash ./tools/build-macos.sh --version v2.1.3 --arch arm64
 ```
 
 支持的架构参数：
@@ -316,13 +322,13 @@ bash ./tools/build-macos.sh --version v2.1.2 --arch arm64
 Windows 发布构建：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.1.2
+.\tools\build-windows.ps1 -Version v2.1.3
 ```
 
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.1.2 --arch universal
+bash ./tools/build-macos.sh --version v2.1.3 --arch universal
 ```
 
 生成的 Release 附件：
@@ -337,14 +343,14 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.1.2
-git push origin v2.1.2
+git tag v2.1.3
+git push origin v2.1.3
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.1.2
+Vision Relay v2.1.3
 ```
 
 附件上传时应包含对应平台的程序包和同名 `.sha256` 文件。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
@@ -544,7 +550,7 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 发布构建时请传入与 Git tag 相同的版本号：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.1.2
+.\tools\build-windows.ps1 -Version v2.1.3
 ```
 
 构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时应同时上传这两个文件。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。
