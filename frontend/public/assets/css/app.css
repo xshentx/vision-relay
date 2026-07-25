@@ -3133,6 +3133,16 @@ body:has(.el-message) > .toast {
   letter-spacing: 0.02em;
 }
 
+.metric-relay .metric-heading b {
+  color: #0891b2;
+  background: #ecfeff;
+}
+
+.metric-text .metric-heading b {
+  color: #7c3aed;
+  background: #f5f3ff;
+}
+
 .metric-vision .metric-heading b {
   color: #529b2e;
   background: #f0f9eb;
@@ -3150,8 +3160,11 @@ body:has(.el-message) > .toast {
   line-height: 1.45;
 }
 
+.overview-metrics #homeManagementURL,
 .overview-metrics #homeBaseURL {
   font-size: 15px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .metric-link,
@@ -3250,6 +3263,11 @@ body:has(.el-message) > .toast {
 .route-badge.green {
   color: #529b2e;
   background: #f0f9eb;
+}
+
+.route-badge.orange {
+  color: #d97706;
+  background: #fff7ed;
 }
 
 .route-overview-row > div {

@@ -132,7 +132,9 @@ const modalProfileProxyURL = document.querySelector("#modalProfileProxyURL");
 const navItems = [...document.querySelectorAll(".nav-item")];
 const pages = [...document.querySelectorAll("[data-page-panel]")];
 const homeJumpButtons = [...document.querySelectorAll(".home-jump")];
+const homeManagementURL = document.querySelector("#homeManagementURL");
 const homeBaseURL = document.querySelector("#homeBaseURL");
+const homeRelayState = document.querySelector("#homeRelayState");
 const homeTextModel = document.querySelector("#homeTextModel");
 const homeTextProvider = document.querySelector("#homeTextProvider");
 const homeVisionModel = document.querySelector("#homeVisionModel");
@@ -1770,9 +1772,14 @@ saveProgramSettings?.addEventListener("click", async () => {
     syncProgramSettingsInputs();
     renderRelayEndpoints();
     renderOpenCodeSnippet();
+    const relayRestartRequired = previousAddress !== programSettings.addr;
+    const managementRestartRequired = previousManagementAddress !== programSettings.managementAddr;
+    const restartRequired = relayRestartRequired || managementRestartRequired;
     await refreshRelayStatus();
-    const restartRequired = previousAddress !== programSettings.addr ||
-      previousManagementAddress !== programSettings.managementAddr;
+    renderOverview();
+    if (relayRestartRequired && homeRelayState && programSettings.localAPIEnabled) {
+      homeRelayState.textContent = "\u65b0\u5730\u5740\u5c06\u5728\u91cd\u542f\u540e\u751f\u6548";
+    }
     const clientNames = updatedClients.map((client) => client.name || client.client).filter(Boolean).join("、");
     if (!programSettings.localAPIEnabled) {
       const routeMessage = clientNames ? `已将 ${clientNames} 改为直连供应商，请重启客户端程序。` : "";
@@ -2678,7 +2685,17 @@ function renderVisionProfiles() {
 function renderOverview() {
   const textProfile = activeTextProfile();
   const visionProfile = activeVisionProfile();
-  if (homeBaseURL) homeBaseURL.textContent = location.host;
+  if (homeManagementURL) homeManagementURL.textContent = location.host || "127.0.0.1:18473";
+  if (homeBaseURL) {
+    homeBaseURL.textContent = programSettings.localAPIEnabled === false
+      ? "已关闭"
+      : relayOrigin().replace(/^https?:\/\//, "");
+  }
+  if (homeRelayState) {
+    homeRelayState.textContent = programSettings.localAPIEnabled === false
+      ? "客户端将直连文本供应商"
+      : "所有客户端统一接入";
+  }
   if (homeTextModel) homeTextModel.textContent = formatTextModelList(textProfile, "使用请求模型名");
   if (homeTextProvider) homeTextProvider.textContent = profileHeadline(textProfile, "text");
   if (homeVisionModel) homeVisionModel.textContent = visionProfile?.model || "未设置模型";

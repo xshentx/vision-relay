@@ -682,6 +682,71 @@ func TestTextModelReasoningCapabilityIsConfigurable(t *testing.T) {
 	}
 }
 
+func TestOverviewUsesSeparateManagementAndRelayAddresses(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	for _, expected := range []string{
+		`class="metric metric-management"`,
+		`id="homeManagementURL"`,
+		`class="metric metric-relay"`,
+		`id="homeBaseURL"`,
+		`id="homeRelayState"`,
+		`route-badge orange`,
+	} {
+		if !strings.Contains(index, expected) {
+			t.Fatalf("overview element %q is missing", expected)
+		}
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		`const homeManagementURL = document.querySelector("#homeManagementURL");`,
+		`homeManagementURL.textContent = location.host || "127.0.0.1:18473";`,
+		`: relayOrigin().replace(/^https?:\/\//, "");`,
+		`homeRelayState.textContent = programSettings.localAPIEnabled === false`,
+		`const relayRestartRequired = previousAddress !== programSettings.addr;`,
+		`const managementRestartRequired = previousManagementAddress !== programSettings.managementAddr;`,
+		`const restartRequired = relayRestartRequired || managementRestartRequired;`,
+		`await refreshRelayStatus();
+    renderOverview();`,
+		`if (relayRestartRequired && homeRelayState && programSettings.localAPIEnabled) {`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("overview address behavior %q is missing", expected)
+		}
+	}
+	if strings.Contains(script, `homeBaseURL.textContent = location.host`) {
+		t.Fatal("relay API card must not display the management page address")
+	}
+
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := string(styleRaw)
+	for _, expected := range []string{
+		`.metric-relay .metric-heading b`,
+		`.route-badge.orange`,
+		`.overview-metrics #homeManagementURL,
+.overview-metrics #homeBaseURL {
+  font-size: 15px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}`,
+	} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("overview style %q is missing", expected)
+		}
+	}
+}
+
 func TestProgramSettingsAreEmbedded(t *testing.T) {
 	indexRaw, err := fs.ReadFile(FS, "index.html")
 	if err != nil {

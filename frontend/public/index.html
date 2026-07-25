@@ -48,31 +48,36 @@
       <section class="page active overview-page" data-page-panel="home">
         <section class="hero overview-hero" id="overview">
           <div class="hero-copy-block">
-            <p class="eyebrow">DESKTOP MULTIMODAL RELAY</p>
-            <h2>让文本模型接住图片请求</h2>
-            <p class="hero-copy">在本机统一接收多协议请求，按需完成视觉解析，再把文本上下文交给目标模型。</p>
-            <div class="hero-tags" aria-label="支持入口">
-              <span>Responses</span><span>Chat Completions</span><span>Anthropic</span><span>Gemini</span><span>Ollama</span>
+            <p class="eyebrow">LOCAL AI ROUTING DESKTOP</p>
+            <h2>一个桌面端，统一管理 AI 中转</h2>
+            <p class="hero-copy">管理界面与中转 API 独立运行，为常用 AI 客户端统一适配多种协议，并按模型能力处理文本与图片请求。</p>
+            <div class="hero-tags" aria-label="支持客户端">
+              <span>Codex</span><span>Claude</span><span>OpenCode</span><span>OpenClaw</span><span>多协议 API</span>
             </div>
           </div>
           <div class="relay-hero-panel" aria-label="中转链路">
             <div class="relay-panel-head">
-              <div><small>实时状态</small><strong>本机中转链路</strong></div>
+              <div><small>实时状态</small><strong>管理端与中转 API</strong></div>
               <div class="hero-actions"><span class="status" id="status">未加载</span><button class="ghost" id="reloadConfig" type="button">刷新</button></div>
             </div>
             <div class="relay-stack">
-              <div class="relay-node"><span>01</span><strong>客户端请求</strong><small>多协议统一接入</small></div>
-              <div class="relay-node accent"><span>02</span><strong>视觉解析</strong><small>按模型能力处理图片</small></div>
-              <div class="relay-node"><span>03</span><strong>文本上游</strong><small>流式返回客户端</small></div>
+              <div class="relay-node"><span>01</span><strong>客户端接入</strong><small>Codex · Claude · OpenCode</small></div>
+              <div class="relay-node accent"><span>02</span><strong>协议适配</strong><small>Responses · Anthropic · Ollama</small></div>
+              <div class="relay-node"><span>03</span><strong>模型路由</strong><small>文本与视觉按能力分流</small></div>
             </div>
           </div>
         </section>
 
         <section class="metric-grid overview-metrics" aria-label="运行摘要">
-          <div class="metric metric-address">
-            <div class="metric-heading"><span>本机地址</span><b>LOCAL</b></div>
+          <div class="metric metric-management">
+            <div class="metric-heading"><span>管理界面</span><b>M</b></div>
+            <strong id="homeManagementURL">-</strong>
+            <small>桌面窗口与配置 API</small>
+          </div>
+          <div class="metric metric-relay">
+            <div class="metric-heading"><span>中转 API</span><b>API</b></div>
             <strong id="homeBaseURL">-</strong>
-            <small>所有客户端统一接入</small>
+            <small id="homeRelayState">所有客户端统一接入</small>
           </div>
           <div class="metric metric-text">
             <div class="metric-heading"><span>文本路由</span><b>T</b></div>
@@ -91,13 +96,14 @@
         <section class="overview-grid overview-workspace">
           <article class="home-panel route-overview-card">
             <div class="panel-head compact">
-              <div><span class="section-kicker">ROUTE ENDPOINTS</span><h3>常用路由入口</h3><p>保留客户端原有协议，图片字段由本机统一转换。</p></div>
+              <div><span class="section-kicker">ROUTE ENDPOINTS</span><h3>常用路由入口</h3><p>保留客户端原有协议，按模型能力直传图片或调用视觉模型解析。</p></div>
               <button class="text-link home-jump" type="button" data-target-page="access">全部接口 <span>→</span></button>
             </div>
             <div class="route-overview-list">
               <div class="route-overview-row"><span class="route-badge blue">R</span><div><strong>Responses</strong><small>Codex / OpenAI Responses</small></div><code>/v1/responses</code></div>
               <div class="route-overview-row"><span class="route-badge cyan">C</span><div><strong>Chat Completions</strong><small>OpenAI compatible</small></div><code>/v1/chat/completions</code></div>
               <div class="route-overview-row"><span class="route-badge purple">A</span><div><strong>Anthropic Messages</strong><small>Claude compatible</small></div><code>/v1/messages</code></div>
+              <div class="route-overview-row"><span class="route-badge orange">G</span><div><strong>Gemini GenerateContent</strong><small>Google Gemini compatible</small></div><code>/v1beta/models/{model}:generateContent</code></div>
               <div class="route-overview-row"><span class="route-badge green">O</span><div><strong>Ollama Chat</strong><small>images 字段自动解析</small></div><code>/api/chat</code></div>
             </div>
           </article>
