@@ -730,7 +730,7 @@ func TestOverviewUsesSeparateManagementAndRelayAddresses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	style := string(styleRaw)
+	style := strings.ReplaceAll(string(styleRaw), "\r\n", "\n")
 	for _, expected := range []string{
 		`.metric-relay .metric-heading b`,
 		`.route-badge.orange`,
