@@ -30,7 +30,7 @@ var codexAccountModelAliases = []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 func defaultConfig() config {
 	cfg := config{
 		Addr:                              envAny(defaultAddr, "VISION_RELAY_ADDR", "CODEX_PROXY_ADDR"),
-		ManagementAddr:                    env("VISION_RELAY_MANAGEMENT_ADDR", defaultManagementAddr),
+		ManagementAddr:                    defaultManagementAddr,
 		TextProvider:                      env("TEXT_PROVIDER", defaultTextProvider),
 		TextBaseURL:                       env("TEXT_BASE_URL", "https://api.openai.com"),
 		TextAPIKey:                        env("TEXT_API_KEY", ""),
@@ -115,9 +115,6 @@ func saveConfig(path string, cfg config) error {
 func mergeConfig(base, loaded config) config {
 	if loaded.Addr != "" {
 		base.Addr = loaded.Addr
-	}
-	if loaded.ManagementAddr != "" {
-		base.ManagementAddr = loaded.ManagementAddr
 	}
 	if loaded.ActiveModelProfileID != "" {
 		base.ActiveModelProfileID = loaded.ActiveModelProfileID
@@ -263,14 +260,7 @@ func (a *app) setConfig(cfg config) error {
 		return err
 	}
 	cfg.Addr = addr
-	if cfg.ManagementAddr == "" {
-		cfg.ManagementAddr = defaultManagementAddr
-	}
-	managementAddr, err := normalizeManagementListenAddress(cfg.ManagementAddr)
-	if err != nil {
-		return err
-	}
-	cfg.ManagementAddr = managementAddr
+	cfg.ManagementAddr = defaultManagementAddr
 	if listenPort(cfg.Addr) == listenPort(cfg.ManagementAddr) {
 		return fmt.Errorf("管理端口和中转 API 端口必须不同")
 	}
@@ -329,10 +319,6 @@ func (a *app) setConfig(cfg config) error {
 
 func normalizeListenAddress(value string) (string, error) {
 	return normalizeServerAddress(value, defaultAddr, "API")
-}
-
-func normalizeManagementListenAddress(value string) (string, error) {
-	return normalizeServerAddress(value, defaultManagementAddr, "管理界面")
 }
 
 func normalizeServerAddress(value, fallback, label string) (string, error) {

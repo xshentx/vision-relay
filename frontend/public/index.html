@@ -69,27 +69,26 @@
         </section>
 
         <section class="metric-grid overview-metrics" aria-label="运行摘要">
-          <div class="metric metric-management">
-            <div class="metric-heading"><span>管理界面</span><b>M</b></div>
-            <strong id="homeManagementURL">-</strong>
-            <small>桌面窗口与配置 API</small>
-          </div>
           <div class="metric metric-relay">
             <div class="metric-heading"><span>中转 API</span><b>API</b></div>
             <strong id="homeBaseURL">-</strong>
             <small id="homeRelayState">所有客户端统一接入</small>
           </div>
           <div class="metric metric-text">
-            <div class="metric-heading"><span>文本路由</span><b>T</b></div>
-            <strong id="homeTextModel">-</strong>
-            <small id="homeTextProvider">-</small>
-            <button class="metric-link home-jump" type="button" data-target-page="text">管理文本模型 <span>→</span></button>
+            <div class="metric-heading"><span>模型供应商</span><b>P</b></div>
+            <div class="metric-provider-list" aria-label="文本模型供应商摘要">
+              <div class="metric-provider-row"><span>Codex 供应商</span><strong id="homeCodexProviders">-</strong></div>
+              <div class="metric-provider-row"><span>Claude 供应商</span><strong id="homeClaudeProviders">-</strong></div>
+              <div class="metric-provider-row"><span>OpenCode 供应商</span><strong id="homeOpenCodeProviders">-</strong></div>
+            </div>
+            <button class="metric-link home-jump" type="button" data-target-page="text">管理模型供应商 <span>→</span></button>
           </div>
           <div class="metric metric-vision">
-            <div class="metric-heading"><span>视觉路由</span><b>V</b></div>
-            <strong id="homeVisionModel">-</strong>
-            <small id="homeVisionProvider">-</small>
-            <button class="metric-link home-jump" type="button" data-target-page="vision">管理视觉模型 <span>→</span></button>
+            <div class="metric-heading"><span>视觉模型供应商</span><b>V</b></div>
+            <div class="metric-provider-list" aria-label="视觉模型供应商摘要">
+              <div class="metric-provider-row"><span>视觉供应商</span><strong id="homeVisionProviders">-</strong></div>
+            </div>
+            <button class="metric-link home-jump" type="button" data-target-page="vision">管理视觉供应商 <span>→</span></button>
           </div>
         </section>
 
@@ -209,13 +208,6 @@
             <div class="panel-actions"><button class="primary-action" id="saveProgramSettings" type="button">保存设置</button></div>
           </div>
 
-          <article class="component-card settings-management-card">
-            <div class="component-card-head"><div><h4>主程序管理界面</h4><p>Go 主程序、桌面窗口和管理主页使用此地址，与中转 API 完全分离。</p></div><span class="component-tag">独立端口</span></div>
-            <div class="settings-grid api-settings-grid">
-              <label><span>管理监听地址</span><input id="settingsManagementHost" type="text" autocomplete="off" placeholder="127.0.0.1"><small>管理界面仅允许本机访问，建议保持 127.0.0.1。</small></label>
-              <label><span>主程序端口（Go）</span><input id="settingsManagementPort" type="number" min="1" max="65535" step="1" placeholder="18473"><small>默认 18473；修改后重启 Vision Relay 生效。</small></label>
-            </div>
-          </article>
           <article class="component-card settings-api-card">
             <div class="component-card-head"><div><h4>本地 API 接口</h4><p>设置客户端访问 Vision Relay 的监听地址；关闭后，一键配置与供应商切换会把客户端改为直连当前文本供应商。</p></div><label class="client-route-control"><span>启用接口</span><span class="switch-control"><input id="settingsLocalAPIEnabled" type="checkbox"><span aria-hidden="true"></span></span></label></div>
             <div class="settings-grid api-settings-grid">
@@ -439,7 +431,7 @@
                 <div class="break-armor-other-heading"><h6>其他方案</h6><span data-break-armor-other-count="codex">正在加载</span></div>
                 <div class="break-armor-other-options" data-break-armor-other-options="codex">
                   <div class="break-armor-other-library" data-break-armor-other-library="codex"></div>
-                  <label class="break-armor-other-option is-custom" data-break-armor-custom-option="codex"><input type="radio" name="breakArmorTemplateCodex" value="custom" data-break-armor-template="codex"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的破甲指令。</small></span></label>
+                  <label class="break-armor-other-option is-custom" data-break-armor-custom-option="codex"><input type="radio" name="breakArmorTemplateCodex" value="custom" data-break-armor-template="codex"><span class="break-armor-radio"></span><span class="break-armor-other-copy"><span class="break-armor-other-title"><b>自定义模板</b><em>自定义</em></span><small>维护团队自己的破甲指令。</small></span></label>
                 </div>
                 <div class="break-armor-current-option" data-break-armor-current-option="codex" hidden><span>当前选中</span><b data-break-armor-current-name="codex"></b><small data-break-armor-current-description="codex"></small></div>
                 <label class="break-armor-custom" data-break-armor-custom-wrap="codex" hidden><span>自定义破甲模板</span><textarea rows="7" data-break-armor-custom="codex" placeholder="输入 Codex 自定义一键破甲指令"></textarea></label>
@@ -468,7 +460,7 @@
                 <div class="break-armor-other-heading"><h6>其他方案</h6><span data-break-armor-other-count="claude">正在加载</span></div>
                 <div class="break-armor-other-options" data-break-armor-other-options="claude">
                   <div class="break-armor-other-library" data-break-armor-other-library="claude"></div>
-                  <label class="break-armor-other-option is-custom" data-break-armor-custom-option="claude"><input type="radio" name="breakArmorTemplateClaude" value="custom" data-break-armor-template="claude"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的破甲指令。</small></span></label>
+                  <label class="break-armor-other-option is-custom" data-break-armor-custom-option="claude"><input type="radio" name="breakArmorTemplateClaude" value="custom" data-break-armor-template="claude"><span class="break-armor-radio"></span><span class="break-armor-other-copy"><span class="break-armor-other-title"><b>自定义模板</b><em>自定义</em></span><small>维护团队自己的破甲指令。</small></span></label>
                 </div>
                 <div class="break-armor-current-option" data-break-armor-current-option="claude" hidden><span>当前选中</span><b data-break-armor-current-name="claude"></b><small data-break-armor-current-description="claude"></small></div>
                 <label class="break-armor-custom" data-break-armor-custom-wrap="claude" hidden><span>自定义破甲模板</span><textarea rows="7" data-break-armor-custom="claude" placeholder="输入 Claude 自定义一键破甲指令"></textarea></label>
@@ -497,7 +489,7 @@
                 <div class="break-armor-other-heading"><h6>其他方案</h6><span data-break-armor-other-count="opencode">正在加载</span></div>
                 <div class="break-armor-other-options" data-break-armor-other-options="opencode">
                   <div class="break-armor-other-library" data-break-armor-other-library="opencode"></div>
-                  <label class="break-armor-other-option is-custom" data-break-armor-custom-option="opencode"><input type="radio" name="breakArmorTemplateOpenCode" value="custom" data-break-armor-template="opencode"><span class="break-armor-radio"></span><span><b>自定义模板</b><small>维护团队自己的破甲指令。</small></span></label>
+                  <label class="break-armor-other-option is-custom" data-break-armor-custom-option="opencode"><input type="radio" name="breakArmorTemplateOpenCode" value="custom" data-break-armor-template="opencode"><span class="break-armor-radio"></span><span class="break-armor-other-copy"><span class="break-armor-other-title"><b>自定义模板</b><em>自定义</em></span><small>维护团队自己的破甲指令。</small></span></label>
                 </div>
                 <div class="break-armor-current-option" data-break-armor-current-option="opencode" hidden><span>当前选中</span><b data-break-armor-current-name="opencode"></b><small data-break-armor-current-description="opencode"></small></div>
                 <label class="break-armor-custom" data-break-armor-custom-wrap="opencode" hidden><span>自定义破甲模板</span><textarea rows="7" data-break-armor-custom="opencode" placeholder="输入 OpenCode 自定义一键破甲指令"></textarea></label>

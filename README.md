@@ -6,7 +6,7 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 ## 功能特性
 
-- Go 主程序管理界面默认监听 `http://127.0.0.1:18473`，与中转 API 端口相互独立
+- Go 主程序管理界面固定监听 `http://127.0.0.1:18473`，与中转 API 端口相互独立
 - 本地 HTTP 中转 API 默认监听 `http://127.0.0.1:8787`
 - Windows 桌面 WebView 与系统托盘菜单；macOS 菜单栏与系统浏览器管理页面
 - 支持文本模型与视觉模型分开配置，并保存多套模型方案
@@ -23,13 +23,21 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 
 ## 版本更新
 
+### v2.2.3
+
+- 固定 Go 主程序管理界面监听地址为 `127.0.0.1:18473`，移除命令行、环境变量、配置文件和设置页中的管理地址修改入口，避免管理端口误配置或暴露；中转 API 地址仍可独立配置。
+- 重构概览页运行摘要为三栏布局，集中展示中转 API 状态，以及 Codex、Claude、OpenCode 和视觉模型的供应商名称与数量，移除不再需要的管理界面卡片和旧文本/视觉路由摘要。
+- 统一 Codex、Claude、OpenCode 破甲模板卡片的标题、来源标签和说明布局，优化自定义模板与远程模板在不同屏幕宽度下的视觉一致性。
+- 优化内置更新检查：匿名访问优先读取公开 GitHub Release feed，支持通过 `VISION_RELAY_GITHUB_TOKEN` 获取 REST API 完整元数据，并在 API 限流或故障时自动回退，减少共享出口 IP 配额耗尽导致的检查失败。
+- 补充固定管理端口、更新源回退、Release 信息解析、供应商摘要、模板卡片和设置界面的后端及前端回归测试。
+
 ### v2.2.2
 
-- 重构概览页信息层级与文案，明确展示管理界面和中转 API 是两套独立地址，并在首页直接显示当前管理地址、中转地址及本地 API 启停状态。
-- 修复概览页此前把管理页面地址误当作中转 API 地址的问题；保存程序设置后会立即刷新中转状态，并在地址需要重启后生效时给出明确提示。
+- 重构概览页信息层级与文案，移除固定管理界面卡片，集中显示中转 API、Codex、Claude、OpenCode 分组供应商数量、视觉模型供应商数量及本地 API 启停状态。
+- 修复概览页此前把管理页面地址误当作中转 API 地址的问题；管理界面固定监听 `127.0.0.1:18473` 且不再单独显示卡片，保存中转 API 设置后会立即刷新中转状态，并在地址需要重启后生效时给出明确提示。
 - 更新首页中转链路说明和客户端标签，补充 Codex、Claude、OpenCode、OpenClaw 的桌面接入定位，并将协议适配、文本与视觉模型分流关系展示得更清晰。
 - 常用路由入口新增 Gemini GenerateContent，并完善地址换行、路由徽标和文本/中转指标配色，提升长地址及多协议信息的可读性。
-- 增加管理地址、中转地址、启停状态、重启提示、Gemini 路由和概览样式的前端嵌入资源回归测试。
+- 增加中转地址、供应商数量、启停状态、重启提示、Gemini 路由、模板卡片一致性和概览样式的前端嵌入资源回归测试。
 
 ### v2.2.1
 
@@ -290,9 +298,6 @@ http://127.0.0.1:8787
 # 指定中转 API 监听地址
 .\vision-relay.exe -addr 127.0.0.1:8787
 
-# 指定 Go 主程序管理界面监听地址
-.\vision-relay.exe -management-addr 127.0.0.1:18473
-
 # 只运行后台中转服务，不打开桌面窗口
 .\vision-relay.exe -no-window
 
@@ -340,7 +345,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.2.2 --arch arm64
+bash ./tools/build-macos.sh --version v2.2.3 --arch arm64
 ```
 
 支持的架构参数：
@@ -358,7 +363,7 @@ bash ./tools/build-macos.sh --version v2.2.2 --arch arm64
 Windows 无签名发布构建（当前 GitHub 标签工作流使用此模式）：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.2.2
+.\tools\build-windows.ps1 -Version v2.2.3
 ```
 
 ### Windows Authenticode 签名
@@ -370,7 +375,7 @@ Windows 无签名发布构建（当前 GitHub 标签工作流使用此模式）�
 ```powershell
 .\tools\build-windows.ps1 `
   -Output dist\vision-relay.exe `
-  -Version v2.2.2 `
+  -Version v2.2.3 `
   -SigningCertificatePath C:\secure\vision-relay-code-signing.pfx `
   -SigningCertificatePassword '<PFX 密码>' `
   -RequireSignature
@@ -392,7 +397,7 @@ $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter s
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.2.2 --arch universal
+bash ./tools/build-macos.sh --version v2.2.3 --arch universal
 ```
 
 生成的 Release 附件：
@@ -407,14 +412,14 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.2.2
-git push origin v2.2.2
+git tag v2.2.3
+git push origin v2.2.3
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.2.2
+Vision Relay v2.2.3
 ```
 
 附件上传时应包含对应平台的程序包和同名 `.sha256` 文件。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
@@ -431,7 +436,6 @@ Vision Relay v2.2.2
 
 ```text
 VISION_RELAY_ADDR=127.0.0.1:8787
-VISION_RELAY_MANAGEMENT_ADDR=127.0.0.1:18473
 
 TEXT_PROVIDER=openai|anthropic|gemini|ollama
 TEXT_BASE_URL=https://api.openai.com
@@ -471,8 +475,8 @@ OPEN_BROWSER=false
 
 左侧“设置”菜单可以管理 Vision Relay 的运行参数：
 
-- 可独立修改 Go 主程序管理界面与本地中转 API 的监听地址和端口；两者必须使用不同端口，保存后需重启 Vision Relay 才会重新绑定。
-- 桌面 WebView、系统浏览器、托盘激活与管理接口只连接管理端口；Codex、Claude、OpenCode、OpenClaw 及模型请求只连接中转 API 端口，修改其中一个不会改写另一个。
+- Go 主程序管理界面固定监听 `127.0.0.1:18473`，不在设置页提供修改入口；可修改本地中转 API 的监听地址和端口，保存后需重启 Vision Relay 才会重新绑定。
+- 桌面 WebView、系统浏览器、托盘激活与管理接口只连接固定管理端口；Codex、Claude、OpenCode、OpenClaw 及模型请求只连接可配置的中转 API 端口。
 - 可独立关闭或开启本地 API 转发接口。关闭时，中转端口上的 `/v1/*` 等模型接口返回 `503`；管理端口上的管理页面、设置 API 和 `/healthz` 仍可使用。该开关保存后立即生效。
 - 关闭本地 API 后，一键配置和文本供应商切换会让已配置客户端直连当前文本供应商，并写入供应商 API 地址、上游令牌和已添加模型的真实模型名（不会自动导入上游全部模型）；视觉模型中转不可用，文本模型的图片能力按每个模型的“支持多模态”设置写入客户端。 直连时 Codex 仅支持使用 Responses 协议的 OpenAI 兼容供应商，Claude 仅支持 Anthropic 协议供应商；协议不兼容或当前供应商未添加模型时会停止写入并给出提示。
 - 可查看和修改 Codex、Codex CLI、OpenCode、Claude、Claude CLI、OpenClaw 的配置文件位置与客户端程序位置；Codex 桌面端与 CLI 共用配置，Claude 桌面端与 CLI 使用独立配置。
@@ -608,7 +612,7 @@ Vision Relay 采用 [MIT License](LICENSE) 开源。
 
 ## 自动更新
 
-Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查新版本，可在左侧“更新”页面关闭自动检测，也可以随时手动检查。Windows 版支持“下载更新并重启”；macOS 首版会匹配当前架构的 Release 压缩包并引导手动下载，不会直接替换 `.app`（避免破坏 Developer ID 签名与 notarization）。Windows 自动更新流程如下：
+Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查新版本，可在左侧“更新”页面关闭自动检测，也可以随时手动检查。默认通过公开的 Release feed 读取版本信息，不消耗 GitHub 匿名 REST API 的每 IP 配额；如需使用 REST API 完整元数据，可选设置 `VISION_RELAY_GITHUB_TOKEN`，API 限流或故障时仍会自动回退到 Release feed。Windows 版支持“下载更新并重启”；macOS 首版会匹配当前架构的 Release 压缩包并引导手动下载，不会直接替换 `.app`（避免破坏 Developer ID 签名与 notarization）。Windows 自动更新流程如下：
 
 1. 从 `xshentx/vision-relay` 的最新 GitHub Release 下载 `vision-relay.exe`；
 2. 必须下载 `vision-relay.exe.sha256` 并验证 SHA-256；缺少或校验失败时拒绝安装；
@@ -619,7 +623,7 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 发布构建时请传入与 Git tag 相同的版本号：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.2.2
+.\tools\build-windows.ps1 -Version v2.2.3
 ```
 
 构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时必须同时上传这两个文件。当前 Windows Release 为无签名构建，SHA-256 仅用于验证下载完整性，首次运行可能出现 Windows SmartScreen 或未知发布者提示；代码签名与证书信誉仍是降低此类提示和安全软件误报的关键。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。

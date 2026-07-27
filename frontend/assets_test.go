@@ -682,18 +682,24 @@ func TestTextModelReasoningCapabilityIsConfigurable(t *testing.T) {
 	}
 }
 
-func TestOverviewUsesSeparateManagementAndRelayAddresses(t *testing.T) {
+func TestOverviewShowsRelayAndProviderSummary(t *testing.T) {
 	indexRaw, err := fs.ReadFile(FS, "index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	index := string(indexRaw)
 	for _, expected := range []string{
-		`class="metric metric-management"`,
-		`id="homeManagementURL"`,
 		`class="metric metric-relay"`,
 		`id="homeBaseURL"`,
 		`id="homeRelayState"`,
+		`<span>模型供应商</span><b>P</b>`,
+		`<span>Codex 供应商</span><strong id="homeCodexProviders">-</strong>`,
+		`<span>Claude 供应商</span><strong id="homeClaudeProviders">-</strong>`,
+		`<span>OpenCode 供应商</span><strong id="homeOpenCodeProviders">-</strong>`,
+		`管理模型供应商 <span>→</span>`,
+		`<span>视觉模型供应商</span><b>V</b>`,
+		`<span>视觉供应商</span><strong id="homeVisionProviders">-</strong>`,
+		`管理视觉供应商 <span>→</span>`,
 		`route-badge orange`,
 	} {
 		if !strings.Contains(index, expected) {
@@ -707,19 +713,29 @@ func TestOverviewUsesSeparateManagementAndRelayAddresses(t *testing.T) {
 	}
 	script := string(scriptRaw)
 	for _, expected := range []string{
-		`const homeManagementURL = document.querySelector("#homeManagementURL");`,
-		`homeManagementURL.textContent = location.host || "127.0.0.1:18473";`,
 		`: relayOrigin().replace(/^https?:\/\//, "");`,
+		`renderProviderSummary(homeCodexProviders, textProfiles.filter((profile) => profile.client === "codex"), textProfileForClient("codex"));`,
+		`renderProviderSummary(homeClaudeProviders, textProfiles.filter((profile) => profile.client === "claude"), textProfileForClient("claude"));`,
+		`renderProviderSummary(homeOpenCodeProviders, textProfiles.filter((profile) => profile.client === "opencode"), textProfileForClient("opencode"));`,
+		`renderProviderSummary(homeVisionProviders, visionProfiles, visionProfile);`,
+		"return `${name} 等 ${items.length} 个供应商`;",
 		`homeRelayState.textContent = programSettings.localAPIEnabled === false`,
 		`const relayRestartRequired = previousAddress !== programSettings.addr;`,
-		`const managementRestartRequired = previousManagementAddress !== programSettings.managementAddr;`,
-		`const restartRequired = relayRestartRequired || managementRestartRequired;`,
+		`const restartRequired = relayRestartRequired;`,
 		`await refreshRelayStatus();`,
 		`renderOverview();`,
 		`if (relayRestartRequired && homeRelayState && programSettings.localAPIEnabled) {`,
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("overview address behavior %q is missing", expected)
+		}
+	}
+	if strings.Contains(index, `metric-management`) || strings.Contains(index, `homeManagementURL`) || strings.Contains(index, `<span>文本路由</span>`) {
+		t.Fatal("overview must not show the management card or legacy text route label")
+	}
+	for _, removed := range []string{`homeManagementURL`, `const homeTextModel =`, `const homeTextProvider =`, `const homeVisionModel =`, `const homeVisionProvider =`, `当前使用`} {
+		if strings.Contains(script, removed) {
+			t.Fatalf("overview script still contains removed single-profile behavior %q", removed)
 		}
 	}
 	if strings.Contains(script, `homeBaseURL.textContent = location.host`) {
@@ -734,8 +750,13 @@ func TestOverviewUsesSeparateManagementAndRelayAddresses(t *testing.T) {
 	for _, expected := range []string{
 		`.metric-relay .metric-heading b`,
 		`.route-badge.orange`,
-		`.overview-metrics #homeManagementURL,
-.overview-metrics #homeBaseURL {
+		`.overview-metrics {
+  grid-template-columns: repeat(3, 1fr);
+}`,
+		`.metric-provider-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);`,
+		`.overview-metrics #homeBaseURL {
   font-size: 15px;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -759,8 +780,6 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 		`class="page standard-page settings-page span-12"`,
 		`class="dashboard-heading settings-page-heading"`,
 		`<h3>设置</h3>`,
-		`id="settingsManagementHost"`,
-		`id="settingsManagementPort"`,
 		`id="settingsLocalAPIEnabled"`,
 		`id="settingsAPIHost"`,
 		`id="settingsAPIPort"`,
@@ -798,11 +817,9 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 	}
 	script := string(scriptRaw)
 	for _, expected := range []string{
-		`data.management_addr = programSettings.managementAddr;`,
-		`managementAddr: cfg.management_addr || "127.0.0.1:18473"`,
-		`managementPort === port`,
 		`data.local_api_enabled = programSettings.localAPIEnabled;`,
 		`const previousLocalAPIEnabled = programSettings.localAPIEnabled;`,
+		`if (port === 18473) {`,
 		`const updatedClients = localAPIModeChanged ? await applyEnabledClientRoutes() : [];`,
 		`async function applyEnabledClientRoutes()`,
 		`fetch("/api/client/routes/apply", {method: "POST"})`,
@@ -828,6 +845,14 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 	}
 	if strings.Contains(index, "启动行为") || strings.Contains(index, `id="settingsOpenWindow"`) || strings.Contains(index, `id="settingsOpenBrowser"`) {
 		t.Fatal("program settings must not expose startup behavior controls")
+	}
+	if strings.Contains(index, "主程序管理界面") || strings.Contains(index, `id="settingsManagementHost"`) || strings.Contains(index, `id="settingsManagementPort"`) {
+		t.Fatal("program settings must not expose the fixed management address")
+	}
+	for _, removed := range []string{"management_addr", "managementAddr", "settingsManagementHost", "settingsManagementPort"} {
+		if strings.Contains(script, removed) {
+			t.Fatalf("program settings script still exposes fixed management setting %q", removed)
+		}
 	}
 	if strings.Contains(script, `data.open_window = true;`) || strings.Contains(script, `data.open_browser = false;`) {
 		t.Fatal("config persistence must not overwrite program settings with hard-coded startup values")
@@ -1198,6 +1223,10 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 		if !strings.Contains(index, expected) {
 			t.Fatalf("break armor markup %q is missing", expected)
 		}
+	}
+	customCardCopy := `<span class="break-armor-other-copy"><span class="break-armor-other-title"><b>自定义模板</b><em>自定义</em></span><small>维护团队自己的破甲指令。</small></span>`
+	if got := strings.Count(feature, customCardCopy); got != 3 {
+		t.Fatalf("custom template cards using shared structure = %d, want 3", got)
 	}
 	for _, forbidden := range []string{"\u90e8\u7f72", "\u91cd\u65b0\u90e8\u7f72", "\u5df2\u542f\u7528", "\u672a\u542f\u7528", "AI 改写", "AI 智能改写", `data-break-armor-view-tab="ai"`} {
 		if strings.Contains(feature, forbidden) {

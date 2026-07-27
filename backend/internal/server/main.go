@@ -45,7 +45,6 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	cleanupUpdateFiles()
 	cfg := defaultConfig()
 	addrFlag := flag.String("addr", "", "relay API listen address, for example 127.0.0.1:8787")
-	managementAddrFlag := flag.String("management-addr", "", "management UI listen address, for example 127.0.0.1:18473")
 	noOpen := flag.Bool("no-open", false, "do not open a client window or browser on start")
 	noWindow := flag.Bool("no-window", false, "do not open the desktop client window")
 	browserFlag := flag.Bool("browser", false, "also open the default browser")
@@ -110,22 +109,15 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	if *addrFlag != "" {
 		cfg.Addr = *addrFlag
 	}
-	if *managementAddrFlag != "" {
-		cfg.ManagementAddr = *managementAddrFlag
-	}
 	relayAddr, err := normalizeListenAddress(cfg.Addr)
 	if err != nil {
 		log.Fatal(err)
 	}
-	managementAddr, err := normalizeManagementListenAddress(cfg.ManagementAddr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if listenPort(relayAddr) == listenPort(managementAddr) {
+	if listenPort(relayAddr) == listenPort(defaultManagementAddr) {
 		log.Fatal("management UI and relay API must use different ports")
 	}
 	cfg.Addr = relayAddr
-	cfg.ManagementAddr = managementAddr
+	cfg.ManagementAddr = defaultManagementAddr
 	if *noOpen {
 		cfg.OpenWindow = false
 		cfg.OpenBrowser = false

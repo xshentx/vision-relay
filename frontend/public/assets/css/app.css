@@ -419,7 +419,7 @@ label {
 }
 
 .overview-metrics {
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .metric {
@@ -3160,7 +3160,36 @@ body:has(.el-message) > .toast {
   line-height: 1.45;
 }
 
-.overview-metrics #homeManagementURL,
+.metric-provider-list {
+  display: grid;
+  gap: 7px;
+  margin: 9px 0 11px;
+}
+
+.metric-provider-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.metric-provider-row > span {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.overview-metrics .metric-provider-row > strong {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .overview-metrics #homeBaseURL {
   font-size: 15px;
   white-space: normal;

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,9 +21,33 @@ func TestDefaultManagementAndRelayAddressesAreIndependent(t *testing.T) {
 	}
 }
 
-func TestConfigRejectsSharedManagementAndRelayPort(t *testing.T) {
+func TestManagementAddressIsFixed(t *testing.T) {
+	t.Setenv("VISION_RELAY_MANAGEMENT_ADDR", "127.0.0.1:19999")
+	cfg := mergeConfig(defaultConfig(), config{ManagementAddr: "127.0.0.1:19998"})
+	if cfg.ManagementAddr != defaultManagementAddr {
+		t.Fatalf("merged management address = %q, want fixed %q", cfg.ManagementAddr, defaultManagementAddr)
+	}
+	encoded, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "management_addr") {
+		t.Fatalf("management address must not be serialized as a setting: %s", encoded)
+	}
+
+	cfg.ManagementAddr = "127.0.0.1:19997"
+	a := &app{cfg: defaultConfig(), configPath: t.TempDir() + "/config.json"}
+	if err := a.setConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.currentConfig().ManagementAddr; got != defaultManagementAddr {
+		t.Fatalf("saved management address = %q, want fixed %q", got, defaultManagementAddr)
+	}
+}
+
+func TestConfigRejectsRelayOnFixedManagementPort(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.ManagementAddr = "127.0.0.1:8787"
+	cfg.Addr = "127.0.0.1:18473"
 	a := &app{cfg: defaultConfig(), configPath: t.TempDir() + "/config.json"}
 	if err := a.setConfig(cfg); err == nil || !strings.Contains(err.Error(), "必须不同") {
 		t.Fatalf("same-port config error = %v, want distinct-port validation", err)

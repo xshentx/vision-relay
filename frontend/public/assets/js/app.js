@@ -39,8 +39,6 @@ const clientRouteInputs = {
 };
 const settingsLocalAPIEnabled = document.querySelector("#settingsLocalAPIEnabled");
 const localAPIWarning = document.querySelector("#localAPIWarning");
-const settingsManagementHost = document.querySelector("#settingsManagementHost");
-const settingsManagementPort = document.querySelector("#settingsManagementPort");
 const settingsAPIHost = document.querySelector("#settingsAPIHost");
 const settingsAPIPort = document.querySelector("#settingsAPIPort");
 const saveProgramSettings = document.querySelector("#saveProgramSettings");
@@ -132,13 +130,12 @@ const modalProfileProxyURL = document.querySelector("#modalProfileProxyURL");
 const navItems = [...document.querySelectorAll(".nav-item")];
 const pages = [...document.querySelectorAll("[data-page-panel]")];
 const homeJumpButtons = [...document.querySelectorAll(".home-jump")];
-const homeManagementURL = document.querySelector("#homeManagementURL");
 const homeBaseURL = document.querySelector("#homeBaseURL");
 const homeRelayState = document.querySelector("#homeRelayState");
-const homeTextModel = document.querySelector("#homeTextModel");
-const homeTextProvider = document.querySelector("#homeTextProvider");
-const homeVisionModel = document.querySelector("#homeVisionModel");
-const homeVisionProvider = document.querySelector("#homeVisionProvider");
+const homeCodexProviders = document.querySelector("#homeCodexProviders");
+const homeClaudeProviders = document.querySelector("#homeClaudeProviders");
+const homeOpenCodeProviders = document.querySelector("#homeOpenCodeProviders");
+const homeVisionProviders = document.querySelector("#homeVisionProviders");
 const homeTextProfile = document.querySelector("#homeTextProfile");
 const homeVisionProfile = document.querySelector("#homeVisionProfile");
 const homeProxyState = document.querySelector("#homeProxyState");
@@ -203,7 +200,6 @@ let currentConfig = {};
 let clientRouteEnabled = normalizeClientRoutes({});
 let programSettings = {
   addr: "127.0.0.1:8787",
-  managementAddr: "127.0.0.1:18473",
   localAPIEnabled: true,
   autoCheckUpdates: true,
   openWindow: true,
@@ -1333,12 +1329,9 @@ function syncLocalAPIWarning() {
 
 function syncProgramSettingsInputs() {
   const address = splitListenAddress(programSettings.addr);
-  const managementAddress = splitListenAddress(programSettings.managementAddr);
   if (settingsLocalAPIEnabled) settingsLocalAPIEnabled.checked = programSettings.localAPIEnabled;
   if (autoCheckUpdates) autoCheckUpdates.checked = programSettings.autoCheckUpdates;
   syncLocalAPIWarning();
-  if (settingsManagementHost) settingsManagementHost.value = managementAddress.host;
-  if (settingsManagementPort) settingsManagementPort.value = managementAddress.port || "18473";
   if (settingsAPIHost) settingsAPIHost.value = address.host;
   if (settingsAPIPort) settingsAPIPort.value = address.port || "8787";
   Object.entries(clientConfigPathInputs).forEach(([client, input]) => {
@@ -1373,7 +1366,6 @@ async function loadConfig() {
   currentConfig = cfg;
   programSettings = {
     addr: cfg.addr || "127.0.0.1:8787",
-    managementAddr: cfg.management_addr || "127.0.0.1:18473",
     localAPIEnabled: cfg.local_api_enabled !== false,
     autoCheckUpdates: cfg.auto_check_updates !== false,
     openWindow: cfg.open_window !== false,
@@ -1675,7 +1667,6 @@ profileModalForm.addEventListener("submit", (event) => {
 async function persistConfig(successMessage = "配置已自动保存") {
   const data = {};
   data.addr = programSettings.addr;
-  data.management_addr = programSettings.managementAddr;
   data.local_api_enabled = programSettings.localAPIEnabled;
   data.auto_check_updates = programSettings.autoCheckUpdates;
   data.client_config_paths = normalizeClientConfigPaths(programSettings.clientConfigPaths);
@@ -1731,30 +1722,22 @@ settingsLocalAPIEnabled?.addEventListener("change", () => {
 });
 
 saveProgramSettings?.addEventListener("click", async () => {
-  const managementPort = Number(settingsManagementPort?.value);
-  if (!Number.isInteger(managementPort) || managementPort < 1 || managementPort > 65535) {
-    showToast("管理端口必须是 1 到 65535 之间的整数", "error");
-    settingsManagementPort?.focus();
-    return;
-  }
   const port = Number(settingsAPIPort?.value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     showToast("API \u7aef\u53e3\u5fc5\u987b\u662f 1 \u5230 65535 \u4e4b\u95f4\u7684\u6574\u6570", "error");
     settingsAPIPort?.focus();
     return;
   }
-  if (managementPort === port) {
-    showToast("主程序管理端口不能与中转 API 端口相同", "error");
-    settingsManagementPort?.focus();
+  if (port === 18473) {
+    showToast("18473 端口由主程序固定使用，请选择其他 API 端口", "error");
+    settingsAPIPort?.focus();
     return;
   }
   const previousAddress = programSettings.addr;
-  const previousManagementAddress = programSettings.managementAddr;
   const previousLocalAPIEnabled = programSettings.localAPIEnabled;
   programSettings = {
     ...programSettings,
     addr: joinListenAddress(settingsAPIHost?.value, port),
-    managementAddr: joinListenAddress(settingsManagementHost?.value, managementPort),
     localAPIEnabled: settingsLocalAPIEnabled?.checked !== false,
     clientConfigPaths: collectClientPaths(clientConfigPathInputs),
     clientProgramPaths: collectClientPaths(clientProgramPathInputs),
@@ -1773,8 +1756,7 @@ saveProgramSettings?.addEventListener("click", async () => {
     renderRelayEndpoints();
     renderOpenCodeSnippet();
     const relayRestartRequired = previousAddress !== programSettings.addr;
-    const managementRestartRequired = previousManagementAddress !== programSettings.managementAddr;
-    const restartRequired = relayRestartRequired || managementRestartRequired;
+    const restartRequired = relayRestartRequired;
     await refreshRelayStatus();
     renderOverview();
     if (relayRestartRequired && homeRelayState && programSettings.localAPIEnabled) {
@@ -1785,11 +1767,11 @@ saveProgramSettings?.addEventListener("click", async () => {
       const routeMessage = clientNames ? `已将 ${clientNames} 改为直连供应商，请重启客户端程序。` : "";
       showToast(`设置已保存。${routeMessage}关闭本地服务后视觉模型将不可用；未勾选多模态的文本模型将无法实现图片识别。`, "warning");
     } else if (localAPIModeChanged && clientNames) {
-      const restartMessage = restartRequired ? "管理界面或中转 API 地址/端口将在重启 Vision Relay 后生效；" : "";
+      const restartMessage = restartRequired ? "中转 API 地址/端口将在重启 Vision Relay 后生效；" : "";
       showToast(`设置已保存；${restartMessage}已将 ${clientNames} 接入本地 API，请重启客户端程序`, "success");
     } else {
       showToast(restartRequired
-        ? "设置已保存；管理界面或中转 API 地址/端口将在重启 Vision Relay 后生效"
+        ? "设置已保存；中转 API 地址/端口将在重启 Vision Relay 后生效"
         : "\u7a0b\u5e8f\u8bbe\u7f6e\u5df2\u4fdd\u5b58", "success");
     }
     setStatus(restartRequired ? "\u8bbe\u7f6e\u5df2\u4fdd\u5b58\uff0c\u7b49\u5f85\u91cd\u542f\u751f\u6548" : "\u7a0b\u5e8f\u8bbe\u7f6e\u5df2\u4fdd\u5b58");
@@ -2685,7 +2667,6 @@ function renderVisionProfiles() {
 function renderOverview() {
   const textProfile = activeTextProfile();
   const visionProfile = activeVisionProfile();
-  if (homeManagementURL) homeManagementURL.textContent = location.host || "127.0.0.1:18473";
   if (homeBaseURL) {
     homeBaseURL.textContent = programSettings.localAPIEnabled === false
       ? "已关闭"
@@ -2696,15 +2677,17 @@ function renderOverview() {
       ? "客户端将直连文本供应商"
       : "所有客户端统一接入";
   }
-  if (homeTextModel) homeTextModel.textContent = formatTextModelList(textProfile, "使用请求模型名");
-  if (homeTextProvider) homeTextProvider.textContent = profileHeadline(textProfile, "text");
-  if (homeVisionModel) homeVisionModel.textContent = visionProfile?.model || "未设置模型";
-  if (homeVisionProvider) homeVisionProvider.textContent = profileHeadline(visionProfile, "vision");
+  renderProviderSummary(homeCodexProviders, textProfiles.filter((profile) => profile.client === "codex"), textProfileForClient("codex"));
+  renderProviderSummary(homeClaudeProviders, textProfiles.filter((profile) => profile.client === "claude"), textProfileForClient("claude"));
+  renderProviderSummary(homeOpenCodeProviders, textProfiles.filter((profile) => profile.client === "opencode"), textProfileForClient("opencode"));
+  renderProviderSummary(homeVisionProviders, visionProfiles, visionProfile);
   if (homeTextProfile) homeTextProfile.textContent = profileDetail(textProfile, "text");
   if (homeVisionProfile) homeVisionProfile.textContent = profileDetail(visionProfile, "vision");
   if (!visionCapabilityEnabled) {
-    if (homeVisionModel) homeVisionModel.textContent = "未开启";
-    if (homeVisionProvider) homeVisionProvider.textContent = "仅使用文本模型";
+    if (homeVisionProviders) {
+      homeVisionProviders.textContent = "未开启";
+      homeVisionProviders.title = "视觉模型能力未开启";
+    }
     if (homeVisionProfile) homeVisionProfile.textContent = "关闭后不会调用视觉模型";
   }
   if (homeProxyState) homeProxyState.textContent = serviceState.textContent || "在线";
@@ -3286,6 +3269,22 @@ function formatTextModelList(profile, fallback) {
   if (models.length === 0) return fallback;
   if (models.length === 1) return models[0];
   return `${models[0]} 等 ${models.length} 个模型`;
+}
+
+function formatProviderSummary(profiles, preferredProfile) {
+  const items = Array.isArray(profiles) ? profiles : [];
+  if (!items.length) return "尚未添加";
+  const profile = items.find((item) => item.id === preferredProfile?.id) || items[0];
+  const name = profile.name || profile.provider || "未命名供应商";
+  if (items.length === 1) return `${name} · 1 个供应商`;
+  return `${name} 等 ${items.length} 个供应商`;
+}
+
+function renderProviderSummary(element, profiles, preferredProfile) {
+  if (!element) return;
+  const summary = formatProviderSummary(profiles, preferredProfile);
+  element.textContent = summary;
+  element.title = summary;
 }
 
 function parseModelOverrides(value) {

@@ -11,7 +11,7 @@ import (
 
 type config struct {
 	Addr                              string               `json:"addr"`
-	ManagementAddr                    string               `json:"management_addr"`
+	ManagementAddr                    string               `json:"-"`
 	ActiveModelProfileID              string               `json:"active_model_profile_id,omitempty"`
 	ModelProfiles                     []modelProfile       `json:"model_profiles,omitempty"`
 	ActiveTextProfileID               string               `json:"active_text_profile_id"`

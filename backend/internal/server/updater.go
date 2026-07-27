@@ -5,10 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,7 +29,10 @@ const (
 	maxUpdateSize = 256 << 20
 )
 
-var latestReleaseAPI = "https://api.github.com/repos/" + githubOwner + "/" + githubRepo + "/releases/latest"
+var (
+	latestReleaseAPI  = "https://api.github.com/repos/" + githubOwner + "/" + githubRepo + "/releases/latest"
+	latestReleaseFeed = "https://github.com/" + githubOwner + "/" + githubRepo + "/releases.atom"
+)
 
 type githubRelease struct {
 	TagName     string        `json:"tag_name"`
@@ -41,6 +47,22 @@ type githubAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
+}
+
+type githubReleaseFeed struct {
+	Entries []githubReleaseFeedEntry `xml:"entry"`
+}
+
+type githubReleaseFeedEntry struct {
+	Title   string                  `xml:"title"`
+	Updated time.Time               `xml:"updated"`
+	Content string                  `xml:"content"`
+	Links   []githubReleaseFeedLink `xml:"link"`
+}
+
+type githubReleaseFeedLink struct {
+	Rel  string `xml:"rel,attr"`
+	Href string `xml:"href,attr"`
 }
 
 type updateInfo struct {
@@ -225,6 +247,9 @@ func (a *app) checkForUpdate(ctx context.Context) (updateInfo, error) {
 		return updateInfo{}, err
 	}
 	asset, ok := selectReleaseAsset(release.Assets, runtime.GOOS, runtime.GOARCH)
+	if ok && asset.Size <= 0 {
+		asset.Size = a.fetchReleaseAssetSize(ctx, asset.BrowserDownloadURL)
+	}
 	info := updateInfo{
 		CurrentVersion: Version, LatestVersion: release.TagName,
 		UpdateAvailable: versionNewer(release.TagName, Version),
@@ -239,12 +264,45 @@ func (a *app) checkForUpdate(ctx context.Context) (updateInfo, error) {
 }
 
 func (a *app) fetchLatestRelease(ctx context.Context) (githubRelease, error) {
+	// Anonymous GitHub REST requests share a small per-IP quota. The Atom feed
+	// is public, cacheable, and does not consume that quota, so use it by
+	// default. Users that explicitly provide a token still get the richer REST
+	// metadata, with the feed retained as a rate-limit/outage fallback.
+	token := strings.TrimSpace(os.Getenv("VISION_RELAY_GITHUB_TOKEN"))
+	if token == "" {
+		release, feedErr := a.fetchLatestReleaseFeed(ctx)
+		if feedErr == nil {
+			return release, nil
+		}
+		release, apiErr := a.fetchLatestReleaseAPI(ctx, "")
+		if apiErr == nil {
+			return release, nil
+		}
+		return githubRelease{}, fmt.Errorf("检查 GitHub 更新失败（Release feed: %v；REST API: %v）", feedErr, apiErr)
+	}
+
+	release, apiErr := a.fetchLatestReleaseAPI(ctx, token)
+	if apiErr == nil {
+		return release, nil
+	}
+	release, feedErr := a.fetchLatestReleaseFeed(ctx)
+	if feedErr == nil {
+		return release, nil
+	}
+	return githubRelease{}, fmt.Errorf("检查 GitHub 更新失败（REST API: %v；Release feed: %v）", apiErr, feedErr)
+}
+
+func (a *app) fetchLatestReleaseAPI(ctx context.Context, token string) (githubRelease, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestReleaseAPI, nil)
 	if err != nil {
 		return githubRelease{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "vision-relay/"+Version)
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
 		return githubRelease{}, fmt.Errorf("检查 GitHub 更新失败: %w", err)
@@ -262,6 +320,140 @@ func (a *app) fetchLatestRelease(ctx context.Context) (githubRelease, error) {
 		return githubRelease{}, errors.New("GitHub Release 缺少版本标签")
 	}
 	return release, nil
+}
+
+func (a *app) fetchLatestReleaseFeed(ctx context.Context) (githubRelease, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestReleaseFeed, nil)
+	if err != nil {
+		return githubRelease{}, err
+	}
+	req.Header.Set("Accept", "application/atom+xml")
+	req.Header.Set("User-Agent", "vision-relay/"+Version)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return githubRelease{}, fmt.Errorf("读取 GitHub Release feed 失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return githubRelease{}, fmt.Errorf("GitHub Release feed 返回 HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var feed githubReleaseFeed
+	if err := xml.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&feed); err != nil {
+		return githubRelease{}, fmt.Errorf("解析 GitHub Release feed 失败: %w", err)
+	}
+	if len(feed.Entries) == 0 {
+		return githubRelease{}, errors.New("GitHub Release feed 中没有发行版")
+	}
+	entry := feed.Entries[0]
+	releaseURL := ""
+	for _, link := range entry.Links {
+		if link.Rel == "alternate" && strings.TrimSpace(link.Href) != "" {
+			releaseURL = strings.TrimSpace(link.Href)
+			break
+		}
+	}
+	tag, err := releaseTagFromURL(releaseURL)
+	if err != nil {
+		return githubRelease{}, err
+	}
+	name := strings.TrimSpace(entry.Title)
+	if name == "" {
+		name = tag
+	}
+	return githubRelease{
+		TagName:     tag,
+		Name:        name,
+		HTMLURL:     releaseURL,
+		Body:        releaseNotesFromHTML(entry.Content),
+		PublishedAt: entry.Updated,
+		Assets:      canonicalReleaseAssets(tag),
+	}, nil
+}
+
+func releaseTagFromURL(releaseURL string) (string, error) {
+	prefix := "https://github.com/" + githubOwner + "/" + githubRepo + "/releases/tag/"
+	if !strings.HasPrefix(releaseURL, prefix) {
+		return "", errors.New("GitHub Release feed 缺少有效的发行版链接")
+	}
+	tag, err := url.PathUnescape(strings.TrimPrefix(releaseURL, prefix))
+	if err != nil || strings.TrimSpace(tag) == "" || strings.Contains(tag, "/") {
+		return "", errors.New("GitHub Release feed 缺少有效的版本标签")
+	}
+	return tag, nil
+}
+
+func canonicalReleaseAssets(tag string) []githubAsset {
+	base := "https://github.com/" + githubOwner + "/" + githubRepo + "/releases/download/" + url.PathEscape(tag) + "/"
+	names := []string{
+		"vision-relay.exe",
+		"vision-relay.exe.sha256",
+		"vision-relay-darwin-universal.zip",
+		"vision-relay-darwin-universal.zip.sha256",
+	}
+	assets := make([]githubAsset, 0, len(names))
+	for _, name := range names {
+		assets = append(assets, githubAsset{Name: name, BrowserDownloadURL: base + url.PathEscape(name)})
+	}
+	return assets
+}
+
+func releaseNotesFromHTML(value string) string {
+	value = strings.NewReplacer(
+		"<br>", "\n", "<br/>", "\n", "<br />", "\n",
+		"</p>", "\n", "</h1>", "\n", "</h2>", "\n", "</h3>", "\n",
+		"<li>", "- ", "</li>", "\n", "</ul>", "\n", "</ol>", "\n",
+		"</blockquote>", "\n",
+	).Replace(value)
+	var plain strings.Builder
+	plain.Grow(len(value))
+	inTag := false
+	for _, r := range value {
+		switch r {
+		case '<':
+			inTag = true
+		case '>':
+			inTag = false
+		default:
+			if !inTag {
+				plain.WriteRune(r)
+			}
+		}
+	}
+	lines := strings.Split(html.UnescapeString(plain.String()), "\n")
+	cleaned := make([]string, 0, len(lines))
+	blank := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if len(cleaned) > 0 && !blank {
+				cleaned = append(cleaned, "")
+			}
+			blank = true
+			continue
+		}
+		cleaned = append(cleaned, line)
+		blank = false
+	}
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
+}
+
+func (a *app) fetchReleaseAssetSize(ctx context.Context, downloadURL string) int64 {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, downloadURL, nil)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("User-Agent", "vision-relay/"+Version)
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.ContentLength <= 0 || resp.ContentLength > maxUpdateSize {
+		return 0
+	}
+	return resp.ContentLength
 }
 
 func (a *app) downloadUpdate(ctx context.Context, info updateInfo, destinationDir string, report func(state string, downloaded, total int64)) (string, error) {

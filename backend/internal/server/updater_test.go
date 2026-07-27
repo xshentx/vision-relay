@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -49,6 +50,104 @@ func TestAutoCheckUpdatesDefaultsAndMerges(t *testing.T) {
 	if legacy.AutoCheckUpdates == nil || !*legacy.AutoCheckUpdates {
 		t.Fatal("legacy config should keep automatic update checks enabled")
 	}
+}
+
+func TestFetchLatestReleaseUsesFeedWithoutAnonymousAPICall(t *testing.T) {
+	var apiCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/releases.atom":
+			w.Header().Set("Content-Type", "application/atom+xml")
+			_, _ = io.WriteString(w, `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <updated>2026-07-25T18:45:27Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/xshentx/vision-relay/releases/tag/v2.2.2"/>
+    <title>Vision Relay v2.2.2</title>
+    <content type="html">&lt;h2&gt;Changes&lt;/h2&gt;&lt;ul&gt;&lt;li&gt;Fixes &amp;amp; improvements&lt;/li&gt;&lt;/ul&gt;</content>
+  </entry>
+</feed>`)
+		case "/api":
+			apiCalls++
+			http.Error(w, "rate limited", http.StatusForbidden)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	oldAPI, oldFeed := latestReleaseAPI, latestReleaseFeed
+	latestReleaseAPI, latestReleaseFeed = server.URL+"/api", server.URL+"/releases.atom"
+	defer func() { latestReleaseAPI, latestReleaseFeed = oldAPI, oldFeed }()
+	t.Setenv("VISION_RELAY_GITHUB_TOKEN", "")
+
+	release, err := (&app{httpClient: server.Client()}).fetchLatestRelease(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if apiCalls != 0 {
+		t.Fatalf("anonymous REST API calls = %d, want 0", apiCalls)
+	}
+	if release.TagName != "v2.2.2" || release.Name != "Vision Relay v2.2.2" {
+		t.Fatalf("unexpected release: %#v", release)
+	}
+	if strings.Contains(release.Body, "<") || !strings.Contains(release.Body, "Fixes & improvements") {
+		t.Fatalf("release notes were not converted to plain text: %q", release.Body)
+	}
+	asset, ok := selectReleaseAsset(release.Assets, "windows", "amd64")
+	if !ok || asset.Name != "vision-relay.exe" || !strings.Contains(asset.BrowserDownloadURL, "/v2.2.2/") {
+		t.Fatalf("unexpected synthesized Windows asset: %#v, %v", asset, ok)
+	}
+	if _, ok := findAsset(release.Assets, "vision-relay.exe.sha256"); !ok {
+		t.Fatal("synthesized release is missing the Windows checksum asset")
+	}
+}
+
+func TestFetchLatestReleaseFallsBackToFeedAfterAuthenticatedRateLimit(t *testing.T) {
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api":
+			authorization = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"message":"API rate limit exceeded"}`)
+		case "/releases.atom":
+			_, _ = io.WriteString(w, `<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+<updated>2026-07-25T18:45:27Z</updated>
+<link rel="alternate" href="https://github.com/xshentx/vision-relay/releases/tag/v2.2.2"/>
+<title>Vision Relay v2.2.2</title><content type="html">Notes</content>
+</entry></feed>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	oldAPI, oldFeed := latestReleaseAPI, latestReleaseFeed
+	latestReleaseAPI, latestReleaseFeed = server.URL+"/api", server.URL+"/releases.atom"
+	defer func() { latestReleaseAPI, latestReleaseFeed = oldAPI, oldFeed }()
+	t.Setenv("VISION_RELAY_GITHUB_TOKEN", "test-token")
+
+	release, err := (&app{httpClient: server.Client()}).fetchLatestRelease(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorization != "Bearer test-token" {
+		t.Fatalf("Authorization = %q, want bearer token", authorization)
+	}
+	if release.TagName != "v2.2.2" {
+		t.Fatalf("fallback release tag = %q", release.TagName)
+	}
+}
+
+func findAsset(assets []githubAsset, name string) (githubAsset, bool) {
+	for _, asset := range assets {
+		if strings.EqualFold(asset.Name, name) {
+			return asset, true
+		}
+	}
+	return githubAsset{}, false
 }
 
 func TestSelectWindowsAssetPrefersCanonicalName(t *testing.T) {
