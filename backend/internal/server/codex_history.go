@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -630,19 +629,7 @@ func replaceCodexHistoryFile(path string, raw []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if runtime.GOOS != "windows" {
-		return os.Rename(tmpPath, path)
-	}
-	oldPath := path + ".vision-relay-swap"
-	_ = os.Remove(oldPath)
-	if err := os.Rename(path, oldPath); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Rename(oldPath, path)
-		return err
-	}
-	return os.Remove(oldPath)
+	return replaceFileSafely(tmpPath, path)
 }
 
 func stringSet(values []string) map[string]struct{} {

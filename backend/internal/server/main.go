@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -113,9 +114,6 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if listenPort(relayAddr) == listenPort(defaultManagementAddr) {
-		log.Fatal("management UI and relay API must use different ports")
-	}
 	cfg.Addr = relayAddr
 	cfg.ManagementAddr = defaultManagementAddr
 	if *noOpen {
@@ -127,6 +125,22 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	}
 	if *browserFlag {
 		cfg.OpenBrowser = true
+	}
+
+	preferredManagementAddr := cfg.ManagementAddr
+	managementListener, managementFallbackReason, err := listenManagement(preferredManagementAddr, cfg.Addr)
+	if err != nil {
+		log.Fatalf("management UI listen failed: %v", err)
+	}
+	if managementFallbackReason != "" {
+		log.Printf("management UI preferred address %s unavailable (%s); selected %s", preferredManagementAddr, managementFallbackReason, managementListener.Addr().String())
+	}
+	cfg.ManagementAddr = managementListener.Addr().String()
+
+	relayListener, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		_ = managementListener.Close()
+		log.Fatalf("relay API listen failed on %s: %v", cfg.Addr, err)
 	}
 
 	a := &app{
@@ -152,26 +166,6 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 
 	managementURL := localServerURL(cfg.ManagementAddr)
 	relayURL := localServerURL(cfg.Addr)
-	managementListener, err := net.Listen("tcp", cfg.ManagementAddr)
-	if err != nil {
-		if existingVisionRelayHealthy(managementURL) {
-			log.Printf("%s already running on %s", appSlug, managementURL)
-			if cfg.OpenWindow {
-				if activateErr := activateExistingDesktop(managementURL); activateErr != nil {
-					log.Printf("existing window activation warning: %v", activateErr)
-				}
-			} else if cfg.OpenBrowser {
-				_ = openBrowser(managementURL)
-			}
-			return
-		}
-		log.Fatalf("management UI listen failed on %s: %v", cfg.ManagementAddr, err)
-	}
-	relayListener, err := net.Listen("tcp", cfg.Addr)
-	if err != nil {
-		_ = managementListener.Close()
-		log.Fatalf("relay API listen failed on %s: %v", cfg.Addr, err)
-	}
 	log.Printf("%s management UI listening on %s", appSlug, managementURL)
 	log.Printf("%s relay API listening on %s", appSlug, relayURL)
 	log.Printf("database: %s", dbPath)
@@ -230,6 +224,54 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	}
 }
 
+const managementFallbackListenAttempts = 32
+
+// listenManagement uses the configured management address when it is available.
+// The process that reaches this function already owns the per-user single-instance
+// lock, so an occupied preferred port belongs to an unrelated process (or another
+// user) and must trigger a fallback rather than activating that port's server.
+func listenManagement(preferredAddr, relayAddr string) (net.Listener, string, error) {
+	fallbackReason := ""
+	if listenPort(preferredAddr) == listenPort(relayAddr) {
+		fallbackReason = "preferred management port is reserved for the relay API"
+	} else {
+		listener, err := net.Listen("tcp", preferredAddr)
+		if err == nil {
+			return listener, "", nil
+		}
+		if !isAddressInUseError(err) {
+			return nil, "", fmt.Errorf("listen on preferred address %s: %w", preferredAddr, err)
+		}
+		fallbackReason = err.Error()
+	}
+
+	listener, err := listenManagementFallback(preferredAddr, relayAddr)
+	if err != nil {
+		return nil, fallbackReason, fmt.Errorf("fallback after %s was unavailable: %w", preferredAddr, err)
+	}
+	return listener, fallbackReason, nil
+}
+
+func listenManagementFallback(preferredAddr, relayAddr string) (net.Listener, error) {
+	host, _, err := net.SplitHostPort(preferredAddr)
+	if err != nil {
+		return nil, fmt.Errorf("parse preferred management address: %w", err)
+	}
+	fallbackAddr := net.JoinHostPort(host, "0")
+	relayPort := listenPort(relayAddr)
+	for range managementFallbackListenAttempts {
+		listener, listenErr := net.Listen("tcp", fallbackAddr)
+		if listenErr != nil {
+			return nil, listenErr
+		}
+		if listenPort(listener.Addr().String()) != relayPort {
+			return listener, nil
+		}
+		_ = listener.Close()
+	}
+	return nil, fmt.Errorf("could not allocate a management port distinct from relay port %s", relayPort)
+}
+
 func newManagementHandler(a *app, desktopActivation chan<- struct{}) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/desktop/activate", desktopActivationHandler(desktopActivation))
@@ -246,6 +288,7 @@ func newManagementHandler(a *app, desktopActivation chan<- struct{}) http.Handle
 	mux.HandleFunc("/api/break-armor/status", a.handleBreakArmorStatus)
 	mux.HandleFunc("/api/break-armor/preview", a.handleBreakArmorPreview)
 	mux.HandleFunc("/api/break-armor/apply", a.handleBreakArmorApply)
+	mux.HandleFunc("/api/break-armor/remove", a.handleBreakArmorRemove)
 	mux.HandleFunc("/api/break-armor/restore", a.handleBreakArmorRestore)
 	mux.HandleFunc("/api/break-armor/sessions", a.handleBreakArmorSessions)
 	mux.HandleFunc("/api/break-armor/session/preview", a.handleBreakArmorSessionPreview)

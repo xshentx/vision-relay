@@ -22,7 +22,8 @@ const (
 	breakArmorTemplateV35    = "v35"
 	breakArmorTemplateCustom = "custom"
 
-	breakArmorPromptMarker = "<!-- Vision Relay Break Armor:"
+	breakArmorPromptMarker            = "<!-- Vision Relay Break Armor:"
+	breakArmorSnapshotPurposeBaseline = "unbroken-baseline"
 )
 
 // The built-in profiles are intentionally focused on isolated, authorized test
@@ -78,23 +79,25 @@ type breakArmorPaths struct {
 }
 
 type breakArmorClientStatus struct {
-	Client          string `json:"client"`
-	Name            string `json:"name"`
-	Broken          bool   `json:"broken"`
-	Template        string `json:"template,omitempty"`
-	ConfigPath      string `json:"config_path"`
-	PromptPath      string `json:"prompt_path"`
-	WorkDir         string `json:"work_dir"`
-	ProgramPath     string `json:"program_path,omitempty"`
-	Installed       bool   `json:"installed"`
-	ConfigWritable  bool   `json:"config_writable"`
-	RouteCompatible bool   `json:"route_compatible"`
-	BackupAvailable bool   `json:"backup_available"`
-	LatestBackup    string `json:"latest_backup,omitempty"`
-	StatusText      string `json:"status_text"`
-	Mode            string `json:"mode,omitempty"`
-	ProfileBroken   bool   `json:"profile_broken,omitempty"`
-	GlobalBroken    bool   `json:"global_broken,omitempty"`
+	Client            string `json:"client"`
+	Name              string `json:"name"`
+	Broken            bool   `json:"broken"`
+	Template          string `json:"template,omitempty"`
+	ConfigPath        string `json:"config_path"`
+	PromptPath        string `json:"prompt_path"`
+	WorkDir           string `json:"work_dir"`
+	ProgramPath       string `json:"program_path,omitempty"`
+	Installed         bool   `json:"installed"`
+	ConfigWritable    bool   `json:"config_writable"`
+	RouteCompatible   bool   `json:"route_compatible"`
+	BackupAvailable   bool   `json:"backup_available"`
+	LatestBackup      string `json:"latest_backup,omitempty"`
+	BaselineAvailable bool   `json:"baseline_available"`
+	BaselineCreatedAt string `json:"baseline_created_at,omitempty"`
+	StatusText        string `json:"status_text"`
+	Mode              string `json:"mode,omitempty"`
+	ProfileBroken     bool   `json:"profile_broken,omitempty"`
+	GlobalBroken      bool   `json:"global_broken,omitempty"`
 }
 
 type breakArmorPreview struct {
@@ -107,6 +110,7 @@ type breakArmorPreview struct {
 
 type breakArmorSnapshotManifest struct {
 	Version   int                      `json:"version"`
+	Purpose   string                   `json:"purpose,omitempty"`
 	Client    string                   `json:"client"`
 	Mode      string                   `json:"mode,omitempty"`
 	CreatedAt time.Time                `json:"created_at"`
@@ -300,8 +304,11 @@ func breakArmorStatusForMode(cfg config, homeDir, client, mode string) (breakArm
 		status.StatusText = "已破甲"
 	}
 	if latest, found, latestErr := latestBreakArmorSnapshot(homeDir, paths.Client, paths.Mode); latestErr == nil && found {
+		createdAt := latest.CreatedAt.Local().Format("2006-01-02 15:04:05")
 		status.BackupAvailable = true
-		status.LatestBackup = latest.CreatedAt.Local().Format("2006-01-02 15:04:05")
+		status.LatestBackup = createdAt
+		status.BaselineAvailable = true
+		status.BaselineCreatedAt = createdAt
 	} else if latestErr != nil {
 		return breakArmorClientStatus{}, latestErr
 	}
@@ -350,7 +357,10 @@ func snapshotBreakArmorFile(path, kind string) (breakArmorSnapshotFile, error) {
 }
 
 func createBreakArmorSnapshot(homeDir string, paths breakArmorPaths) (breakArmorSnapshotManifest, error) {
-	manifest := breakArmorSnapshotManifest{Version: 2, Client: paths.Client, Mode: paths.Mode, CreatedAt: time.Now()}
+	manifest := breakArmorSnapshotManifest{
+		Version: 3, Purpose: breakArmorSnapshotPurposeBaseline,
+		Client: paths.Client, Mode: paths.Mode, CreatedAt: time.Now(),
+	}
 	promptEntry, err := snapshotBreakArmorFile(paths.PromptPath, "prompt")
 	if err != nil {
 		return breakArmorSnapshotManifest{}, err
@@ -406,12 +416,41 @@ func latestBreakArmorSnapshot(homeDir, client string, modes ...string) (breakArm
 		if json.Unmarshal(raw, &manifest) != nil || manifest.Client != client || len(manifest.Files) == 0 {
 			continue
 		}
-		if wantedMode != "" && manifest.Mode != "" && normalizeBreakArmorMode(client, manifest.Mode) != wantedMode {
+		if wantedMode != "" && normalizeBreakArmorMode(client, manifest.Mode) != wantedMode {
+			continue
+		}
+		if !breakArmorSnapshotIsUnbrokenBaseline(manifest) {
 			continue
 		}
 		return manifest, true, nil
 	}
 	return breakArmorSnapshotManifest{}, false, nil
+}
+
+// Legacy snapshots did not record a purpose and could be created while a
+// client was already broken. Only expose snapshots whose captured bytes are
+// genuinely free of Vision Relay break-armor markers as removable baselines.
+func breakArmorSnapshotIsUnbrokenBaseline(manifest breakArmorSnapshotManifest) bool {
+	if manifest.Purpose != "" && manifest.Purpose != breakArmorSnapshotPurposeBaseline {
+		return false
+	}
+	if validateBreakArmorSnapshotManifest(manifest) != nil {
+		return false
+	}
+	for _, entry := range manifest.Files {
+		if !entry.Existed {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(entry.Data)
+		if err != nil {
+			return false
+		}
+		content := string(raw)
+		if strings.Contains(content, breakArmorPromptMarker) || strings.Contains(content, breakArmorCodexBlockBegin) {
+			return false
+		}
+	}
+	return true
 }
 
 func restoreBreakArmorSnapshot(homeDir, client string, modes ...string) (breakArmorSnapshotManifest, error) {
@@ -420,18 +459,27 @@ func restoreBreakArmorSnapshot(homeDir, client string, modes ...string) (breakAr
 		return breakArmorSnapshotManifest{}, err
 	}
 	if !found {
-		return breakArmorSnapshotManifest{}, errors.New("当前客户端没有可用的破甲备份")
+		return breakArmorSnapshotManifest{}, errors.New("找不到可用的未破甲基线")
 	}
+	if err := validateBreakArmorSnapshotManifest(manifest); err != nil {
+		return breakArmorSnapshotManifest{}, err
+	}
+	currentFiles := make([]breakArmorSnapshotFile, 0, len(manifest.Files))
 	for _, entry := range manifest.Files {
-		if entry.Kind != "prompt" && entry.Kind != "config" && entry.Kind != "" {
-			return breakArmorSnapshotManifest{}, errors.New("破甲备份包含非破甲管理文件")
+		current, snapshotErr := snapshotBreakArmorFile(entry.Path, entry.Kind)
+		if snapshotErr != nil {
+			return breakArmorSnapshotManifest{}, snapshotErr
 		}
+		currentFiles = append(currentFiles, current)
+	}
+	for i, entry := range manifest.Files {
 		if err := restoreBreakArmorSnapshotFile(entry); err != nil {
-			return breakArmorSnapshotManifest{}, err
+			return breakArmorSnapshotManifest{}, errors.Join(err, rollbackBreakArmorSnapshotFiles(currentFiles[:i+1]))
 		}
 	}
 	return manifest, nil
 }
+
 func restoreBreakArmorSnapshotFile(entry breakArmorSnapshotFile) error {
 	if !entry.Existed {
 		if err := os.Remove(entry.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -567,6 +615,42 @@ func applyBreakArmor(cfg config, homeDir string, req breakArmorRequest) (breakAr
 	status, err := breakArmorStatusForMode(cfg, homeDir, paths.Client, paths.Mode)
 	return status, paths, err
 }
+
+// removeBreakArmor restores the real files captured immediately before the
+// first apply for the selected client and mode. The returned status is derived
+// from the restored files; no stored boolean is used to declare success.
+func removeBreakArmor(cfg config, homeDir string, req breakArmorRequest) (breakArmorClientStatus, breakArmorPaths, error) {
+	paths, err := breakArmorClientPathsForMode(cfg, homeDir, req.Client, req.Mode)
+	if err != nil {
+		return breakArmorClientStatus{}, breakArmorPaths{}, err
+	}
+	before, err := breakArmorStatusForMode(cfg, homeDir, paths.Client, paths.Mode)
+	if err != nil {
+		return breakArmorClientStatus{}, breakArmorPaths{}, err
+	}
+	if !before.Broken {
+		return before, paths, errors.New("当前模式未检测到破甲内容，无需去除")
+	}
+	if !before.BaselineAvailable {
+		return before, paths, errors.New("找不到当前客户端和模式的未破甲基线，无法安全去除")
+	}
+	if paths.Client == breakArmorClientCodex && paths.Mode == "global" {
+		if err := restoreBreakArmorCodexGlobalMode(homeDir); err != nil {
+			return before, paths, err
+		}
+	} else if _, err := restoreBreakArmorSnapshot(homeDir, paths.Client, paths.Mode); err != nil {
+		return before, paths, err
+	}
+	after, err := breakArmorStatusForMode(cfg, homeDir, paths.Client, paths.Mode)
+	if err != nil {
+		return breakArmorClientStatus{}, paths, err
+	}
+	if after.Broken {
+		return after, paths, errors.New("真实文件恢复后仍检测到破甲内容，未标记为未破甲")
+	}
+	return after, paths, nil
+}
+
 func (a *app) breakArmorProgramAction(cfg config, homeDir string, paths breakArmorPaths) clientProgramActionResult {
 	if paths.Client == breakArmorClientCodex && paths.Mode == "profile" {
 		return clientProgramActionResult{
@@ -669,6 +753,33 @@ func (a *app) handleBreakArmorApply(w http.ResponseWriter, r *http.Request) {
 	}
 	program := a.breakArmorProgramAction(cfg, homeDir, paths)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "status": status, "program": program})
+}
+
+func (a *app) handleBreakArmorRemove(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	req, err := decodeBreakArmorRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	a.breakArmorMu.Lock()
+	defer a.breakArmorMu.Unlock()
+	cfg := a.currentConfig()
+	status, paths, err := removeBreakArmor(cfg, homeDir, req)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	program := a.breakArmorProgramAction(cfg, homeDir, paths)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "verified": !status.Broken, "status": status, "program": program})
 }
 
 func (a *app) handleBreakArmorRestore(w http.ResponseWriter, r *http.Request) {

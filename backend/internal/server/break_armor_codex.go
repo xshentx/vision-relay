@@ -288,7 +288,7 @@ func writeBreakArmorFileAtomic(path string, raw []byte, mode os.FileMode) error 
 	if err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	return replaceFileSafely(tmpPath, path)
 }
 
 func prepareBreakArmorCodexGlobalRestore(home string) (breakArmorCodexGlobalRestorePlan, error) {
@@ -395,7 +395,7 @@ func restoreBreakArmorCodexGlobalMode(home string) error {
 	}
 	for i, entry := range manifest.Files {
 		if err = restoreBreakArmorSnapshotFile(entry); err != nil {
-			return errors.Join(err, rollbackBreakArmorSnapshotFiles(currentFiles[:i]))
+			return errors.Join(err, rollbackBreakArmorSnapshotFiles(currentFiles[:i+1]))
 		}
 	}
 	if err = applyBreakArmorCodexGlobalRestore(plan); err != nil {

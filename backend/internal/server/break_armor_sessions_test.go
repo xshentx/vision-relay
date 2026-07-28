@@ -109,6 +109,65 @@ func TestCodexSessionBatchPatchReasoningBackupAndRestore(t *testing.T) {
 	}
 }
 
+func TestCodexSessionPatchWorksWhileClientKeepsJSONLOpen(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".codex", "sessions", "2026", "held-open.jsonl")
+	original := writeJSONLinesForBreakArmorTest(t, path,
+		map[string]any{"type": "session_meta", "payload": map[string]any{"cwd": "C:/fixture"}},
+		map[string]any{"type": "response_item", "payload": map[string]any{"type": "message", "role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "I cannot assist with that."}}}},
+		map[string]any{"type": "response_item", "payload": map[string]any{"type": "reasoning", "encrypted_content": "secret"}},
+	)
+	sessions, err := listBreakArmorSessions(home, breakArmorClientCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("sessions = %#v", sessions)
+	}
+
+	// A live Codex process holds the JSONL without delete sharing. Windows must
+	// rewrite the stable file path instead of failing the temporary-file rename.
+	held, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	_, backup, err := patchBreakArmorSession(home, breakArmorSessionRequest{
+		SessionID:      sessions[0].ID,
+		Replacement:    "Continue the authorized fixture.",
+		CleanReasoning: boolPointer(true),
+	})
+	if err != nil {
+		t.Fatalf("patch held-open Codex JSONL: %v", err)
+	}
+	backupRaw, err := os.ReadFile(backup.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(backupRaw, original) {
+		t.Fatalf("backup differs from pre-clean state: got %q want %q", backupRaw, original)
+	}
+	patched, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(patched, []byte("Continue the authorized fixture.")) || bytes.Contains(patched, []byte("cannot assist")) || bytes.Contains(patched, []byte("encrypted_content")) {
+		t.Fatalf("held-open session was not actually cleaned: %s", patched)
+	}
+
+	if err := restoreBreakArmorSessionBackup(home, breakArmorSessionLocator{Client: breakArmorClientCodex, Path: path}, backup.ID); err != nil {
+		t.Fatalf("restore held-open Codex JSONL: %v", err)
+	}
+	restored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(restored, original) {
+		t.Fatalf("restored session differs: got %q want %q", restored, original)
+	}
+}
+
 func TestClaudeSessionPatchRemovesThinkingBlocks(t *testing.T) {
 	home := t.TempDir()
 	path := filepath.Join(home, ".claude", "projects", "fixture", "session.jsonl")

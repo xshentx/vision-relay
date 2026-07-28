@@ -48,6 +48,7 @@ func isManagementAPIPath(path string) bool {
 		"/api/break-armor/status",
 		"/api/break-armor/preview",
 		"/api/break-armor/apply",
+		"/api/break-armor/remove",
 		"/api/break-armor/restore",
 		"/api/break-armor/sessions",
 		"/api/break-armor/session/preview",

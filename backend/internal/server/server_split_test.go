@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,11 +22,11 @@ func TestDefaultManagementAndRelayAddressesAreIndependent(t *testing.T) {
 	}
 }
 
-func TestManagementAddressIsFixed(t *testing.T) {
+func TestManagementAddressIsNotUserConfigurable(t *testing.T) {
 	t.Setenv("VISION_RELAY_MANAGEMENT_ADDR", "127.0.0.1:19999")
 	cfg := mergeConfig(defaultConfig(), config{ManagementAddr: "127.0.0.1:19998"})
 	if cfg.ManagementAddr != defaultManagementAddr {
-		t.Fatalf("merged management address = %q, want fixed %q", cfg.ManagementAddr, defaultManagementAddr)
+		t.Fatalf("merged management address = %q, want preferred %q", cfg.ManagementAddr, defaultManagementAddr)
 	}
 	encoded, err := json.Marshal(cfg)
 	if err != nil {
@@ -41,16 +42,93 @@ func TestManagementAddressIsFixed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := a.currentConfig().ManagementAddr; got != defaultManagementAddr {
-		t.Fatalf("saved management address = %q, want fixed %q", got, defaultManagementAddr)
+		t.Fatalf("saved management address = %q, want preferred %q", got, defaultManagementAddr)
 	}
 }
 
-func TestConfigRejectsRelayOnFixedManagementPort(t *testing.T) {
+func TestConfigAllowsRelayOnPreferredManagementPort(t *testing.T) {
 	cfg := defaultConfig()
-	cfg.Addr = "127.0.0.1:18473"
+	cfg.Addr = defaultManagementAddr
 	a := &app{cfg: defaultConfig(), configPath: t.TempDir() + "/config.json"}
-	if err := a.setConfig(cfg); err == nil || !strings.Contains(err.Error(), "必须不同") {
-		t.Fatalf("same-port config error = %v, want distinct-port validation", err)
+	if err := a.setConfig(cfg); err != nil {
+		t.Fatalf("relay address on preferred management port was rejected: %v", err)
+	}
+	if got := a.currentConfig().Addr; got != defaultManagementAddr {
+		t.Fatalf("relay address = %q, want %q", got, defaultManagementAddr)
+	}
+}
+
+func TestSetConfigPreservesRuntimeManagementFallback(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.ManagementAddr = "127.0.0.1:32123"
+	a := &app{cfg: cfg, configPath: t.TempDir() + "/config.json"}
+
+	updated := cfg
+	updated.ManagementAddr = defaultManagementAddr
+	if err := a.setConfig(updated); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.currentConfig().ManagementAddr; got != "127.0.0.1:32123" {
+		t.Fatalf("runtime management address = %q, want fallback address", got)
+	}
+}
+
+func TestOccupiedManagementPortIsDetected(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+
+	duplicate, err := net.Listen("tcp", occupied.Addr().String())
+	if err == nil {
+		_ = duplicate.Close()
+		t.Fatal("second listener unexpectedly acquired the occupied port")
+	}
+	if !isAddressInUseError(err) {
+		t.Fatalf("occupied-port error = %v, want EADDRINUSE", err)
+	}
+}
+
+func TestManagementListenFallsBackWhenHealthyServiceOccupiesPreferredPort(t *testing.T) {
+	occupied := httptest.NewServer(healthHandler("management"))
+	defer occupied.Close()
+	preferredAddr := occupied.Listener.Addr().String()
+	if !existingVisionRelayHealthy(occupied.URL + "/") {
+		t.Fatal("fixture occupying the preferred port is not recognized as a healthy Vision Relay service")
+	}
+
+	listener, reason, err := listenManagement(preferredAddr, "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if reason == "" {
+		t.Fatal("occupied preferred port did not report a fallback reason")
+	}
+	if listener.Addr().String() == preferredAddr {
+		t.Fatalf("management listener reused occupied preferred address %s", preferredAddr)
+	}
+}
+
+func TestManagementFallbackAvoidsRelayPort(t *testing.T) {
+	relayListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer relayListener.Close()
+
+	listener, err := listenManagementFallback(defaultManagementAddr, relayListener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	if got := listenPort(listener.Addr().String()); got == listenPort(defaultManagementAddr) {
+		t.Fatalf("fallback reused preferred management port %s", got)
+	}
+	if got := listenPort(listener.Addr().String()); got == listenPort(relayListener.Addr().String()) {
+		t.Fatalf("fallback reused relay port %s", got)
 	}
 }
 

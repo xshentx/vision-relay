@@ -104,7 +104,7 @@ func saveBreakArmorTemplatesUnlocked(home string, store breakArmorTemplateStore)
 	if err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	return replaceFileSafely(tmpPath, path)
 }
 
 func saveBreakArmorTemplates(home string, store breakArmorTemplateStore) error {

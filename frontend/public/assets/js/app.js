@@ -162,6 +162,7 @@ const breakArmorTabs = [...document.querySelectorAll("[data-break-armor-client]"
 const breakArmorPanels = [...document.querySelectorAll("[data-break-armor-panel]")];
 const breakArmorTemplateInputs = [...document.querySelectorAll("[data-break-armor-template]")];
 const breakArmorApplyButtons = [...document.querySelectorAll("[data-break-armor-apply]")];
+const breakArmorRemoveButtons = [...document.querySelectorAll("[data-break-armor-remove]")];
 const breakArmorRestoreButtons = [...document.querySelectorAll("[data-break-armor-restore]")];
 const breakArmorOverallState = document.querySelector("#breakArmorOverallState");
 const breakArmorViewTabs = [...document.querySelectorAll("[data-break-armor-view-tab]")];
@@ -472,19 +473,46 @@ function breakArmorRequestBody(client) {
 
 function renderBreakArmorStatus(status) {
   if (!status?.client) return;
+  const baselineAvailable = status.baseline_available ?? status.backup_available ?? false;
+  const baselineCreatedAt = status.baseline_created_at || status.latest_backup || "";
+  status = {...status, baseline_available: baselineAvailable, baseline_created_at: baselineCreatedAt};
   breakArmorStatuses[status.client] = status;
   const text = status.broken ? "已破甲" : "未破甲";
   document.querySelectorAll(`[data-break-armor-status="${status.client}"], [data-break-armor-tab-status="${status.client}"]`).forEach((el) => {
     el.textContent = text;
     el.classList.toggle("is-broken", status.broken === true);
   });
+
+  const remove = document.querySelector(`[data-break-armor-remove="${status.client}"]`);
+  if (remove) {
+    remove.hidden = status.broken !== true;
+    remove.disabled = status.broken !== true || !baselineAvailable;
+    remove.title = baselineAvailable ? "真实恢复到未破甲基线" : "缺少未破甲基线，无法去除";
+  }
   const restore = document.querySelector(`[data-break-armor-restore="${status.client}"]`);
-  if (restore) restore.disabled = !status.backup_available;
+  if (restore) restore.disabled = !baselineAvailable;
+  const apply = document.querySelector(`[data-break-armor-apply="${status.client}"]`);
+  if (apply) apply.textContent = status.broken ? "应用模板并重新破甲" : `一键破甲 ${status.name || breakArmorClientName(status.client)}`;
+
+  const launch = document.querySelector(`[data-break-armor-launch="${status.client}"]`);
+  launch?.classList.toggle("is-broken", status.broken === true);
+  const flow = document.querySelector(`[data-break-armor-flow="${status.client}"]`);
+  flow?.classList.toggle("is-complete", status.broken === true);
+  flow?.classList.toggle("is-broken", status.broken === true);
+  const launchTitle = document.querySelector(`[data-break-armor-launch-title="${status.client}"]`);
+  if (launchTitle) launchTitle.textContent = status.broken ? "当前已破甲" : "准备就绪";
+  const launchDetail = document.querySelector(`[data-break-armor-launch-detail="${status.client}"]`);
+  if (launchDetail) {
+    launchDetail.textContent = status.broken
+      ? (baselineAvailable ? `未破甲基线 ${baselineCreatedAt || "已保存"}，可真实恢复` : "未找到未破甲基线，暂时无法一键去除")
+      : "将先保存未破甲基线，再执行破甲";
+  }
+
   const backup = document.querySelector(`[data-break-armor-backup="${status.client}"]`);
   if (backup) {
-    backup.textContent = status.backup_available
-      ? `最近备份：${status.latest_backup || "可用"} · 修改只影响 ${status.name}`
-      : `最近备份：尚无 · 首次破甲时自动创建 · 修改只影响 ${status.name}`;
+    backup.textContent = baselineAvailable
+      ? `未破甲基线：${baselineCreatedAt || "可用"} · 可真实恢复 ${status.name}`
+      : `未破甲基线：尚无 · 首次破甲前自动保存 · 只影响 ${status.name}`;
   }
   renderBreakArmorChecks(status);
 }
@@ -509,9 +537,11 @@ function renderBreakArmorChecks(status) {
       detail: "不读取、不写入、不恢复供应商、模型与路由配置"
     },
     {
-      ok: true,
-      title: status.backup_available ? "恢复点可用" : "快照已准备",
-      detail: status.backup_available ? `最近备份 ${status.latest_backup || "可用"}` : "执行前自动生成时间戳快照"
+      ok: status.baseline_available ?? status.backup_available ?? false,
+      title: (status.baseline_available ?? status.backup_available) ? "未破甲基线可用" : "执行前自动保存未破甲基线",
+      detail: (status.baseline_available ?? status.backup_available)
+        ? `基线时间 ${status.baseline_created_at || status.latest_backup || "可用"}，去除时真实恢复文件`
+        : "首次破甲前捕获当前模式的真实文件与字段"
     }
   ];
   list.innerHTML = items.map((item) => `
@@ -593,19 +623,21 @@ async function applyBreakArmorFor(client, button) {
     showToast("请先填写自定义破甲模板", "error");
     return;
   }
+  const reapply = status?.broken === true;
   const confirmed = await confirmAction({
-    title: `一键破甲 ${status?.name || client}？`,
-    message: "程序会先创建时间戳快照，再写入所选破甲方案。三个客户端的配置与恢复点彼此独立。",
+    title: reapply ? `应用模板并重新破甲 ${status?.name || client}？` : `一键破甲 ${status?.name || client}？`,
+    message: reapply
+      ? "将保留现有未破甲基线，并将所选模板重新写入当前模式。"
+      : "程序会先自动保存当前模式的未破甲基线，再写入所选破甲方案。",
     variant: "warning",
-    alertTitle: "可随时从备份恢复",
-    alertMessage: status?.config_path || "只修改当前客户端的专属文件",
-    confirmText: `一键破甲 ${status?.name || client}`,
+    alertTitle: reapply ? "未破甲基线不会被覆盖" : "可一键真实去除",
+    alertMessage: status?.config_path || "只修改当前客户端、当前模式的专属文件",
+    confirmText: reapply ? "应用并重新破甲" : `一键破甲 ${status?.name || client}`,
     cancelText: "取消"
   });
   if (!confirmed) return;
   button.disabled = true;
-  const originalText = button.textContent;
-  button.textContent = "破甲中...";
+  button.textContent = reapply ? "重新破甲中..." : "破甲中...";
   try {
     const res = await fetch("/api/break-armor/apply", {
       method: "POST",
@@ -620,7 +652,47 @@ async function applyBreakArmorFor(client, button) {
     await loadBreakArmorStatus();
   } finally {
     button.disabled = false;
-    button.textContent = originalText;
+    const current = breakArmorStatuses[client];
+    button.textContent = current?.broken ? "应用模板并重新破甲" : `一键破甲 ${current?.name || status?.name || breakArmorClientName(client)}`;
+  }
+}
+
+async function removeBreakArmorFor(client, button) {
+  const status = breakArmorStatuses[client];
+  const baselineCreatedAt = status?.baseline_created_at || status?.latest_backup || "已保存的基线";
+  const confirmed = await confirmAction({
+    title: `一键去除 ${status?.name || client} 破甲？`,
+    message: `将使用 ${baselineCreatedAt} 的未破甲基线，真实恢复当前客户端、当前模式的磁盘文件与配置字段。`,
+    variant: "warning",
+    alertTitle: "这是实际恢复，不是仅修改程序状态",
+    alertMessage: "恢复后会重新扫描真实文件；仅在确认破甲内容已消失后才显示未破甲。",
+    confirmText: "一键去除",
+    cancelText: "取消"
+  });
+  if (!confirmed) return;
+  button.disabled = true;
+  button.textContent = "正在真实恢复...";
+  try {
+    const res = await fetch("/api/break-armor/remove", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        client,
+        mode: document.querySelector(`[data-break-armor-mode="${client}"]`)?.value || ""
+      })
+    });
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const payload = await res.json();
+    if (payload.verified !== true || payload.status?.broken !== false) {
+      throw new Error("恢复后的真实文件仍检测到破甲内容，未改变界面状态");
+    }
+    renderBreakArmorStatus(payload.status);
+    showToast(`${payload.status?.name || client} 已实际恢复到未破甲状态`, "success");
+    if (payload.program?.warning) showToast(payload.program.warning, "info");
+    await loadBreakArmorStatus();
+  } finally {
+    button.disabled = false;
+    button.textContent = "↶  一键去除";
   }
 }
 
@@ -689,6 +761,13 @@ breakArmorApplyButtons.forEach((button) => {
   button.addEventListener("click", () => applyBreakArmorFor(button.dataset.breakArmorApply, button).catch((err) => {
     console.error(err);
     showToast(`破甲失败：${err.message || err}`, "error");
+  }));
+});
+
+breakArmorRemoveButtons.forEach((button) => {
+  button.addEventListener("click", () => removeBreakArmorFor(button.dataset.breakArmorRemove, button).catch((err) => {
+    console.error(err);
+    showToast(`去除破甲失败：${err.message || err}`, "error");
   }));
 });
 
@@ -1021,6 +1100,8 @@ document.querySelector("#useBreakArmorTemplate")?.addEventListener("click", useB
 updateBreakArmorModeNote();
 
 function showPage(page) {
+  const activePage = navItems.find((item) => item.classList.contains("active"))?.dataset.page;
+  if (activePage && activePage !== page) closeModelTestDrawer({restoreFocus: false});
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.page === page));
   pages.forEach((panel) => panel.classList.toggle("active", panel.dataset.pagePanel === page));
   window.scrollTo({top: 0, left: 0, behavior: "auto"});
@@ -1166,17 +1247,19 @@ function openModelTestDrawer(profile) {
   });
 }
 
-function closeModelTestDrawer() {
+function closeModelTestDrawer({restoreFocus = true} = {}) {
   if (!modelTestLayer || modelTestLayer.hidden) return;
   modelTestController?.abort();
   modelTestController = null;
+  const previousFocus = restoreFocus ? modelTestPreviousFocus : null;
+  modelTestPreviousFocus = null;
   modelTestLayer.classList.remove("open");
   document.body.classList.remove("model-test-open");
   clearTimeout(modelTestCloseTimer);
   modelTestCloseTimer = setTimeout(() => {
     modelTestLayer.hidden = true;
     modelTestProfileId = "";
-    if (modelTestPreviousFocus instanceof HTMLElement) modelTestPreviousFocus.focus();
+    if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
   }, 250);
 }
 
@@ -1725,11 +1808,6 @@ saveProgramSettings?.addEventListener("click", async () => {
   const port = Number(settingsAPIPort?.value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     showToast("API \u7aef\u53e3\u5fc5\u987b\u662f 1 \u5230 65535 \u4e4b\u95f4\u7684\u6574\u6570", "error");
-    settingsAPIPort?.focus();
-    return;
-  }
-  if (port === 18473) {
-    showToast("18473 端口由主程序固定使用，请选择其他 API 端口", "error");
     settingsAPIPort?.focus();
     return;
   }

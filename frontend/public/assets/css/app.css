@@ -4459,7 +4459,7 @@ body.model-test-open {
 .model-test-result {
   min-height: 210px;
   display: flex;
-  flex: 1;
+  flex: 1 0 auto;
   flex-direction: column;
   padding: 18px;
   border: 1px solid #e1e8f2;
@@ -4833,6 +4833,20 @@ body.model-test-open {
   line-height: 1.4;
 }
 
+.break-armor-flow.is-complete > div {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.break-armor-flow.is-complete > div:not(:last-child)::after,
+.break-armor-flow.is-complete b {
+  color: #047857;
+}
+
+.break-armor-flow.is-complete span {
+  color: #4b7663;
+}
+
 .break-armor-main h5,
 .break-armor-aside h5 {
   margin: 0;
@@ -4954,6 +4968,7 @@ body.model-test-open {
   align-items: start;
   min-width: 0;
   min-height: 68px;
+  margin: 0;
   padding: 10px;
   border: 1px solid #dfe7ee;
   border-radius: 10px;
@@ -5143,6 +5158,63 @@ body.model-test-open {
   background: #3b82f6;
 }
 
+.break-armor-launch-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.break-armor-launch.is-broken {
+  border: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.break-armor-launch.is-broken span {
+  color: #c2410c;
+}
+
+.break-armor-launch.is-broken .primary-action {
+  background: #2563eb;
+}
+
+.break-armor-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 9px 14px;
+  border: 1px solid #fb923c;
+  border-radius: 8px;
+  background: #fff;
+  color: #c2410c;
+  font-size: 11px;
+  font-weight: 850;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease, transform .16s ease;
+}
+
+.break-armor-remove[hidden] {
+  display: none;
+}
+
+.break-armor-remove:hover:not(:disabled) {
+  border-color: #f97316;
+  background: #ffedd5;
+  transform: translateY(-1px);
+}
+
+.break-armor-remove:focus-visible {
+  outline: 3px solid rgba(249, 115, 22, .2);
+  outline-offset: 2px;
+}
+
+.break-armor-remove:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
 .break-armor-aside-title {
   display: flex;
   align-items: center;
@@ -5256,6 +5328,18 @@ body.model-test-open {
   font-size: 11px;
 }
 
+.break-armor-footer-scope {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid #dbe4ee;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .break-armor-footer button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -5351,9 +5435,20 @@ body.model-test-open {
     display: none;
   }
 
+  .break-armor-launch-actions {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .break-armor-launch .primary-action,
+  .break-armor-remove,
   .break-armor-footer button {
     width: 100%;
+  }
+
+  .break-armor-footer-scope {
+    align-self: flex-start;
   }
 }
 

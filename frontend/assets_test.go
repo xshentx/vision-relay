@@ -819,7 +819,6 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 	for _, expected := range []string{
 		`data.local_api_enabled = programSettings.localAPIEnabled;`,
 		`const previousLocalAPIEnabled = programSettings.localAPIEnabled;`,
-		`if (port === 18473) {`,
 		`const updatedClients = localAPIModeChanged ? await applyEnabledClientRoutes() : [];`,
 		`async function applyEnabledClientRoutes()`,
 		`fetch("/api/client/routes/apply", {method: "POST"})`,
@@ -840,6 +839,9 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 			t.Fatalf("program settings behavior %q is missing", expected)
 		}
 	}
+	if strings.Contains(script, `if (port === 18473)`) {
+		t.Fatal("relay API port must not be rejected just because it is the preferred management port")
+	}
 	if strings.Contains(index, "PROGRAM SETTINGS") || strings.Contains(index, `<h3>程序设置</h3>`) {
 		t.Fatal("settings page must use the short title and common panel heading")
 	}
@@ -847,11 +849,11 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 		t.Fatal("program settings must not expose startup behavior controls")
 	}
 	if strings.Contains(index, "主程序管理界面") || strings.Contains(index, `id="settingsManagementHost"`) || strings.Contains(index, `id="settingsManagementPort"`) {
-		t.Fatal("program settings must not expose the fixed management address")
+		t.Fatal("program settings must not expose the preferred management address")
 	}
 	for _, removed := range []string{"management_addr", "managementAddr", "settingsManagementHost", "settingsManagementPort"} {
 		if strings.Contains(script, removed) {
-			t.Fatalf("program settings script still exposes fixed management setting %q", removed)
+			t.Fatalf("program settings script still exposes preferred management setting %q", removed)
 		}
 	}
 	if strings.Contains(script, `data.open_window = true;`) || strings.Contains(script, `data.open_browser = false;`) {
@@ -1047,6 +1049,8 @@ func TestModelTestDrawerIsEmbedded(t *testing.T) {
 	for _, expected := range []string{
 		`data-action="test"`,
 		`openModelTestDrawer(profile)`,
+		`closeModelTestDrawer({restoreFocus: false})`,
+		`function closeModelTestDrawer({restoreFocus = true} = {})`,
 		`fetch("/api/model-test"`,
 		`JSON.stringify({profile_id: modelTestProfileId, model, prompt})`,
 		`modelTestPrompt.value = "hi"`,
@@ -1060,8 +1064,8 @@ func TestModelTestDrawerIsEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	style := string(styleRaw)
-	for _, expected := range []string{".model-test-drawer", ".model-test-layer.open .model-test-drawer", ".model-test-result.is-success"} {
+	style := strings.ReplaceAll(string(styleRaw), "\r\n", "\n")
+	for _, expected := range []string{".model-test-drawer", ".model-test-layer.open .model-test-drawer", ".model-test-result.is-success", ".model-test-result {\n  min-height: 210px;\n  display: flex;\n  flex: 1 0 auto;"} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("model test style %q is missing", expected)
 		}
@@ -1213,6 +1217,11 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 		`data-break-armor-view-tab="sessions"`,
 		`data-break-armor-view-tab="templates"`,
 		`data-break-armor-mode="codex"`,
+		`data-break-armor-remove="codex"`,
+		`data-break-armor-remove="claude"`,
+		`data-break-armor-remove="opencode"`,
+		"保存未破甲基线",
+		"真实文件恢复 · 独立保存",
 		`id="breakArmorSessionList"`,
 		`id="breakArmorTemplateList"`,
 		`id="syncCodexXTemplates"`,
@@ -1243,6 +1252,9 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 		`fetch("/api/break-armor/status"`,
 		`fetch("/api/break-armor/preview"`,
 		`fetch("/api/break-armor/apply"`,
+		`fetch("/api/break-armor/remove"`,
+		`payload.verified !== true || payload.status?.broken !== false`,
+		"已实际恢复到未破甲状态",
 		`fetch("/api/break-armor/restore"`,
 		`/api/break-armor/sessions`,
 		`/api/break-armor/session/preview`,
@@ -1279,8 +1291,8 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	style := string(styleRaw)
-	for _, expected := range []string{".break-armor-page", ".break-armor-test-badge", ".nav-test-badge", ".break-armor-tabs", ".break-armor-flow", ".break-armor-code", ".break-armor-function-tabs", ".break-armor-mode:focus-within,", ".break-armor-other-option:focus-visible,", ".break-armor-session-grid", ".break-armor-template-grid", ".break-armor-template-source-note", ".break-armor-template-library-actions", ".break-armor-backup-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end;", ".break-armor-backup-row > label { min-width:0; margin:0; }", ".break-armor-backup-row > label > .vr-component-select { margin-bottom:0; }", ".break-armor-backup-row > button { min-height:44px; margin:0; }", ".break-armor-mode-note { border-color:#bae6fd; color:#36556f; background:#f0f9ff; font-size:13px; font-weight:600; }", ".break-armor-mode-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; font-weight:800; }"} {
+	style := strings.ReplaceAll(string(styleRaw), "\r\n", "\n")
+	for _, expected := range []string{".break-armor-page", ".break-armor-test-badge", ".nav-test-badge", ".break-armor-tabs", ".break-armor-flow", ".break-armor-flow.is-complete > div", ".break-armor-launch.is-broken", ".break-armor-launch-actions", ".break-armor-remove {", ".break-armor-footer-scope", ".break-armor-code", ".break-armor-function-tabs", ".break-armor-mode:focus-within,", ".break-armor-other-option:focus-visible,", ".break-armor-other-option {", "min-height: 68px;\n  margin: 0;", ".break-armor-session-grid", ".break-armor-template-grid", ".break-armor-template-source-note", ".break-armor-template-library-actions", ".break-armor-backup-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end;", ".break-armor-backup-row > label { min-width:0; margin:0; }", ".break-armor-backup-row > label > .vr-component-select { margin-bottom:0; }", ".break-armor-backup-row > button { min-height:44px; margin:0; }", ".break-armor-mode-note { border-color:#bae6fd; color:#36556f; background:#f0f9ff; font-size:13px; font-weight:600; }", ".break-armor-mode-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; font-weight:800; }"} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("break armor style %q is missing", expected)
 		}

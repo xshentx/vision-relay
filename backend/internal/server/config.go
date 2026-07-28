@@ -260,9 +260,9 @@ func (a *app) setConfig(cfg config) error {
 		return err
 	}
 	cfg.Addr = addr
-	cfg.ManagementAddr = defaultManagementAddr
-	if listenPort(cfg.Addr) == listenPort(cfg.ManagementAddr) {
-		return fmt.Errorf("管理端口和中转 API 端口必须不同")
+	cfg.ManagementAddr = a.currentConfig().ManagementAddr
+	if cfg.ManagementAddr == "" {
+		cfg.ManagementAddr = defaultManagementAddr
 	}
 	if cfg.TextProvider == "" {
 		cfg.TextProvider = defaultTextProvider

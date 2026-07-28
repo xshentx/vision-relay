@@ -890,15 +890,11 @@ func writeBreakArmorJSONLAtomic(path string, lines []breakArmorJSONLine) error {
 		}
 		b.WriteByte('\n')
 	}
-	tmp := path + ".vision-relay.tmp"
 	stat, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
-	if err = os.WriteFile(tmp, []byte(b.String()), stat.Mode().Perm()); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeBreakArmorFileAtomic(path, []byte(b.String()), stat.Mode().Perm())
 }
 
 func patchBreakArmorOpenCode(locator breakArmorSessionLocator, req breakArmorSessionRequest) error {

@@ -40,6 +40,44 @@ func TestRemovedBreakArmorEndpointsReturnNotFoundInsteadOfProxying(t *testing.T)
 	}
 }
 
+func TestLatestBreakArmorSnapshotSkipsBrokenLegacyBackup(t *testing.T) {
+	homeDir := t.TempDir()
+	cfg := breakArmorTestConfig(homeDir)
+	paths, err := breakArmorClientPathsForMode(cfg, homeDir, breakArmorClientClaude, "workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean, err := createBreakArmorSnapshot(homeDir, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := breakArmorPrompt(breakArmorTemplateV5, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.PromptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.PromptPath, []byte(prompt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	broken, err := createBreakArmorSnapshot(homeDir, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !broken.CreatedAt.After(clean.CreatedAt) {
+		t.Fatalf("broken fixture is not newer: clean=%s broken=%s", clean.CreatedAt, broken.CreatedAt)
+	}
+
+	latest, found, err := latestBreakArmorSnapshot(homeDir, breakArmorClientClaude, "workspace")
+	if err != nil || !found {
+		t.Fatalf("latest unbroken baseline: found=%t err=%v", found, err)
+	}
+	if !latest.CreatedAt.Equal(clean.CreatedAt) {
+		t.Fatalf("selected broken snapshot %s instead of clean baseline %s", latest.CreatedAt, clean.CreatedAt)
+	}
+}
+
 func TestCodexProfileBreakArmorNeverTouchesOneClickConfig(t *testing.T) {
 	homeDir := t.TempDir()
 	cfg := breakArmorTestConfig(homeDir)
@@ -79,6 +117,9 @@ func TestCodexProfileBreakArmorNeverTouchesOneClickConfig(t *testing.T) {
 	manifest, found, err := latestBreakArmorSnapshot(homeDir, breakArmorClientCodex, "profile")
 	if err != nil || !found {
 		t.Fatalf("latest profile snapshot: found=%t err=%v", found, err)
+	}
+	if manifest.Version != 3 || manifest.Purpose != breakArmorSnapshotPurposeBaseline {
+		t.Fatalf("profile snapshot is not an unbroken baseline: %#v", manifest)
 	}
 	if len(manifest.Files) != 2 || manifest.Mode != "profile" {
 		t.Fatalf("profile snapshot must contain prompt and profile config: %#v", manifest)
@@ -404,5 +445,170 @@ func TestCodexGlobalReapplyDiscardsStaleFieldState(t *testing.T) {
 	}
 	if !strings.Contains(string(restored), `developer_instructions = "new rules"`) || strings.Contains(string(restored), `developer_instructions = "old rules"`) {
 		t.Fatalf("stale global state was reused: %s", restored)
+	}
+}
+
+func TestRemoveBreakArmorRestoresRealFileAndKeepsOriginalBaseline(t *testing.T) {
+	homeDir := t.TempDir()
+	cfg := breakArmorTestConfig(homeDir)
+	promptPath := filepath.Join(homeDir, ".opencode-ctf-workspace", "AGENTS.md")
+	original := []byte("# Original OpenCode rules\nkeep = true\n")
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(promptPath, original, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	status, _, err := applyBreakArmor(cfg, homeDir, breakArmorRequest{Client: "opencode", Template: "v5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Broken || !status.BaselineAvailable {
+		t.Fatalf("status after apply = %#v", status)
+	}
+	managed, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(managed, original) || !strings.Contains(string(managed), breakArmorPromptMarker) {
+		t.Fatalf("apply did not change the real prompt file: %s", managed)
+	}
+	manifest, found, err := latestBreakArmorSnapshot(homeDir, breakArmorClientOpenCode, "workspace")
+	if err != nil || !found {
+		t.Fatalf("baseline lookup: found=%t err=%v", found, err)
+	}
+	if manifest.Version != 3 || manifest.Purpose != breakArmorSnapshotPurposeBaseline {
+		t.Fatalf("unexpected baseline manifest: %#v", manifest)
+	}
+	entriesBefore, err := os.ReadDir(breakArmorSnapshotRoot(homeDir, breakArmorClientOpenCode))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := applyBreakArmor(cfg, homeDir, breakArmorRequest{Client: "opencode", Template: "v35"}); err != nil {
+		t.Fatal(err)
+	}
+	entriesAfter, err := os.ReadDir(breakArmorSnapshotRoot(homeDir, breakArmorClientOpenCode))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entriesAfter) != len(entriesBefore) {
+		t.Fatalf("reapply created a new baseline: before=%d after=%d", len(entriesBefore), len(entriesAfter))
+	}
+
+	status, _, err = removeBreakArmor(cfg, homeDir, breakArmorRequest{Client: "opencode"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Broken {
+		t.Fatalf("status remained broken after real restore: %#v", status)
+	}
+	restored, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(restored, original) {
+		t.Fatalf("real file was not restored exactly\ngot:  %q\nwant: %q", restored, original)
+	}
+}
+
+func TestRemoveBreakArmorDeletesFileThatDidNotExistAtBaseline(t *testing.T) {
+	homeDir := t.TempDir()
+	cfg := breakArmorTestConfig(homeDir)
+	status, paths, err := applyBreakArmor(cfg, homeDir, breakArmorRequest{Client: "claude", Template: "v5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Broken || !pathIsFile(paths.PromptPath) {
+		t.Fatalf("apply did not create the managed file: status=%#v path=%s", status, paths.PromptPath)
+	}
+
+	status, _, err = removeBreakArmor(cfg, homeDir, breakArmorRequest{Client: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Broken {
+		t.Fatalf("status remained broken after removal: %#v", status)
+	}
+	if _, err := os.Stat(paths.PromptPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file absent at baseline was not actually deleted: err=%v", err)
+	}
+}
+
+func TestRemoveBreakArmorRefusesToFakeSuccessWithoutBaseline(t *testing.T) {
+	homeDir := t.TempDir()
+	cfg := breakArmorTestConfig(homeDir)
+	paths, err := breakArmorClientPathsForMode(cfg, homeDir, breakArmorClientOpenCode, "workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := breakArmorPrompt("v5", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.PromptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.PromptPath, []byte(prompt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status, _, err := removeBreakArmor(cfg, homeDir, breakArmorRequest{Client: "opencode"})
+	if err == nil {
+		t.Fatal("remove succeeded without a real unbroken baseline")
+	}
+	if !status.Broken {
+		t.Fatalf("remove faked an unbroken status: %#v", status)
+	}
+	raw, readErr := os.ReadFile(paths.PromptPath)
+	if readErr != nil || !strings.Contains(string(raw), breakArmorPromptMarker) {
+		t.Fatalf("managed file unexpectedly changed: err=%v content=%q", readErr, raw)
+	}
+}
+
+func TestRemoveCodexGlobalRestoresOnlyBreakArmorFieldsAndPreservesRoute(t *testing.T) {
+	homeDir := t.TempDir()
+	cfg := breakArmorTestConfig(homeDir)
+	configPath := cfg.ClientConfigPaths[clientCodex]
+	original := "developer_instructions = \"team rules\"\nmodel = \"route-before\"\nmodel_provider = \"provider-before\"\n"
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := applyBreakArmor(cfg, homeDir, breakArmorRequest{Client: "codex", Template: "v5", Mode: "global"}); err != nil {
+		t.Fatal(err)
+	}
+	managed, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedRoute := strings.Replace(string(managed), "model = \"route-before\"", "model = \"route-after\"", 1)
+	if changedRoute == string(managed) {
+		t.Fatalf("test route was not found in managed config: %s", managed)
+	}
+	if err := os.WriteFile(configPath, []byte(changedRoute), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	status, _, err := removeBreakArmor(cfg, homeDir, breakArmorRequest{Client: "codex", Mode: "global"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Broken {
+		t.Fatalf("global mode remained broken: %#v", status)
+	}
+	restored, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"developer_instructions = \"team rules\"", "model = \"route-after\"", "model_provider = \"provider-before\""} {
+		if !strings.Contains(string(restored), want) {
+			t.Fatalf("global remove lost %q:\n%s", want, restored)
+		}
+	}
+	if strings.Contains(string(restored), breakArmorCodexBlockBegin) || strings.Contains(string(restored), "vision-relay-ctf.md") {
+		t.Fatalf("global break armor fields remain after remove:\n%s", restored)
 	}
 }
