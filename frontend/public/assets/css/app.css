@@ -903,12 +903,6 @@ h3 {
   color: #dc2626;
 }
 
-.provider-circuit-badge.is-half-open {
-  border-color: #fde68a;
-  background: #fffbeb;
-  color: #b45309;
-}
-
 .profile-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1881,7 +1875,7 @@ pre {
 }
 
 
-@media (max-width: 1040px) {
+@media (max-width: 900px) {
   .app {
     grid-template-columns: 1fr;
   }
@@ -2955,7 +2949,7 @@ body:has(.el-message) > .toast {
 
 @media (max-width: 1040px) {
   .page-stage {
-    width: min(100vw - 24px, 940px);
+    width: min(calc(100% - 24px), 940px);
     padding: 20px 0 36px;
   }
 
@@ -3775,6 +3769,11 @@ body:has(.el-message) > .toast {
   margin-top: 6px;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.dashboard-heading > .secondary {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .dashboard-update {
@@ -5581,7 +5580,7 @@ body.model-test-open {
 .break-armor-mode-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; font-weight:800; }
 
 /* Keep the shell usable if it is hosted outside the constrained desktop window. */
-@media (min-width: 1041px) {
+@media (min-width: 901px) {
   .sidebar {
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -5589,8 +5588,10 @@ body.model-test-open {
 }
 
 /* This must remain after the desktop theme overrides above so they cannot
-   restore the two-column shell while the navigation is in compact mode. */
-@media (max-width: 1040px) {
+   restore the two-column shell while the navigation is in compact mode. The
+   breakpoint stays below the desktop WebView minimum width so its sidebar does
+   not jump to the top at the smallest supported window size. */
+@media (max-width: 900px) {
   .app {
     grid-template-columns: minmax(0, 1fr);
   }

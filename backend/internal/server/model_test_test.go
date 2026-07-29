@@ -2,12 +2,14 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHandleModelTestProviders(t *testing.T) {
@@ -126,6 +128,50 @@ func TestHandleModelTestProviders(t *testing.T) {
 				t.Errorf("request id = %q", result.RequestID)
 			}
 		})
+	}
+}
+
+func TestHandleModelTestSuccessCancelsRecoveryProbeAndRestoresProvider(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"output_text": "recovered"})
+	}))
+	defer upstream.Close()
+
+	cfg := providerRouterTestConfig([]textModelProfile{{
+		ID: "profile-1", Name: "Test provider", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: upstream.URL,
+		ModelMappings: []textModelMapping{{Name: "gpt-test", Model: "gpt-test"}},
+	}}, map[string]string{"codex": "profile-1"})
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 30, 16, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	router.mu.Lock()
+	state := router.providerStateLocked(providerGroupCodex, "profile-1")
+	state.CircuitState = providerCircuitOpen
+	state.ConsecutiveFailures = providerFailureThreshold
+	state.OpenUntil = now
+	router.mu.Unlock()
+	candidate := router.claimDueRecoveryProbes(cfg)[0]
+	probeContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !router.attachRecoveryProbe(candidate, cancel) {
+		t.Fatal("failed to attach recovery probe")
+	}
+
+	a := &app{cfg: cfg, httpClient: upstream.Client(), providerRouter: router}
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/model-test", strings.NewReader(`{"profile_id":"profile-1","model":"gpt-test","prompt":"hi"}`))
+	a.handleModelTest(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	select {
+	case <-probeContext.Done():
+	default:
+		t.Fatal("successful model test did not cancel the recovery probe")
+	}
+	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "profile-1")
+	if status.CircuitState != providerCircuitClosed || status.ConsecutiveFailure != 0 || status.LastSuccessAt == nil {
+		t.Fatalf("successful model test did not restore provider: %#v", status)
 	}
 }
 

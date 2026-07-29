@@ -2716,7 +2716,7 @@ function refreshProviderCircuitBadges() {
   document.querySelectorAll(".provider-circuit-badge[data-provider-group][data-provider-profile]").forEach((badge) => {
     const status = providerCircuitStatuses.get(providerCircuitStatusKey(badge.dataset.providerGroup, badge.dataset.providerProfile));
     const presentation = providerCircuitPresentation(status?.circuit_state);
-    badge.classList.remove("is-closed", "is-open", "is-half-open");
+    badge.classList.remove("is-closed", "is-open");
     badge.classList.add(presentation.className);
     badge.textContent = presentation.label;
   });

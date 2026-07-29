@@ -253,6 +253,7 @@ func (a *app) currentConfig() config {
 }
 
 func (a *app) setConfig(cfg config) error {
+	previousConfig := a.currentConfig()
 	if cfg.Addr == "" {
 		cfg.Addr = defaultAddr
 	}
@@ -312,6 +313,7 @@ func (a *app) setConfig(cfg config) error {
 	a.mu.Lock()
 	a.cfg = cfg
 	a.mu.Unlock()
+	a.textProviderRouter().reconcileConfigChange(previousConfig, cfg)
 	if a.db != nil {
 		return saveConfigToDB(a.db, cfg)
 	}

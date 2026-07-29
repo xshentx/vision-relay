@@ -101,6 +101,7 @@ func (a *app) forwardRaw(ctx context.Context, ep endpoint, method, requestURI st
 	})
 
 	router := a.textProviderRouter()
+	router.recordRequestedModel(candidate, requestURI, body)
 	candidate, allowed := router.selectCandidate(candidate)
 	if !allowed {
 		return providerCircuitOpenResponse(), nil

@@ -112,6 +112,12 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 		writeModelTestError(w, http.StatusBadGateway, invalidJSONErr, resp.StatusCode, durationMS, requestID)
 		return
 	}
+	// A successful manual model test is also a successful provider request.
+	// Restore the circuit immediately and cancel any background recovery probe
+	// that may still be running for this provider.
+	if group, ok := providerGroupForClient(profile.Client); ok {
+		a.textProviderRouter().recordSuccess(providerRouteCandidate{Group: group, ProfileID: profile.ID})
+	}
 	output := strings.TrimSpace(modelTestOutput(payload))
 	if output == "" {
 		output = "请求成功，但响应中没有可显示的文本内容。"

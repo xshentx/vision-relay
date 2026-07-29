@@ -1444,7 +1444,7 @@ func TestCompactShellKeepsNavigationVisibleWithoutPageOverflow(t *testing.T) {
 	}
 	style := strings.ReplaceAll(string(styleRaw), "\r\n", "\n")
 	for _, expected := range []string{
-		`@media (max-width: 1040px) {`,
+		`@media (max-width: 900px) {`,
 		`.app {
     grid-template-columns: minmax(0, 1fr);`,
 		`.sidebar {
@@ -1463,10 +1463,52 @@ func TestCompactShellKeepsNavigationVisibleWithoutPageOverflow(t *testing.T) {
 		}
 	}
 
-	compactGuard := strings.LastIndex(style, `@media (max-width: 1040px) {`)
+	if !strings.Contains(style, `@media (min-width: 901px) {
+  .sidebar {
+    overflow-y: auto;`) {
+		t.Fatal("desktop sidebar must remain vertically scrollable immediately above the compact breakpoint")
+	}
+
+	compactGuard := strings.LastIndex(style, `@media (max-width: 900px) {`)
 	desktopTheme := strings.LastIndex(style, `.app {
   grid-template-columns: 226px minmax(0, 1fr);`)
 	if compactGuard < desktopTheme {
 		t.Fatal("compact shell guard must follow the desktop theme overrides")
+	}
+}
+
+func TestProviderHeadingActionCannotCollapseVertically(t *testing.T) {
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := strings.ReplaceAll(string(styleRaw), "\r\n", "\n")
+	if !strings.Contains(style, `.dashboard-heading > .secondary {
+  flex: 0 0 auto;
+  white-space: nowrap;`) {
+		t.Fatal("provider heading action must retain its width and horizontal label")
+	}
+}
+
+func TestProviderCircuitHasOnlyNormalAndOpenPresentation(t *testing.T) {
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := strings.ReplaceAll(string(scriptRaw), "\r\n", "\n")
+	if !strings.Contains(script, `case "open":
+    case "half_open":
+      return {className: "is-open", label: "\u7194\u65ad"};`) {
+		t.Fatal("open and half-open provider states must both be presented as tripped")
+	}
+	if strings.Contains(script, `is-half-open`) || strings.Contains(script, `\u68c0\u6d4b\u4e2d`) {
+		t.Fatal("provider UI must not expose a separate recovery-testing state")
+	}
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(styleRaw), `.provider-circuit-badge.is-half-open`) {
+		t.Fatal("provider UI must define only normal and tripped badge styles")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -94,6 +95,60 @@ func TestProviderRouterClientErrorDoesNotTripCircuit(t *testing.T) {
 	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "primary")
 	if status.FailureCount != 0 || status.ConsecutiveFailure != 0 || status.CircuitState != providerCircuitClosed {
 		t.Fatalf("client error affected circuit: %#v", status)
+	}
+}
+
+func TestProviderCircuitOpensAfterFiveConsecutiveFailures(t *testing.T) {
+	if providerFailureThreshold != 5 {
+		t.Fatalf("provider failure threshold = %d; want 5", providerFailureThreshold)
+	}
+	router := newProviderRouter()
+	candidate := providerRouteCandidate{Group: providerGroupCodex, ProfileID: "threshold"}
+	for failure := 1; failure <= providerFailureThreshold; failure++ {
+		router.recordFailure(candidate, errors.New("upstream unavailable"))
+		router.mu.Lock()
+		state := router.providerStateLocked(candidate.Group, candidate.ProfileID)
+		circuitState := state.CircuitState
+		consecutiveFailures := state.ConsecutiveFailures
+		router.mu.Unlock()
+		wantState := providerCircuitClosed
+		if failure == providerFailureThreshold {
+			wantState = providerCircuitOpen
+		}
+		if circuitState != wantState || consecutiveFailures != failure {
+			t.Fatalf("after failure %d: state=%s consecutive_failures=%d; want state=%s", failure, circuitState, consecutiveFailures, wantState)
+		}
+	}
+}
+
+func TestProviderSuccessAlwaysResetsFailuresAndRestoresCircuit(t *testing.T) {
+	for _, failures := range []int{1, providerFailureThreshold - 1, providerFailureThreshold} {
+		t.Run(fmt.Sprintf("after_%d_failures", failures), func(t *testing.T) {
+			router := newProviderRouter()
+			now := time.Date(2026, time.July, 30, 15, 0, 0, 0, time.UTC)
+			router.now = func() time.Time { return now }
+			candidate := providerRouteCandidate{Group: providerGroupCodex, ProfileID: "recover-on-success"}
+			for failure := 0; failure < failures; failure++ {
+				router.recordFailure(candidate, errors.New("upstream unavailable"))
+			}
+
+			router.recordSuccess(candidate)
+			router.mu.Lock()
+			state := *router.providerStateLocked(candidate.Group, candidate.ProfileID)
+			router.mu.Unlock()
+			if state.CircuitState != providerCircuitClosed || state.ConsecutiveFailures != 0 {
+				t.Fatalf("successful request did not restore provider: %#v", state)
+			}
+			if !state.OpenUntil.IsZero() || state.HalfOpenInFlight || state.LastError != "" {
+				t.Fatalf("successful request left circuit metadata behind: %#v", state)
+			}
+			if !state.LastSuccessAt.Equal(now) {
+				t.Fatalf("last success time = %v; want %v", state.LastSuccessAt, now)
+			}
+			if state.FailureCount != int64(failures) {
+				t.Fatalf("cumulative failure count = %d; want %d", state.FailureCount, failures)
+			}
+		})
 	}
 }
 
@@ -191,6 +246,436 @@ func TestProviderRouterHalfOpenProbeUsesOnlyActiveProvider(t *testing.T) {
 	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "active")
 	if status.CircuitState != providerCircuitClosed || status.ConsecutiveFailure != 0 {
 		t.Fatalf("successful probe did not close circuit: %#v", status)
+	}
+}
+
+func TestProviderRecoveryProbeClaimsOnlyDueOpenCircuits(t *testing.T) {
+	cfg := providerRouterTestConfig([]textModelProfile{
+		{ID: "due", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://due.invalid", ModelMappings: []textModelMapping{{Name: "test", Model: "test"}}},
+		{ID: "waiting", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://waiting.invalid", ModelMappings: []textModelMapping{{Name: "test", Model: "test"}}},
+		{ID: "closed", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://closed.invalid", ModelMappings: []textModelMapping{{Name: "test", Model: "test"}}},
+	}, map[string]string{"codex": "due"})
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	router.mu.Lock()
+	due := router.providerStateLocked(providerGroupCodex, "due")
+	due.CircuitState = providerCircuitOpen
+	due.OpenUntil = now
+	waiting := router.providerStateLocked(providerGroupCodex, "waiting")
+	waiting.CircuitState = providerCircuitOpen
+	waiting.OpenUntil = now.Add(time.Second)
+	router.providerStateLocked(providerGroupCodex, "closed").CircuitState = providerCircuitClosed
+	router.mu.Unlock()
+
+	candidates := router.claimDueRecoveryProbes(cfg)
+	if len(candidates) != 1 || candidates[0].ProfileID != "due" || !candidates[0].halfOpen {
+		t.Fatalf("claimed recovery probes = %#v", candidates)
+	}
+	router.mu.Lock()
+	if due.CircuitState != providerCircuitHalfOpen || !due.HalfOpenInFlight {
+		t.Fatalf("due circuit was not marked as testing: %#v", due)
+	}
+	if waiting.CircuitState != providerCircuitOpen || waiting.HalfOpenInFlight {
+		t.Fatalf("not-yet-due circuit was claimed: %#v", waiting)
+	}
+	if closed := router.providerStateLocked(providerGroupCodex, "closed"); closed.CircuitState != providerCircuitClosed || closed.HalfOpenInFlight {
+		t.Fatalf("closed circuit was claimed: %#v", closed)
+	}
+	router.mu.Unlock()
+	if repeated := router.claimDueRecoveryProbes(cfg); len(repeated) != 0 {
+		t.Fatalf("in-flight recovery probe was claimed again: %#v", repeated)
+	}
+}
+
+func TestProviderSuccessCancelsRecoveryProbeAndIgnoresItsLateFailure(t *testing.T) {
+	cfg := providerRouterTestConfig([]textModelProfile{{
+		ID: "recovering", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://recovering.invalid",
+		ModelMappings: []textModelMapping{{Name: "test", Model: "test"}},
+	}}, map[string]string{"codex": "recovering"})
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	router.mu.Lock()
+	state := router.providerStateLocked(providerGroupCodex, "recovering")
+	state.CircuitState = providerCircuitOpen
+	state.ConsecutiveFailures = providerFailureThreshold
+	state.OpenUntil = now
+	router.mu.Unlock()
+
+	candidates := router.claimDueRecoveryProbes(cfg)
+	if len(candidates) != 1 {
+		t.Fatalf("recovery probe candidates = %#v", candidates)
+	}
+	probeContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !router.attachRecoveryProbe(candidates[0], cancel) {
+		t.Fatal("failed to attach claimed recovery probe")
+	}
+
+	// This represents any other successful request for the same provider.
+	now = now.Add(time.Second)
+	router.recordSuccess(providerRouteCandidate{Group: providerGroupCodex, ProfileID: "recovering"})
+	select {
+	case <-probeContext.Done():
+	default:
+		t.Fatal("successful request did not cancel the active recovery probe")
+	}
+
+	router.mu.Lock()
+	restored := *router.providerStateLocked(providerGroupCodex, "recovering")
+	router.mu.Unlock()
+	if restored.CircuitState != providerCircuitClosed || restored.ConsecutiveFailures != 0 || restored.HalfOpenInFlight || restored.RecoveryProbeCancel != nil {
+		t.Fatalf("successful request did not fully restore provider: %#v", restored)
+	}
+	if !restored.LastSuccessAt.Equal(now) {
+		t.Fatalf("last success time = %v; want %v", restored.LastSuccessAt, now)
+	}
+
+	// A transport that does not stop promptly may still return an error. The
+	// old probe generation must not reopen the circuit after the success.
+	router.recordFailure(candidates[0], errors.New("late recovery probe failure"))
+	router.releaseHalfOpenProbe(candidates[0])
+	router.mu.Lock()
+	afterLateResult := *router.providerStateLocked(providerGroupCodex, "recovering")
+	router.mu.Unlock()
+	if afterLateResult.CircuitState != providerCircuitClosed || afterLateResult.ConsecutiveFailures != 0 || afterLateResult.FailureCount != restored.FailureCount {
+		t.Fatalf("late recovery result changed restored provider: %#v", afterLateResult)
+	}
+}
+
+func TestProviderConfigChangeCancelsRecoveryProbeAndIgnoresLateResult(t *testing.T) {
+	oldConfig := providerRouterTestConfig([]textModelProfile{{
+		ID: "changing", Client: "codex", Provider: "openai", WireAPI: "responses",
+		BaseURL: "https://old.invalid", APIKey: "old-key",
+		ModelMappings: []textModelMapping{{Name: "test", Model: "test"}},
+	}}, map[string]string{"codex": "changing"})
+
+	for _, testCase := range []struct {
+		name      string
+		newConfig config
+	}{
+		{
+			name: "edited",
+			newConfig: providerRouterTestConfig([]textModelProfile{{
+				ID: "changing", Client: "codex", Provider: "openai", WireAPI: "responses",
+				BaseURL: "https://new.invalid", APIKey: "new-key",
+				ModelMappings: []textModelMapping{{Name: "test", Model: "test"}},
+			}}, map[string]string{"codex": "changing"}),
+		},
+		{
+			name:      "deleted",
+			newConfig: providerRouterTestConfig(nil, nil),
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			router := newProviderRouter()
+			now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+			router.now = func() time.Time { return now }
+			router.mu.Lock()
+			state := router.providerStateLocked(providerGroupCodex, "changing")
+			state.CircuitState = providerCircuitOpen
+			state.ConsecutiveFailures = providerFailureThreshold
+			state.FailureCount = providerFailureThreshold
+			state.OpenUntil = now
+			router.mu.Unlock()
+
+			candidates := router.claimDueRecoveryProbes(oldConfig)
+			if len(candidates) != 1 {
+				t.Fatalf("recovery probe candidates = %#v", candidates)
+			}
+			probeContext, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if !router.attachRecoveryProbe(candidates[0], cancel) {
+				t.Fatal("failed to attach claimed recovery probe")
+			}
+
+			a := &app{
+				cfg:            oldConfig,
+				providerRouter: router,
+				configPath:     filepath.Join(t.TempDir(), "config.json"),
+			}
+			if err := a.setConfig(testCase.newConfig); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-probeContext.Done():
+			case <-time.After(time.Second):
+				t.Fatal("configuration change did not cancel the stale recovery probe")
+			}
+
+			router.mu.Lock()
+			restored := *router.providerStateLocked(providerGroupCodex, "changing")
+			router.mu.Unlock()
+			if restored.CircuitState != providerCircuitClosed || restored.ConsecutiveFailures != 0 ||
+				restored.FailureCount != 0 || restored.HalfOpenInFlight || restored.RecoveryProbeCancel != nil {
+				t.Fatalf("configuration change did not reset provider runtime state: %#v", restored)
+			}
+
+			// A stale transport may ignore cancellation and complete later. Neither
+			// outcome may mutate the replacement provider's clean runtime state.
+			router.recordFailure(candidates[0], errors.New("late stale probe failure"))
+			router.recordSuccess(candidates[0])
+			router.mu.Lock()
+			afterLateResults := *router.providerStateLocked(providerGroupCodex, "changing")
+			router.mu.Unlock()
+			if afterLateResults.CircuitState != providerCircuitClosed || afterLateResults.ConsecutiveFailures != 0 ||
+				afterLateResults.FailureCount != 0 || !afterLateResults.LastSuccessAt.IsZero() {
+				t.Fatalf("late stale probe result changed replacement provider state: %#v", afterLateResults)
+			}
+		})
+	}
+}
+
+func TestProviderNameChangeKeepsRecoveryProbe(t *testing.T) {
+	oldConfig := providerRouterTestConfig([]textModelProfile{{
+		ID: "renamed", Name: "Old name", Client: "codex", Provider: "openai", WireAPI: "responses",
+		BaseURL: "https://same.invalid", ModelMappings: []textModelMapping{{Name: "test", Model: "test"}},
+	}}, map[string]string{"codex": "renamed"})
+	newConfig := oldConfig
+	newConfig.TextModelProfiles = append([]textModelProfile(nil), oldConfig.TextModelProfiles...)
+	newConfig.TextModelProfiles[0].Name = "New name"
+
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	router.mu.Lock()
+	state := router.providerStateLocked(providerGroupCodex, "renamed")
+	state.CircuitState = providerCircuitOpen
+	state.ConsecutiveFailures = providerFailureThreshold
+	state.OpenUntil = now
+	router.mu.Unlock()
+	candidate := router.claimDueRecoveryProbes(oldConfig)[0]
+	probeContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !router.attachRecoveryProbe(candidate, cancel) {
+		t.Fatal("failed to attach claimed recovery probe")
+	}
+
+	router.reconcileConfigChange(oldConfig, newConfig)
+	select {
+	case <-probeContext.Done():
+		t.Fatal("display-name-only change canceled an otherwise valid recovery probe")
+	default:
+	}
+	router.mu.Lock()
+	unchanged := *router.providerStateLocked(providerGroupCodex, "renamed")
+	router.mu.Unlock()
+	if unchanged.CircuitState != providerCircuitHalfOpen || !unchanged.HalfOpenInFlight || unchanged.RecoveryProbeCancel == nil {
+		t.Fatalf("display-name-only change reset recovery state: %#v", unchanged)
+	}
+}
+
+func TestProviderWithoutModelMappingsRecoversUsingLastRequestedModel(t *testing.T) {
+	var healthy atomic.Bool
+	var probeCalls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !healthy.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		probeCalls.Add(1)
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode probe body: %v", err)
+		}
+		if payload["model"] != "dynamic-model" || payload["input"] != "hi" {
+			t.Errorf("probe payload = %#v", payload)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"output_text": "ok"})
+	}))
+	defer upstream.Close()
+
+	cfg := providerRouterTestConfig([]textModelProfile{{
+		ID: "dynamic", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: upstream.URL,
+	}}, map[string]string{"codex": "dynamic"})
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	a := &app{cfg: cfg, httpClient: http.DefaultClient, providerRouter: router}
+
+	for attempt := 0; attempt < providerFailureThreshold; attempt++ {
+		ctx := withProviderRouteContext(context.Background(), providerGroupCodex)
+		resp, err := a.forwardRaw(ctx, a.textEndpoint(textConfigForClient(cfg, "codex")), http.MethodPost,
+			"/v1/responses", []byte(`{"model":"dynamic-model"}`), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable {
+			t.Fatalf("failure %d returned %d", attempt+1, resp.StatusCode)
+		}
+	}
+	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "dynamic")
+	if status.CircuitState != providerCircuitOpen || status.ConsecutiveFailure != providerFailureThreshold {
+		t.Fatalf("provider did not trip after failures: %#v", status)
+	}
+
+	healthy.Store(true)
+	now = now.Add(providerCircuitCooldown)
+	candidates := router.claimDueRecoveryProbes(cfg)
+	if len(candidates) != 1 || candidates[0].recoveryProbeModel != "dynamic-model" {
+		t.Fatalf("dynamic recovery candidates = %#v", candidates)
+	}
+	a.probeProviderRecovery(context.Background(), candidates[0])
+
+	status = findProviderStatus(t, a.providerRouterStatus(), "codex", "dynamic")
+	if probeCalls.Load() != 1 || status.CircuitState != providerCircuitClosed || status.ConsecutiveFailure != 0 {
+		t.Fatalf("dynamic-model recovery did not restore provider: calls=%d status=%#v", probeCalls.Load(), status)
+	}
+}
+
+func TestLegacyProviderGroupRecoveryProbeRestoresCircuit(t *testing.T) {
+	var calls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("legacy probe path = %q", r.URL.Path)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"output_text": "ok"})
+	}))
+	defer upstream.Close()
+
+	cfg := providerRouterTestConfig([]textModelProfile{{
+		ID: "global", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: upstream.URL,
+		ModelMappings: []textModelMapping{{Name: "legacy-model", Model: "legacy-model"}},
+	}}, map[string]string{"codex": "global"})
+	cfg.LegacyTextRouting = true
+	cfg.legacyTextRouting = true
+
+	candidate, configured := providerRouteCandidateForGroup(cfg, providerGroupOpenCode, (&app{}).textEndpoint(cfg))
+	if !configured || candidate.ProfileID != "legacy-opencode" {
+		t.Fatalf("legacy route candidate = %#v, configured=%t", candidate, configured)
+	}
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	router.mu.Lock()
+	state := router.providerStateLocked(providerGroupOpenCode, candidate.ProfileID)
+	state.CircuitState = providerCircuitOpen
+	state.ConsecutiveFailures = providerFailureThreshold
+	state.OpenUntil = now
+	router.mu.Unlock()
+	a := &app{cfg: cfg, httpClient: http.DefaultClient, providerRouter: router}
+
+	candidates := router.claimDueRecoveryProbes(cfg)
+	if len(candidates) != 1 || candidates[0].ProfileID != candidate.ProfileID || candidates[0].recoveryProbeModel != "legacy-model" {
+		t.Fatalf("legacy recovery candidates = %#v", candidates)
+	}
+	a.probeProviderRecovery(context.Background(), candidates[0])
+
+	router.mu.Lock()
+	restored := *router.providerStateLocked(providerGroupOpenCode, candidate.ProfileID)
+	router.mu.Unlock()
+	if calls.Load() != 1 || restored.CircuitState != providerCircuitClosed || restored.ConsecutiveFailures != 0 {
+		t.Fatalf("legacy recovery did not restore provider: calls=%d state=%#v", calls.Load(), restored)
+	}
+}
+
+func TestProviderWithoutAnyKnownModelWaitsForRoutedRequest(t *testing.T) {
+	cfg := providerRouterTestConfig([]textModelProfile{{
+		ID: "unknown-model", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://unknown.invalid",
+	}}, map[string]string{"codex": "unknown-model"})
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	router.mu.Lock()
+	state := router.providerStateLocked(providerGroupCodex, "unknown-model")
+	state.CircuitState = providerCircuitOpen
+	state.ConsecutiveFailures = providerFailureThreshold
+	state.FailureCount = providerFailureThreshold
+	state.OpenUntil = now
+	router.mu.Unlock()
+
+	if candidates := router.claimDueRecoveryProbes(cfg); len(candidates) != 0 {
+		t.Fatalf("provider without a known model was probed: %#v", candidates)
+	}
+	router.mu.Lock()
+	unchanged := *router.providerStateLocked(providerGroupCodex, "unknown-model")
+	router.mu.Unlock()
+	if unchanged.CircuitState != providerCircuitOpen || unchanged.HalfOpenInFlight ||
+		unchanged.ConsecutiveFailures != providerFailureThreshold || unchanged.FailureCount != providerFailureThreshold {
+		t.Fatalf("local probe construction failure changed provider state: %#v", unchanged)
+	}
+}
+
+func TestProviderRecoveryProbeClosesCircuitAfterUpstreamRecovers(t *testing.T) {
+	var calls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("probe path = %q", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode probe body: %v", err)
+		}
+		if payload["model"] != "recovery-model" || payload["input"] != "hi" {
+			t.Errorf("probe payload = %#v", payload)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"output_text": "ok"})
+	}))
+	defer upstream.Close()
+
+	cfg := providerRouterTestConfig([]textModelProfile{{
+		ID: "recovering", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: upstream.URL,
+		ModelMappings: []textModelMapping{{Name: "recovery", Model: "recovery-model"}},
+	}}, map[string]string{"codex": "recovering"})
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	router.mu.Lock()
+	state := router.providerStateLocked(providerGroupCodex, "recovering")
+	state.CircuitState = providerCircuitOpen
+	state.ConsecutiveFailures = providerFailureThreshold
+	state.OpenUntil = now
+	router.mu.Unlock()
+	a := &app{cfg: cfg, httpClient: http.DefaultClient, providerRouter: router}
+
+	candidates := router.claimDueRecoveryProbes(cfg)
+	if len(candidates) != 1 {
+		t.Fatalf("recovery probe candidates = %#v", candidates)
+	}
+	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "recovering")
+	if status.CircuitState != providerCircuitHalfOpen {
+		t.Fatalf("claimed probe status = %#v", status)
+	}
+	a.probeProviderRecovery(context.Background(), candidates[0])
+
+	status = findProviderStatus(t, a.providerRouterStatus(), "codex", "recovering")
+	if calls.Load() != 1 || status.CircuitState != providerCircuitClosed || status.ConsecutiveFailure != 0 || status.LastSuccessAt == nil {
+		t.Fatalf("successful recovery probe did not restore provider: calls=%d status=%#v", calls.Load(), status)
+	}
+}
+
+func TestProviderRecoveryProbeFailureSchedulesNextInterval(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "still down", http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+	cfg := providerRouterTestConfig([]textModelProfile{{
+		ID: "down", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: upstream.URL,
+		ModelMappings: []textModelMapping{{Name: "test", Model: "test"}},
+	}}, map[string]string{"codex": "down"})
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 30, 12, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	router.mu.Lock()
+	state := router.providerStateLocked(providerGroupCodex, "down")
+	state.CircuitState = providerCircuitOpen
+	state.ConsecutiveFailures = providerFailureThreshold
+	state.OpenUntil = now
+	router.mu.Unlock()
+	a := &app{cfg: cfg, httpClient: http.DefaultClient, providerRouter: router}
+
+	candidate := router.claimDueRecoveryProbes(cfg)[0]
+	a.probeProviderRecovery(context.Background(), candidate)
+	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "down")
+	if status.CircuitState != providerCircuitOpen || status.OpenUntil == nil || !status.OpenUntil.Equal(now.Add(providerCircuitCooldown)) {
+		t.Fatalf("failed recovery probe did not schedule next interval: %#v", status)
+	}
+	if repeated := router.claimDueRecoveryProbes(cfg); len(repeated) != 0 {
+		t.Fatalf("failed provider was probed again before cooldown: %#v", repeated)
 	}
 }
 
@@ -545,16 +1030,25 @@ func TestProviderGroupsPreserveVisionAugmentationByRequestedModelCapability(t *t
 		name        string
 		client      string
 		profileID   string
+		provider    string
 		wireAPI     string
 		path        string
 		requestBody string
 	}{
 		{
-			name: "codex responses", client: textProfileClientCodex, profileID: "codex-provider", wireAPI: "responses", path: "/v1/responses",
+			name: "codex responses", client: textProfileClientCodex, profileID: "codex-provider", provider: "openai", wireAPI: "responses", path: "/v1/responses",
 			requestBody: `{"model":"requested-model","input":[{"role":"user","content":[{"type":"input_text","text":"answer the request"},{"type":"input_image","image_url":"data:image/png;base64,aGVsbG8="}]}]}`,
 		},
 		{
-			name: "opencode chat", client: textProfileClientOpenCode, profileID: "opencode-provider", wireAPI: "chat_completions", path: "/v1/chat/completions",
+			name: "claude messages", client: textProfileClientClaude, profileID: "claude-provider", provider: "anthropic", path: "/v1/messages",
+			requestBody: `{"model":"requested-model","max_tokens":64,"messages":[{"role":"user","content":[{"type":"text","text":"answer the request"},{"type":"image","source":{"type":"url","url":"data:image/png;base64,aGVsbG8="}}]}]}`,
+		},
+		{
+			name: "opencode chat", client: textProfileClientOpenCode, profileID: "opencode-provider", provider: "openai", wireAPI: "chat_completions", path: "/v1/chat/completions",
+			requestBody: `{"model":"requested-model","messages":[{"role":"user","content":[{"type":"text","text":"answer the request"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}]}`,
+		},
+		{
+			name: "openclaw chat", client: textProfileClientOpenClaw, profileID: "openclaw-provider", provider: "openai", wireAPI: "chat_completions", path: "/openclaw/v1/chat/completions",
 			requestBody: `{"model":"requested-model","messages":[{"role":"user","content":[{"type":"text","text":"answer the request"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}]}`,
 		},
 	}
@@ -615,7 +1109,7 @@ func TestProviderGroupsPreserveVisionAugmentationByRequestedModelCapability(t *t
 
 				visionOn := true
 				cfg := providerRouterTestConfig([]textModelProfile{{
-					ID: protocolCase.profileID, Client: protocolCase.client, Provider: "openai", WireAPI: protocolCase.wireAPI,
+					ID: protocolCase.profileID, Client: protocolCase.client, Provider: protocolCase.provider, WireAPI: protocolCase.wireAPI,
 					BaseURL:       textUpstream.URL,
 					ModelMappings: []textModelMapping{{Name: capabilityCase.mappingName, Model: "upstream-model", SupportsImages: capabilityCase.supportsImages}},
 				}}, map[string]string{protocolCase.client: protocolCase.profileID})

@@ -191,10 +191,14 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	go serve("management UI", managementServer, managementListener)
 	go serve("relay API", relayServer, relayListener)
 
+	probeContext, stopProviderRecoveryProbes := context.WithCancel(context.Background())
+	go runProviderRecoveryProbes(probeContext, a)
+
 	// Client routes must always point at the relay API, never at the management UI.
 	go runStartupMaintenance(a, cfg, relayURL)
 
 	shutdownServers := func() {
+		stopProviderRecoveryProbes()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = managementServer.Shutdown(ctx)
