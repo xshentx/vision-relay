@@ -89,35 +89,43 @@ func isStaticRequest(r *http.Request) bool {
 }
 
 func isOpenAIChatPath(path string) bool {
+	path = canonicalRelayPath(path)
 	return path == "/v1/chat/completions" || path == "/chat/completions"
 }
 
 func isOpenAIResponsesPath(path string) bool {
+	path = canonicalRelayPath(path)
 	return path == "/v1/responses" || path == "/responses"
 }
 
 func isOpenAIModelsPath(path string) bool {
+	path = canonicalRelayPath(path)
 	return path == "/v1/models" || path == "/models"
 }
 
 func isAnthropicMessagesPath(path string) bool {
+	path = canonicalRelayPath(path)
 	return path == "/v1/messages" || path == "/messages"
 }
 
 func isAnthropicCountTokensPath(path string) bool {
+	path = canonicalRelayPath(path)
 	return path == "/v1/messages/count_tokens" || path == "/messages/count_tokens"
 }
 
 func isGeminiGeneratePath(path string) bool {
+	path = canonicalRelayPath(path)
 	return (strings.HasPrefix(path, "/v1beta/models/") || strings.HasPrefix(path, "/v1/models/")) &&
 		(strings.HasSuffix(path, ":generateContent") || strings.HasSuffix(path, ":streamGenerateContent"))
 }
 
 func isOllamaChatPath(path string) bool {
+	path = canonicalRelayPath(path)
 	return path == "/api/chat"
 }
 
 func isOllamaGeneratePath(path string) bool {
+	path = canonicalRelayPath(path)
 	return path == "/api/generate"
 }
 
@@ -126,6 +134,9 @@ func textProfileClientForRequest(r *http.Request) string {
 		return ""
 	}
 	path := r.URL.Path
+	if path == "/openclaw" || strings.HasPrefix(path, "/openclaw/") {
+		return textProfileClientOpenClaw
+	}
 	switch {
 	case isOpenAIResponsesPath(path):
 		return textProfileClientCodex
@@ -166,6 +177,7 @@ func canonicalRequestURI(requestURI string) string {
 		path = requestURI[:idx]
 		query = requestURI[idx:]
 	}
+	path = canonicalRelayPath(path)
 	switch path {
 	case "/chat/completions":
 		path = "/v1/chat/completions"
@@ -179,4 +191,14 @@ func canonicalRequestURI(requestURI string) string {
 		path = "/v1/models"
 	}
 	return path + query
+}
+
+func canonicalRelayPath(path string) string {
+	if path == "/openclaw" {
+		return "/"
+	}
+	if strings.HasPrefix(path, "/openclaw/") {
+		return strings.TrimPrefix(path, "/openclaw")
+	}
+	return path
 }

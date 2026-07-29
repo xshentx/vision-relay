@@ -180,4 +180,57 @@ func TestHandleModelTestReportsUpstreamError(t *testing.T) {
 	if !strings.Contains(payload.Error.Message, "rate limited") {
 		t.Errorf("error = %q", payload.Error.Message)
 	}
+	logs := a.currentLogs()
+	if len(logs) != 1 || logs[0].Protocol != "\u6a21\u578b\u6d4b\u8bd5" || logs[0].Status != http.StatusTooManyRequests || !strings.Contains(logs[0].Error, "rate limited") {
+		t.Fatalf("failed model test was not logged correctly: %#v", logs)
+	}
+}
+
+func TestHandleModelTestLogsUsageAndAddsItToDashboard(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"model":   "gpt-test",
+			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "ok"}}},
+			"usage":   map[string]any{"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10},
+		})
+	}))
+	defer upstream.Close()
+
+	a := &app{
+		cfg: config{TextModelProfiles: []textModelProfile{{
+			ID: "profile-1", Name: "Test provider", Provider: "openai", BaseURL: upstream.URL,
+			ModelMappings: []textModelMapping{{Name: "gpt-test", Model: "gpt-test"}},
+		}}},
+		httpClient: upstream.Client(),
+	}
+	recorder := httptest.NewRecorder()
+	a.handleModelTest(recorder, httptest.NewRequest(http.MethodPost, "/api/model-test", strings.NewReader(`{"profile_id":"profile-1","model":"gpt-test","prompt":"hi"}`)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	logs := a.currentLogs()
+	if len(logs) != 1 {
+		t.Fatalf("model test logs = %d, want 1", len(logs))
+	}
+	log := logs[0]
+	if log.Protocol != "\u6a21\u578b\u6d4b\u8bd5" || log.Path != "/api/model-test" || log.UpstreamName != "Test provider" || log.Model != "gpt-test" {
+		t.Fatalf("unexpected model test log identity: %#v", log)
+	}
+	if log.InputTokens != 7 || log.OutputTokens != 3 || log.TotalTokens != 10 {
+		t.Fatalf("unexpected model test usage: %#v", log)
+	}
+
+	dashboardRecorder := httptest.NewRecorder()
+	a.handleDashboard(dashboardRecorder, httptest.NewRequest(http.MethodGet, "/api/dashboard?period=all", nil))
+	if dashboardRecorder.Code != http.StatusOK {
+		t.Fatalf("dashboard status = %d, body = %s", dashboardRecorder.Code, dashboardRecorder.Body.String())
+	}
+	var dashboard dashboardResponse
+	if err := json.NewDecoder(dashboardRecorder.Body).Decode(&dashboard); err != nil {
+		t.Fatal(err)
+	}
+	if dashboard.Summary.Requests != 1 || dashboard.Summary.PeriodTokens != 10 || dashboard.Summary.LifetimeTokens != 10 {
+		t.Fatalf("model test usage was not included in the dashboard: %#v", dashboard.Summary)
+	}
 }

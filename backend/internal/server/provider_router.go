@@ -23,9 +23,10 @@ const (
 	providerGroupCodex    providerGroup = providerGroup(textProfileClientCodex)
 	providerGroupClaude   providerGroup = providerGroup(textProfileClientClaude)
 	providerGroupOpenCode providerGroup = providerGroup(textProfileClientOpenCode)
+	providerGroupOpenClaw providerGroup = providerGroup(textProfileClientOpenClaw)
 )
 
-var providerGroups = []providerGroup{providerGroupCodex, providerGroupClaude, providerGroupOpenCode}
+var providerGroups = []providerGroup{providerGroupCodex, providerGroupClaude, providerGroupOpenCode, providerGroupOpenClaw}
 
 type providerRouteContextKey struct{}
 type providerRouteTraceContextKey struct{}
@@ -126,7 +127,7 @@ func providerGroupForClient(client string) (providerGroup, bool) {
 
 func (g providerGroup) valid() bool {
 	switch g {
-	case providerGroupCodex, providerGroupClaude, providerGroupOpenCode:
+	case providerGroupCodex, providerGroupClaude, providerGroupOpenCode, providerGroupOpenClaw:
 		return true
 	default:
 		return false

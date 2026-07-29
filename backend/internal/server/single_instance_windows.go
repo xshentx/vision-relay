@@ -117,6 +117,11 @@ func signalDesktopInstance(activationName string) error {
 			if err := windows.SetEvent(event); err != nil {
 				return fmt.Errorf("signal existing instance: %w", err)
 			}
+			// The newly launched process owns the user activation permission, so it
+			// has a better chance of passing Windows foreground-lock restrictions
+			// than the already-running background process. The event remains
+			// necessary when the primary currently has no window to focus.
+			focusClientWindow()
 			return nil
 		}
 		lastErr = openErr

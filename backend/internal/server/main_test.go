@@ -678,6 +678,11 @@ func TestLocalAPIRoutesEachProtocolThroughItsSelectedClientProfile(t *testing.T)
 		"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "ok"}}},
 	})
 	defer openCodeUpstream.Close()
+	openClawUpstream := newUpstream("openclaw", map[string]any{
+		"id": "openclaw-client-route", "object": "chat.completion", "model": "openclaw-upstream",
+		"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "ok"}}},
+	})
+	defer openClawUpstream.Close()
 
 	localAPIEnabled := true
 	cfg := normalizeSeparateModelProfiles(config{
@@ -687,12 +692,14 @@ func TestLocalAPIRoutesEachProtocolThroughItsSelectedClientProfile(t *testing.T)
 			textProfileClientCodex:    "codex-selected",
 			textProfileClientClaude:   "claude-selected",
 			textProfileClientOpenCode: "opencode-selected",
+			textProfileClientOpenClaw: "openclaw-selected",
 		},
 		TextModelProfiles: []textModelProfile{
 			{ID: "legacy-global", Name: "Legacy global", Client: textProfileClientOpenCode, Provider: "openai", BaseURL: "http://127.0.0.1:1", ModelMappings: []textModelMapping{{Name: "client-alias", Model: "wrong-global"}}},
 			{ID: "codex-selected", Name: "Codex selected", Client: textProfileClientCodex, Provider: "openai", WireAPI: "responses", BaseURL: codexUpstream.URL, ModelMappings: []textModelMapping{{Name: "client-alias", Model: "codex-upstream"}}},
 			{ID: "claude-selected", Name: "Claude selected", Client: textProfileClientClaude, Provider: "anthropic", BaseURL: claudeUpstream.URL, ModelMappings: []textModelMapping{{Name: "client-alias", Model: "claude-upstream"}}},
 			{ID: "opencode-selected", Name: "OpenCode selected", Client: textProfileClientOpenCode, Provider: "openai", BaseURL: openCodeUpstream.URL, ModelMappings: []textModelMapping{{Name: "client-alias", Model: "opencode-upstream"}}},
+			{ID: "openclaw-selected", Name: "OpenClaw selected", Client: textProfileClientOpenClaw, Provider: "openai", BaseURL: openClawUpstream.URL, ModelMappings: []textModelMapping{{Name: "openclaw-alias", Model: "openclaw-upstream"}}},
 		},
 	})
 	a := &app{cfg: cfg, httpClient: http.DefaultClient}
@@ -708,6 +715,7 @@ func TestLocalAPIRoutesEachProtocolThroughItsSelectedClientProfile(t *testing.T)
 		{name: "Codex Responses", path: "/v1/responses", body: `{"model":"client-alias","input":"hello"}`, upstream: "codex", wantPath: "/v1/responses", wantModel: "codex-upstream"},
 		{name: "Claude Messages", path: "/v1/messages", body: `{"model":"client-alias","max_tokens":32,"messages":[{"role":"user","content":"hello"}]}`, upstream: "claude", wantPath: "/v1/messages", wantModel: "claude-upstream"},
 		{name: "OpenCode Chat", path: "/v1/chat/completions", body: `{"model":"client-alias","messages":[{"role":"user","content":"hello"}]}`, upstream: "opencode", wantPath: "/v1/chat/completions", wantModel: "opencode-upstream"},
+		{name: "OpenClaw Chat", path: "/openclaw/v1/chat/completions", body: `{"model":"openclaw-alias","messages":[{"role":"user","content":"hello"}]}`, upstream: "openclaw", wantPath: "/v1/chat/completions", wantModel: "openclaw-upstream"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -723,11 +731,27 @@ func TestLocalAPIRoutesEachProtocolThroughItsSelectedClientProfile(t *testing.T)
 			}
 		})
 	}
-	if len(calls) != 3 {
+	modelsRecorder := httptest.NewRecorder()
+	modelsRequest := httptest.NewRequest(http.MethodGet, "/openclaw/v1/models", nil)
+	modelsRequest = modelsRequest.WithContext(withProviderRouteContext(modelsRequest.Context(), providerGroupOpenClaw))
+	a.handleOpenAIModels(modelsRecorder, modelsRequest)
+	if modelsRecorder.Code != http.StatusOK {
+		t.Fatalf("OpenClaw models status = %d: %s", modelsRecorder.Code, modelsRecorder.Body.String())
+	}
+	var modelsPayload map[string]any
+	if err := json.NewDecoder(modelsRecorder.Body).Decode(&modelsPayload); err != nil {
+		t.Fatal(err)
+	}
+	modelItems, _ := modelsPayload["data"].([]any)
+	if len(modelItems) != 1 || firstString(modelItems[0].(map[string]any)["id"]) != "openclaw-alias" {
+		t.Fatalf("OpenClaw model list used another supplier group: %#v", modelsPayload)
+	}
+
+	if len(calls) != 4 {
 		t.Fatalf("requests reached unexpected upstreams: %#v", calls)
 	}
 	logs := a.currentLogs()
-	if len(logs) != 3 || logs[0].UpstreamName != "OpenCode selected" || logs[1].UpstreamName != "Claude selected" || logs[2].UpstreamName != "Codex selected" {
+	if len(logs) != 4 || logs[0].UpstreamName != "OpenClaw selected" || logs[1].UpstreamName != "OpenCode selected" || logs[2].UpstreamName != "Claude selected" || logs[3].UpstreamName != "Codex selected" {
 		t.Fatalf("request logs did not use the selected client profiles: %#v", logs)
 	}
 }
@@ -1093,8 +1117,11 @@ func TestSupportedClientInterfacePaths(t *testing.T) {
 	if !isOpenAIResponsesPath("/v1/responses") || !isOpenAIResponsesPath("/responses") {
 		t.Fatal("responses paths should be supported")
 	}
-	if !isOpenAIChatPath("/v1/chat/completions") || !isOpenAIChatPath("/chat/completions") {
+	if !isOpenAIChatPath("/v1/chat/completions") || !isOpenAIChatPath("/chat/completions") || !isOpenAIChatPath("/openclaw/v1/chat/completions") {
 		t.Fatal("chat completions paths should be supported")
+	}
+	if got := canonicalRequestURI("/openclaw/v1/chat/completions?trace=1"); got != "/v1/chat/completions?trace=1" {
+		t.Fatalf("OpenClaw relay path was not removed before forwarding: %q", got)
 	}
 	if !isOpenAIModelsPath("/v1/models") || !isOpenAIModelsPath("/models") {
 		t.Fatal("models paths should be supported")

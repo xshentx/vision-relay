@@ -865,7 +865,7 @@ func (a *app) handleRawProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.currentConfig()
-	resp, err := a.forwardRaw(r.Context(), a.textEndpoint(cfg), r.Method, r.URL.RequestURI(), body, r.Header)
+	resp, err := a.forwardRaw(r.Context(), a.textEndpoint(cfg), r.Method, canonicalRequestURI(r.URL.RequestURI()), body, r.Header)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

@@ -135,6 +135,7 @@ const homeRelayState = document.querySelector("#homeRelayState");
 const homeCodexProviders = document.querySelector("#homeCodexProviders");
 const homeClaudeProviders = document.querySelector("#homeClaudeProviders");
 const homeOpenCodeProviders = document.querySelector("#homeOpenCodeProviders");
+const homeOpenClawProviders = document.querySelector("#homeOpenClawProviders");
 const homeVisionProviders = document.querySelector("#homeVisionProviders");
 const homeTextProfile = document.querySelector("#homeTextProfile");
 const homeVisionProfile = document.querySelector("#homeVisionProfile");
@@ -183,12 +184,13 @@ const breakArmorTemplateList = document.querySelector("#breakArmorTemplateList")
 const textProfileClientGroups = [
   {id: "codex", label: "Codex", routeClient: "codex"},
   {id: "claude", label: "Claude", routeClient: "claude-code"},
-  {id: "opencode", label: "OpenCode", routeClient: "opencode"}
+  {id: "opencode", label: "OpenCode", routeClient: "opencode"},
+  {id: "openclaw", label: "OpenClaw", routeClient: "openclaw"}
 ];
 
 let textProfiles = [];
 let activeTextProfileId = "";
-let activeTextProfileByClient = {codex: "", claude: "", opencode: ""};
+let activeTextProfileByClient = {codex: "", claude: "", opencode: "", openclaw: ""};
 let legacyTextRouting = false;
 let activeProviderClientTab = "codex";
 let providerCircuitStatuses = new Map();
@@ -1886,14 +1888,14 @@ const clientConfigureActions = [
   {button: configureOpenCode, client: "opencode", profileGroup: "opencode", name: "OpenCode"},
   {button: configureCodex, client: "codex", profileGroup: "codex", name: "Codex"},
   {button: configureClaudeCode, client: "claude-code", profileGroup: "claude", name: "Claude"},
-  // OpenClaw speaks the OpenAI-compatible route and follows OpenCode's supplier.
-  {button: configureOpenClaw, client: "openclaw", profileGroup: "opencode", name: "OpenClaw"}
+  {button: configureOpenClaw, client: "openclaw", profileGroup: "openclaw", name: "OpenClaw"}
 ];
 
 clientConfigureActions.forEach(({button, client, profileGroup, name}) => {
   button?.addEventListener("click", () => {
     configureClient({button, client, profileGroup, name}).catch((err) => {
       console.error(err);
+      setStatus(`${name} 配置失败`);
       showToast(`配置 ${name} 失败：${err.message || err}`, "error");
     });
   });
@@ -1918,51 +1920,111 @@ restoreCodex?.addEventListener("click", () => {
 });
 
 async function configureClient({button, client, profileGroup, name}) {
-  if (button) button.disabled = true;
+  let waitingStatusTimer = 0;
+  setClientConfigureLoading(button, true);
+  setStatus(`${name} 正在写入客户端配置…`);
   try {
     const profile = profileGroup ? textProfileForClient(profileGroup) : null;
     if (profileGroup && !profile) {
       throw new Error(`请先在 ${name} 对应分组选择模型供应商`);
     }
+    waitingStatusTimer = window.setTimeout(() => {
+      setStatus(`${name} 配置请求已提交，等待客户端启动或重启…`);
+    }, 350);
     const res = await fetch("/api/client/configure", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({client, ...(profile ? {profile_id: profile.id} : {})})
     });
+    window.clearTimeout(waitingStatusTimer);
+    waitingStatusTimer = 0;
     if (!res.ok) throw new Error(await readErrorMessage(res));
     const payload = await res.json();
-    const programResults = Array.isArray(payload?.programs) ? payload.programs : [];
-    const programRestarted = programResults.some((program) => program?.restarted === true);
-    const programStarted = programResults.some((program) => program?.started === true);
-    const programRestartRequired = programResults.some((program) => program?.restart_required === true);
-    const programWasRunning = programResults.some((program) => program?.was_running === true);
-    const warnings = programResults.map((program) => program?.program_warning).filter(Boolean);
-    if (programResults.length === 0 && payload?.program_warning) warnings.push(payload.program_warning);
+    const result = clientConfigurationResult(payload);
     clientRouteEnabled[client] = payload?.route_enabled !== false;
+    setStatus(`${name} 配置完成，正在确认客户端状态…`);
     await loadConfig();
-    const configuredPaths = [...new Set(Object.values(payload?.config_paths || {}).filter(Boolean))];
-    const path = configuredPaths.length
-      ? `：${configuredPaths.join("、")}`
-      : (payload?.path ? `：${payload.path}` : "");
-    let behaviorMessage = "配置已写入";
-    if (programRestarted || payload?.restarted === true) {
-      behaviorMessage = "客户端已自动重启";
-    } else if (programStarted || (payload?.started === true && payload?.was_running !== true)) {
-      behaviorMessage = "客户端已自动启动";
-    } else if (programRestartRequired || (payload?.was_running === true && payload?.restart_required === true)) {
-      behaviorMessage = "请手动重启客户端程序";
-    } else if (payload?.was_running !== true && payload?.started !== true) {
-      behaviorMessage = "客户端当前未运行，未自动启动";
-    }
-    const warning = warnings.length ? `；${warnings.join("；")}` : "";
-    const routeMessage = payload?.direct_upstream
-      ? `已直连 ${payload.provider || "当前供应商"}`
-      : "已接入本地 API";
-    showToast(`已一键配置 ${name}${path}；${routeMessage}；${behaviorMessage}${warning}`, warning ? "error" : "success");
-    setStatus(`${name} 已配置；${behaviorMessage}`);
+    showToast(`已一键配置 ${name}${result.path}；${result.routeMessage}；${result.behaviorMessage}${result.warning}`, result.warning ? "error" : "success");
+    setStatus(clientConfigurationStatus(name, result));
   } finally {
-    if (button) button.disabled = false;
+    window.clearTimeout(waitingStatusTimer);
+    setClientConfigureLoading(button, false);
   }
+}
+
+function setClientConfigureLoading(button, loading) {
+  if (!button) return;
+  if (loading) {
+    button.dataset.idleLabel = button.textContent.trim();
+    button.disabled = true;
+    button.classList.add("is-loading");
+    button.setAttribute("aria-busy", "true");
+    button.textContent = "配置中";
+    return;
+  }
+  button.disabled = false;
+  button.classList.remove("is-loading");
+  button.removeAttribute("aria-busy");
+  button.textContent = button.dataset.idleLabel || "一键配置";
+  delete button.dataset.idleLabel;
+}
+
+function clientConfigurationResult(payload) {
+  const programResults = Array.isArray(payload?.programs) ? payload.programs : [];
+  const programRestarted = programResults.some((program) => program?.restarted === true) || payload?.restarted === true;
+  const programStarted = programResults.some((program) => program?.started === true && program?.restarted !== true) || (payload?.started === true && payload?.was_running !== true && payload?.restarted !== true);
+  const programRestartRequired = programResults.some((program) => program?.restart_required === true) || (payload?.was_running === true && payload?.restart_required === true);
+  const programNames = (predicate) => [...new Set(programResults
+    .filter(predicate)
+    .map((program) => String(program?.name || "").trim())
+    .filter(Boolean))];
+  const restartedPrograms = programNames((program) => program?.restarted === true);
+  const startedPrograms = programNames((program) => program?.started === true && program?.restarted !== true);
+  const restartRequiredPrograms = programNames((program) => program?.restart_required === true);
+  const warnings = programResults.map((program) => {
+    const warning = String(program?.program_warning || "").trim();
+    if (!warning) return "";
+    const programName = String(program?.name || "").trim();
+    return programName ? `${programName}：${warning}` : warning;
+  }).filter(Boolean);
+  if (programResults.length === 0 && payload?.program_warning) warnings.push(payload.program_warning);
+  const configuredPaths = [...new Set(Object.values(payload?.config_paths || {}).filter(Boolean))];
+  const path = configuredPaths.length
+    ? `：${configuredPaths.join("、")}`
+    : (payload?.path ? `：${payload.path}` : "");
+  let behaviorMessage = "配置已写入";
+  if (programRestartRequired) {
+    const completedActions = [];
+    if (programRestarted) completedActions.push(`${restartedPrograms.join("、") || "部分客户端"}已自动重启`);
+    if (programStarted) completedActions.push(`${startedPrograms.join("、") || "部分客户端"}已自动启动`);
+    const pendingTarget = restartRequiredPrograms.join("、") || "客户端";
+    behaviorMessage = `${completedActions.length ? `${completedActions.join("；")}；` : ""}${pendingTarget}等待手动重启`;
+  } else if (programRestarted) {
+    behaviorMessage = `${restartedPrograms.join("、") || "客户端"}已自动重启`;
+  } else if (programStarted) {
+    behaviorMessage = `${startedPrograms.join("、") || "客户端"}已自动启动`;
+  } else if (payload?.was_running !== true && payload?.started !== true) {
+    behaviorMessage = "客户端当前未运行，未自动启动";
+  }
+  return {
+    path,
+    behaviorMessage,
+    programRestarted,
+    programStarted,
+    programRestartRequired,
+    warning: warnings.length ? `；${warnings.join("；")}` : "",
+    routeMessage: payload?.direct_upstream
+      ? `已直连 ${payload.provider || "当前供应商"}`
+      : "已接入本地 API"
+  };
+}
+
+function clientConfigurationStatus(name, result) {
+  if (result.programRestartRequired) return `${name} 配置完成，等待客户端重启`;
+  if (result.warning) return `${name} 配置完成，但客户端操作存在警告`;
+  if (result.programRestarted) return `${name} 配置完成，客户端已重启`;
+  if (result.programStarted) return `${name} 配置完成，客户端已启动`;
+  return `${name} 配置完成；${result.behaviorMessage}`;
 }
 
 async function updateClientRouteSetting(client, name) {
@@ -2009,8 +2071,6 @@ async function persistTextProfileChanges(successMessage, affectedGroups) {
   legacyTextRouting = false;
   await persistConfig("");
   const needsDirectRouteRefresh = !programSettings.localAPIEnabled && affectedGroups.some((groupId) => {
-    if (groupId === "openclaw") return clientRouteEnabled.openclaw === true;
-    if (groupId === "opencode") return clientRouteEnabled.opencode === true || clientRouteEnabled.openclaw === true;
     const group = textProfileClientGroups.find((item) => item.id === groupId);
     return group && clientRouteEnabled[group.routeClient] === true;
   });
@@ -2033,32 +2093,8 @@ async function persistTextProfileChanges(successMessage, affectedGroups) {
 async function switchTextProvider(profile) {
   const clientGroup = normalizeTextProfileClient(profile?.client, profile);
   const group = textProfileClientGroups.find((item) => item.id === clientGroup);
-  if (!group) throw new Error("\u4e0d\u652f\u6301\u7684\u5ba2\u6237\u7aef\u5206\u7ec4");
-  const providerName = profile.name || profile.provider || "\u672a\u547d\u540d\u4f9b\u5e94\u5546";
-  if (programSettings.localAPIEnabled) {
-    const previousProfileID = activeTextProfileByClient[clientGroup] || "";
-    const previousLegacyTextRouting = legacyTextRouting;
-    activeTextProfileByClient[clientGroup] = profile.id;
-    legacyTextRouting = false;
-    try {
-      // Requests routed through the local API read the selected supplier from
-      // the live server config, so rewriting or restarting the client would be
-      // unnecessary and would interrupt an active session.
-      await persistConfig("");
-    } catch (err) {
-      if (previousProfileID) {
-        activeTextProfileByClient[clientGroup] = previousProfileID;
-      } else {
-        delete activeTextProfileByClient[clientGroup];
-      }
-      legacyTextRouting = previousLegacyTextRouting;
-      throw err;
-    }
-    renderTextProfiles();
-    showToast("\u5207\u6362\u6210\u529f", "success");
-    setStatus(`${group.label} \u4f9b\u5e94\u5546\u5df2\u66f4\u65b0`);
-    return;
-  }
+  if (!group) throw new Error("不支持的客户端分组");
+  const providerName = profile.name || profile.provider || "未命名供应商";
   const res = await fetch("/api/client/configure", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -2066,19 +2102,18 @@ async function switchTextProvider(profile) {
   });
   if (!res.ok) throw new Error(await readErrorMessage(res));
   const payload = await res.json();
+  const result = clientConfigurationResult(payload);
   activeTextProfileByClient[clientGroup] = profile.id;
   legacyTextRouting = false;
-  clientRouteEnabled[group.routeClient] = true;
+  clientRouteEnabled[group.routeClient] = payload?.route_enabled !== false;
   if (currentConfig) {
     currentConfig.active_text_profile_by_client = {...activeTextProfileByClient};
   }
+  await loadConfig();
   syncClientRouteInputs();
   renderTextProfiles();
-  const actionHint = payload?.restarted || payload?.started
-    ? "\u5ba2\u6237\u7aef\u5df2\u81ea\u52a8\u5e94\u7528\u914d\u7f6e"
-    : "\u8bf7\u91cd\u542f\u5ba2\u6237\u7aef\u7a0b\u5e8f\u540e\u751f\u6548";
-  showToast(`\u5df2\u4e3a ${group.label} \u4f7f\u7528 ${providerName}\uff1b${actionHint}`, "success");
-  setStatus(`${group.label} \u4f9b\u5e94\u5546\u5df2\u66f4\u65b0`);
+  showToast(`已为 ${group.label} 切换到 ${providerName}${result.path}；${result.routeMessage}；${result.behaviorMessage}${result.warning}`, result.warning ? "error" : "success");
+  setStatus(clientConfigurationStatus(group.label, result));
 }
 
 async function restoreCodexOfficialMode() {
@@ -2597,6 +2632,9 @@ function formatTokenUsage(value, available) {
 }
 
 function formatRequestMode(log) {
+  if (String(log.protocol || "").trim() === "模型测试") {
+    return {className: "test", label: "模型测试"};
+  }
   switch (String(log.request_mode || "").toLowerCase()) {
     case "stream":
       return {className: "stream", label: "流式"};
@@ -2758,6 +2796,7 @@ function renderOverview() {
   renderProviderSummary(homeCodexProviders, textProfiles.filter((profile) => profile.client === "codex"), textProfileForClient("codex"));
   renderProviderSummary(homeClaudeProviders, textProfiles.filter((profile) => profile.client === "claude"), textProfileForClient("claude"));
   renderProviderSummary(homeOpenCodeProviders, textProfiles.filter((profile) => profile.client === "opencode"), textProfileForClient("opencode"));
+  renderProviderSummary(homeOpenClawProviders, textProfiles.filter((profile) => profile.client === "openclaw"), textProfileForClient("openclaw"));
   renderProviderSummary(homeVisionProviders, visionProfiles, visionProfile);
   if (homeTextProfile) homeTextProfile.textContent = profileDetail(textProfile, "text");
   if (homeVisionProfile) homeVisionProfile.textContent = profileDetail(visionProfile, "vision");
@@ -2929,7 +2968,6 @@ async function deleteProfile(kind, id) {
   const index = profiles.findIndex((profile) => profile.id === id);
   if (index < 0) return;
   const previousTextSelections = isText ? {...activeTextProfileByClient} : null;
-  const previousActiveTextProfileId = isText ? activeTextProfileId : "";
   profiles.splice(index, 1);
   if (isText) {
     if (activeTextProfileId === id) {
@@ -2938,9 +2976,6 @@ async function deleteProfile(kind, id) {
     }
     activeTextProfileByClient = normalizeActiveTextProfileByClient(activeTextProfileByClient, profiles, activeTextProfileId);
     const affectedGroups = affectedSelectedTextProfileGroups(previousTextSelections, id);
-    if (previousActiveTextProfileId === id || previousActiveTextProfileId !== activeTextProfileId) {
-      affectedGroups.push("openclaw");
-    }
     renderTextProfiles();
     await persistTextProfileChanges("\u5df2\u5220\u9664\u5e76\u4fdd\u5b58\u6587\u672c\u6a21\u578b", affectedGroups);
   } else {
@@ -3218,7 +3253,6 @@ async function createProfileFromModal() {
   if (isText) {
     updateModelMappingFromRows();
     const previousTextSelections = {...activeTextProfileByClient};
-    const previousActiveTextProfileId = activeTextProfileId;
     const id = isEdit ? profileModalEditId : `text-${Date.now().toString(36)}`;
     const profile = normalizeTextProfile({
       id,
@@ -3243,9 +3277,6 @@ async function createProfileFromModal() {
     }
     activeTextProfileByClient = normalizeActiveTextProfileByClient(activeTextProfileByClient, textProfiles, activeTextProfileId);
     const affectedGroups = affectedSelectedTextProfileGroups(previousTextSelections, profile.id);
-    if (isEdit && previousActiveTextProfileId === profile.id) {
-      affectedGroups.push("openclaw");
-    }
     activeProviderClientTab = profile.client;
     renderTextProfiles();
     showPage("text");
@@ -3555,7 +3586,8 @@ function renderOpenCodeSnippet() {
   const renderForSupplier = (groupId, elements, render) => {
     const profile = textProfileForClient(groupId);
     if (!profile) {
-      const message = `请先在 ${groupId === "codex" ? "Codex" : groupId === "claude" ? "Claude" : "OpenCode"} 分组添加模型供应商。`;
+      const groupName = textProfileClientGroups.find((group) => group.id === groupId)?.label || groupId;
+      const message = `请先在 ${groupName} 分组添加模型供应商。`;
       elements.forEach((element) => { if (element) element.textContent = message; });
       return;
     }
@@ -3580,8 +3612,7 @@ function renderOpenCodeSnippet() {
     });
   };
 
-  // OpenClaw uses the same OpenAI-compatible supplier selection as OpenCode.
-  renderForSupplier("opencode", [opencodeConfig, openclawConfig], ({
+  renderForSupplier("opencode", [opencodeConfig], ({
     profile, directUpstream, snippetMappings, defaultClientModel, providerDisplayName, upstreamKey
   }) => {
     if (opencodeConfig) {
@@ -3619,6 +3650,11 @@ function renderOpenCodeSnippet() {
         model: `vision-relay/${defaultClientModel}`
       }, null, 2);
     }
+  });
+
+  renderForSupplier("openclaw", [openclawConfig], ({
+    profile, directUpstream, snippetMappings, providerDisplayName, upstreamKey
+  }) => {
     if (openclawConfig) {
       const openclawModels = snippetMappings.map((mapping) => {
         const modelName = mapping.name || mapping.model;
@@ -3641,7 +3677,7 @@ function renderOpenCodeSnippet() {
           mode: "merge",
           providers: {
             "vision-relay": {
-              baseUrl: directUpstream ? openClawDirectBaseURL(profile) : `${relayOrigin()}/v1`,
+              baseUrl: directUpstream ? openClawDirectBaseURL(profile) : `${relayOrigin()}/openclaw/v1`,
               ...(directUpstream ? {apiKey: upstreamKey} : {}),
               api: directUpstream ? openClawDirectAPI(profile) : "openai-completions",
               models: openclawModels
@@ -3907,13 +3943,14 @@ function normalizeTextProfileClient(client, profile = {}) {
   if (value === "codex") return "codex";
   if (value === "claude" || value === "claude-code") return "claude";
   if (value === "opencode" || value === "open-code") return "opencode";
+  if (value === "openclaw" || value === "open-claw") return "openclaw";
   if (String(profile.provider || "").trim().toLowerCase() === "anthropic") return "claude";
   if (String(profile.provider || "").trim().toLowerCase() === "openai" && normalizeWireAPI(profile.wire_api) === "responses") return "codex";
   return "opencode";
 }
 
 function normalizeActiveTextProfileByClient(active, profiles, legacyActiveId = "") {
-  const normalized = {codex: "", claude: "", opencode: ""};
+  const normalized = {codex: "", claude: "", opencode: "", openclaw: ""};
   textProfileClientGroups.forEach((group) => {
     const groupProfiles = profiles.filter((profile) => profile.client === group.id);
     const requested = active?.[group.id] || active?.[group.routeClient] || "";

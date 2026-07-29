@@ -288,10 +288,10 @@ func textProfileClientForRoute(client string) string {
 		return textProfileClientCodex
 	case clientClaudeCode:
 		return textProfileClientClaude
-	case clientOpenCode, clientOpenClaw:
-		// OpenClaw uses the OpenAI-compatible route and intentionally follows
-		// the supplier selected for the OpenCode group.
+	case clientOpenCode:
 		return textProfileClientOpenCode
+	case clientOpenClaw:
+		return textProfileClientOpenClaw
 	default:
 		return ""
 	}
@@ -657,6 +657,12 @@ func openClawProviderBaseURL(ctx clientConfigContext) string {
 	provider := strings.ToLower(strings.TrimSpace(ctx.Provider))
 	if ctx.DirectUpstream && (provider == "anthropic" || provider == "gemini") {
 		return strings.TrimRight(strings.TrimSpace(ctx.Origin), "/")
+	}
+	if !ctx.DirectUpstream {
+		// Give OpenClaw a client-specific local route so its Chat Completions
+		// traffic can use the independently selected OpenClaw supplier instead of
+		// being indistinguishable from OpenCode on the shared relay address.
+		return strings.TrimRight(strings.TrimSpace(ctx.Origin), "/") + "/openclaw/v1"
 	}
 	return clientVersionedBaseURL(ctx)
 }

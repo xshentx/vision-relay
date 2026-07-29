@@ -1693,6 +1693,10 @@ button[type="submit"]:hover {
   color: #8b5cf6;
 }
 
+.log-mode.test {
+  color: #2563eb;
+}
+
 .log-time {
   color: #8a94a3;
   font-size: 12px;
@@ -2451,6 +2455,32 @@ button:active:not(:disabled),
 .primary-action:hover:not(:disabled) {
   border-color: #79bbff;
   background: #79bbff;
+}
+
+.client-configure-action.is-loading,
+.client-configure-action.is-loading:disabled {
+  border-color: #a8abb2;
+  color: #fff;
+  background: #a8abb2;
+  cursor: wait;
+  opacity: 1;
+}
+
+.client-configure-action.is-loading::before {
+  width: 13px;
+  height: 13px;
+  display: inline-block;
+  margin-right: 7px;
+  border: 2px solid rgb(255 255 255 / 45%);
+  border-top-color: #fff;
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: client-configure-spin .7s linear infinite;
+  content: "";
+}
+
+@keyframes client-configure-spin {
+  to { transform: rotate(360deg); }
 }
 
 input,
@@ -5549,3 +5579,73 @@ body.model-test-open {
 .break-armor-toggle { border-color:#dfe7ee; color:#475569; background:#fff; }
 .break-armor-mode-note { border-color:#bae6fd; color:#36556f; background:#f0f9ff; font-size:13px; font-weight:600; }
 .break-armor-mode-note code { padding:1px 4px; border-radius:4px; color:#075985; background:#e0f2fe; font-weight:800; }
+
+/* Keep the shell usable if it is hosted outside the constrained desktop window. */
+@media (min-width: 1041px) {
+  .sidebar {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
+/* This must remain after the desktop theme overrides above so they cannot
+   restore the two-column shell while the navigation is in compact mode. */
+@media (max-width: 1040px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    padding: 12px;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .brand,
+  .nav,
+  .nav-item,
+  .side-note {
+    flex: 0 0 auto;
+  }
+
+  .brand {
+    padding: 0 4px;
+  }
+
+  .nav {
+    display: flex;
+    gap: 5px;
+  }
+
+  .nav-group-label {
+    display: none;
+  }
+
+  .side-note {
+    min-width: 180px;
+    margin-top: 0;
+  }
+
+  .content {
+    width: 100%;
+  }
+
+  .page-stage {
+    width: min(calc(100% - 24px), 940px);
+    padding: 20px 0 36px;
+  }
+}
+
+@media (max-width: 680px) {
+  .page-stage {
+    width: calc(100% - 20px);
+  }
+}

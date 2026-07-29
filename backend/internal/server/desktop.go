@@ -6,6 +6,13 @@ import (
 	"sync"
 )
 
+const (
+	clientWindowWidth     = 1180
+	clientWindowHeight    = 820
+	clientWindowMinWidth  = 960
+	clientWindowMinHeight = 640
+)
+
 func openBrowser(rawURL string) error {
 	switch runtime.GOOS {
 	case "windows":

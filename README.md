@@ -13,7 +13,7 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 - 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Gemini、Ollama 等常见接口形态
 - 本地 API 默认无需访问令牌，可直接接入兼容客户端
 - 支持为 Codex、OpenCode、Claude、OpenClaw 等客户端生成接入配置
-- 文本供应商按 Codex、Claude、OpenCode 独立分组，并提供运行状态与熔断保护
+- 模型供应商按 Codex、Claude、OpenCode、OpenClaw 独立分组，并提供运行状态与熔断保护
 - 支持一键配置 Codex、OpenCode、Claude、OpenClaw
 - 提供 Codex、Claude、OpenCode 相互独立的一键破甲、一键去除、未破甲基线恢复、提示词模板与会话清理测试工具；模板页内置 5 个 Codex-X 模板的受信任目录，并可按需从 GitHub 下载缓存正文
 - 支持切换 Codex 第三方模型时保留官方登录，并可统一官方与第三方会话历史
@@ -129,7 +129,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.2.4 --arch arm64
+bash ./tools/build-macos.sh --version v2.2.5 --arch arm64
 ```
 
 支持的架构参数：
@@ -147,7 +147,7 @@ bash ./tools/build-macos.sh --version v2.2.4 --arch arm64
 Windows 无签名发布构建（当前 GitHub 标签工作流使用此模式）：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.2.4
+.\tools\build-windows.ps1 -Version v2.2.5
 ```
 
 ### Windows Authenticode 签名
@@ -159,7 +159,7 @@ Windows 无签名发布构建（当前 GitHub 标签工作流使用此模式）�
 ```powershell
 .\tools\build-windows.ps1 `
   -Output dist\vision-relay.exe `
-  -Version v2.2.4 `
+  -Version v2.2.5 `
   -SigningCertificatePath C:\secure\vision-relay-code-signing.pfx `
   -SigningCertificatePassword '<PFX 密码>' `
   -RequireSignature
@@ -181,7 +181,7 @@ $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter s
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.2.4 --arch universal
+bash ./tools/build-macos.sh --version v2.2.5 --arch universal
 ```
 
 生成的 Release 附件：
@@ -196,23 +196,23 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.2.4
-git push origin v2.2.4
+git tag v2.2.5
+git push origin v2.2.5
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.2.4
+Vision Relay v2.2.5
 ```
 
 附件上传时应包含对应平台的程序包和同名 `.sha256` 文件。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
 
 ## 配置说明
 
-首次启动后，在管理页面中配置文本模型和视觉模型即可使用本地 API。文本供应商列表中的“模型测试”可直接使用该供应商已配置的模型和 API Key 发送测试提示词，并显示响应内容、HTTP 状态及耗时；测试过程不会切换当前供应商或修改客户端路由。供应商编辑弹窗中的眼睛按钮可临时显示或隐藏完整 API Key。
+首次启动后，在管理页面中配置文本模型和视觉模型即可使用本地 API。文本供应商列表中的“模型测试”可直接使用该供应商已配置的模型和 API Key 发送测试提示词，并显示响应内容、HTTP 状态及耗时；测试过程不会切换当前供应商或修改客户端路由；测试结果会写入请求日志，响应中的 Token 用量也会计入数据看板。供应商编辑弹窗中的眼睛按钮可临时显示或隐藏完整 API Key。
 
-文本供应商按 **Codex**、**Claude**、**OpenCode** 三组管理，每个供应商只能属于一组，每组独立保存当前选择。OpenAI Responses 请求使用 Codex 组，Anthropic Messages 使用 Claude 组，Chat Completions、Gemini 与 Ollama 使用 OpenCode 组；OpenClaw 的一键配置也跟随 OpenCode 组。点击某组供应商的“使用”只同步该组关联的客户端，不会覆盖另外两组。
+文本供应商按 **Codex**、**Claude**、**OpenCode**、**OpenClaw** 四组管理，每个供应商只能属于一组，每组独立保存当前选择。OpenAI Responses 请求使用 Codex 组，Anthropic Messages 使用 Claude 组，普通 Chat Completions、Gemini 与 Ollama 使用 OpenCode 组；OpenClaw 通过专属的本机 `/openclaw/v1` 路径使用 OpenClaw 组。点击某组供应商的“使用”只写入该组关联的客户端配置，不会覆盖其他客户端，并按“设置 → 客户端行为”自动重启已运行客户端或启动未运行客户端。
 
 每组当前供应商都有独立熔断状态。连续 3 次可归因于上游的失败会进入 30 秒熔断，冷却后允许一次半开探测，成功即恢复；页面供应商卡片每 5 秒刷新“正常 / 熔断 / 探测”状态。
 
@@ -241,7 +241,7 @@ OPEN_BROWSER=false
 
 本地 API 不需要访问令牌，外部客户端可以直接调用所有兼容入口。普通客户端的一键配置不会写入 API Key 或 Bearer Token；如果第三方客户端的界面强制要求填写 API Key，这是该客户端自身的限制，Vision Relay 本地 API 不会校验该值。Codex 开启“切换第三方时保留官方登录”时是唯一例外：provider 配置会写入仅用于本地路由隔离的无害 Bearer 标记。该标记不是上游 API Key，也不会被本地 API 校验，其作用是防止 Codex 将官方 ChatGPT 登录令牌用于第三方模型请求。关闭本地 API 后，客户端改为直连当前文本供应商，并写入供应商 API 地址、上游令牌和真实模型名；模型列表仍只包含当前供应商配置中已经添加的模型，不会自动导入上游的全部模型。
 
-“客户端接入”中的每个客户端都提供独立的**路由**开关。一键配置会自动开启对应路由；之后切换文本供应商时，Vision Relay 只重写已开启路由的客户端配置，并提示重启受影响的客户端。关闭路由的客户端不会被供应商切换修改；恢复 Codex 官方模式时会同时关闭 Codex 路由。
+“客户端接入”中的每个客户端都提供独立的**路由**开关。一键配置或点击该客户端分组供应商的“使用”都会写入对应客户端配置并自动开启路由，同时按“客户端行为”设置启动或重启客户端；关闭路由后，启动同步和其他分组的供应商切换不会重写该客户端配置。恢复 Codex 官方模式时会同时关闭 Codex 路由。
 
 ## 一键破甲（测试功能）
 
@@ -269,7 +269,7 @@ OPEN_BROWSER=false
 
 首次运行时会自动检测一次客户端路径。从没有该检测字段的旧版本升级时，也会自动执行一次，之后不会反复覆盖手动填写的路径。如需刷新，可在设置页点击“重新检测客户端”。
 
-客户端配置文件位置会实际用于“一键配置”、路由同步和 Codex 官方模式恢复。客户端程序位置用于检测运行状态，并按“设置 → 一键配置行为”中的开关自动重启或启动客户端；这些操作由程序内置完成，不会弹出终端窗口。一键配置 Codex 或 Claude 时会同时处理对应桌面端与 CLI，接口和完成提示会列出实际写入的全部配置路径，并分别返回程序重启、启动或警告结果。默认自动重启配置前已运行的客户端，配置前未运行的客户端保持关闭。
+客户端配置文件位置会实际用于“一键配置”、路由同步和 Codex 官方模式恢复。客户端程序位置用于检测运行状态，并按“设置 → 客户端行为”中的开关自动重启或启动客户端；这些操作由程序内置完成，不会弹出终端窗口。一键配置 Codex 或 Claude 时会同时处理对应桌面端与 CLI，接口和完成提示会列出实际写入的全部配置路径，并分别返回程序重启、启动或警告结果。默认自动重启配置前已运行的客户端，配置前未运行的客户端保持关闭。
 
 ## 客户端接入示例
 
@@ -298,7 +298,7 @@ CODEX_HOME/vision-relay-model.json
 
 如果没有设置 `CODEX_HOME`，Windows 和 macOS 分别使用 `%USERPROFILE%\.codex` 与 `~/.codex`。只有调用客户端配置 API 时明确传入 `work_dir`，才会额外写入该项目的 `.codex/config.toml` 和 `.codex/vision-relay-model.json`，避免把 Vision Relay 自身的启动目录误当成项目目录。项目配置只包含 Codex 允许的模型和模型目录设置；Windows 还会写入 `sandbox = "unelevated"`，macOS 不会创建或改写 `[windows]` 段。`model_provider`、`model_providers.*` 及认证设置始终保留在用户级配置中，避免 Codex 忽略项目配置并显示警告。
 
-用户级配置会使用 `model_providers.custom`、Responses wire API 和本机 `/v1` 地址。一键配置完全由 Vision Relay 内置逻辑直接写入配置文件，不调用终端命令。Vision Relay 每次启动还会重新同步已启用的客户端路由，以修复被其他工具改回的供应商选择。默认情况下，配置前已运行的客户端会自动重启，未运行的客户端不会被启动；可在“设置 → 一键配置行为”中为 Codex、Codex CLI、OpenCode、Claude、Claude CLI、OpenClaw 分别调整。
+用户级配置会使用 `model_providers.custom`、Responses wire API 和本机 `/v1` 地址。一键配置完全由 Vision Relay 内置逻辑直接写入配置文件，不调用终端命令。Vision Relay 每次启动还会重新同步已启用的客户端路由，以修复被其他工具改回的供应商选择。默认情况下，配置前已运行的客户端会自动重启，未运行的客户端不会被启动；可在“设置 → 客户端行为”中为 Codex、Codex CLI、OpenCode、Claude、Claude CLI、OpenClaw 分别调整。
 
 “Codex 应用增强”提供两个独立开关：
 
@@ -311,7 +311,7 @@ CODEX_HOME/vision-relay-model.json
 
 同一页面也提供“一键配置 OpenCode”和“一键配置 Claude”：Windows 下 OpenCode 配置写入 `%USERPROFILE%\.config\opencode\opencode.json`，Claude 桌面配置写入 `%LOCALAPPDATA%\Claude-3p\configLibrary\<active-id>.json`，Claude CLI 配置写入 `%USERPROFILE%\.claude\settings.json`；macOS 下对应路径为 `~/.config/opencode/opencode.json`、`~/Library/Application Support/Claude-3p/configLibrary/<active-id>.json` 和 `~/.claude/settings.json`。现有配置中的其他字段会保留。
 
-[OpenClaw](https://github.com/openclaw/openclaw) 可在同一页面点击“一键配置 OpenClaw”，Windows 和 macOS 默认分别写入 `%USERPROFILE%\.openclaw\openclaw.json` 与 `~/.openclaw/openclaw.json`。配置会新增 `vision-relay` 自定义供应商，通过 `openai-completions` 接入本机 `/v1` 接口，同步当前模型映射、上下文窗口和图片输入能力，并将默认模型切换为 `vision-relay/<模型名>`。现有的其他 OpenClaw 配置会保留，写入前会在同目录生成带时间戳的备份。
+[OpenClaw](https://github.com/openclaw/openclaw) 可在同一页面点击“一键配置 OpenClaw”，Windows 和 macOS 默认分别写入 `%USERPROFILE%\.openclaw\openclaw.json` 与 `~/.openclaw/openclaw.json`。配置会新增 `vision-relay` 自定义供应商，通过 `openai-completions` 接入本机 `/openclaw/v1` 接口，同步当前模型映射、上下文窗口和图片输入能力，并将默认模型切换为 `vision-relay/<模型名>`。现有的其他 OpenClaw 配置会保留，写入前会在同目录生成带时间戳的备份。
 
 如果设置了 `OPENCLAW_CONFIG_PATH`、`OPENCLAW_STATE_DIR` 或 `OPENCLAW_HOME`，Vision Relay 会按 OpenClaw 的路径规则写入对应配置。OpenClaw 配置文件支持 JSON5；一键配置可读取带注释、单引号和尾随逗号的现有文件，写回时会标准化为 JSON。详见 [OpenClaw 配置文档](https://docs.openclaw.ai/gateway/configuration)。
 
@@ -407,7 +407,7 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 发布构建时请传入与 Git tag 相同的版本号：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.2.4
+.\tools\build-windows.ps1 -Version v2.2.5
 ```
 
 构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时必须同时上传这两个文件。当前 Windows Release 为无签名构建，SHA-256 仅用于验证下载完整性，首次运行可能出现 Windows SmartScreen 或未知发布者提示；代码签名与证书信誉仍是降低此类提示和安全软件误报的关键。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。

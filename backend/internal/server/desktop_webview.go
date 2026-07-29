@@ -9,13 +9,25 @@ import (
 	webview "github.com/webview/webview_go"
 )
 
+type clientWindow interface {
+	SetTitle(string)
+	SetSize(int, int, webview.Hint)
+	Navigate(string)
+	Run()
+	Destroy()
+}
+
 func runClientWindow(rawURL string, runEnded func()) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	w := webview.New(false)
+	runClientWindowInstance(webview.New(false), rawURL, runEnded)
+}
+
+func runClientWindowInstance(w clientWindow, rawURL string, runEnded func()) {
 	defer finishClientWindowRun(runEnded, w.Destroy)
 	w.SetTitle(appDisplayName)
-	w.SetSize(1180, 820, webview.HintNone)
+	w.SetSize(clientWindowWidth, clientWindowHeight, webview.HintNone)
+	w.SetSize(clientWindowMinWidth, clientWindowMinHeight, webview.HintMin)
 	w.Navigate(rawURL)
 	w.Run()
 }

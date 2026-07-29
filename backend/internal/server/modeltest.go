@@ -84,6 +84,7 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 	})
 	durationMS := time.Since(started).Milliseconds()
 	if err != nil {
+		a.appendModelTestLog(profile, model, started, http.StatusBadGateway, nil, err)
 		writeModelTestError(w, http.StatusBadGateway, err, 0, durationMS, "")
 		return
 	}
@@ -91,6 +92,7 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxModelTestResponseBytes))
 	requestID := modelTestRequestID(resp.Header)
 	if readErr != nil {
+		a.appendModelTestLog(profile, model, started, http.StatusBadGateway, responseBody, readErr)
 		writeModelTestError(w, http.StatusBadGateway, readErr, resp.StatusCode, durationMS, requestID)
 		return
 	}
@@ -99,18 +101,22 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 		if detail := modelTestUpstreamError(responseBody); detail != "" {
 			err = fmt.Errorf("%w: %s", err, detail)
 		}
+		a.appendModelTestLog(profile, model, started, resp.StatusCode, responseBody, err)
 		writeModelTestError(w, http.StatusBadGateway, err, resp.StatusCode, durationMS, requestID)
 		return
 	}
 	var payload any
 	if err := json.Unmarshal(responseBody, &payload); err != nil {
-		writeModelTestError(w, http.StatusBadGateway, errors.New("upstream returned invalid JSON"), resp.StatusCode, durationMS, requestID)
+		invalidJSONErr := errors.New("upstream returned invalid JSON")
+		a.appendModelTestLog(profile, model, started, http.StatusBadGateway, responseBody, invalidJSONErr)
+		writeModelTestError(w, http.StatusBadGateway, invalidJSONErr, resp.StatusCode, durationMS, requestID)
 		return
 	}
 	output := strings.TrimSpace(modelTestOutput(payload))
 	if output == "" {
 		output = "请求成功，但响应中没有可显示的文本内容。"
 	}
+	a.appendModelTestLog(profile, model, started, resp.StatusCode, responseBody, nil)
 	writeJSON(w, http.StatusOK, modelTestResult{
 		OK:          true,
 		ProfileID:   profile.ID,
@@ -123,6 +129,32 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 		RequestID:   requestID,
 		Output:      output,
 	})
+}
+
+func (a *app) appendModelTestLog(profile textModelProfile, model string, started time.Time, status int, responseBody []byte, callErr error) {
+	log := requestLog{
+		At:               started,
+		Method:           http.MethodPost,
+		Path:             "/api/model-test",
+		Protocol:         "模型测试",
+		Model:            model,
+		UpstreamName:     firstString(profile.Name, "未命名模型供应商"),
+		UpstreamProvider: normalizeProvider(profile.Provider),
+		Status:           status,
+		DurationMS:       time.Since(started).Milliseconds(),
+		RequestMode:      "sync",
+	}
+	if payload := decodeJSONMap(responseBody); payload != nil {
+		fillUsageFromPayload(&log, payload)
+		log.Error = errorTextFromPayload(payload)
+	}
+	if callErr != nil {
+		log.Error = strings.TrimSpace(callErr.Error())
+	}
+	if status >= http.StatusBadRequest && log.Error == "" {
+		log.Error = statusText(status)
+	}
+	a.appendRequestLog(log)
 }
 
 func findTextModelProfile(cfg config, id string) (textModelProfile, bool) {

@@ -2,6 +2,21 @@ package server
 
 import "testing"
 
+func TestClientWindowSizesAreInternallyConsistent(t *testing.T) {
+	if clientWindowMinWidth != 960 || clientWindowMinHeight != 640 {
+		t.Fatalf("minimum window size = %dx%d; want 960x640", clientWindowMinWidth, clientWindowMinHeight)
+	}
+	if clientWindowWidth < clientWindowMinWidth || clientWindowHeight < clientWindowMinHeight {
+		t.Fatalf(
+			"initial window size %dx%d is smaller than minimum %dx%d",
+			clientWindowWidth,
+			clientWindowHeight,
+			clientWindowMinWidth,
+			clientWindowMinHeight,
+		)
+	}
+}
+
 func TestClientWindowStateFocusesExistingWindowWithoutQueueingAnother(t *testing.T) {
 	state := &clientWindowState{}
 

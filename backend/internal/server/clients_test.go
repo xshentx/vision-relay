@@ -552,7 +552,7 @@ func TestWriteOpenClawConfigPreservesExistingJSON5AndAddsModels(t *testing.T) {
 		t.Fatalf("existing provider was removed: %#v", providers)
 	}
 	provider := providers["vision-relay"].(map[string]any)
-	if provider["baseUrl"] != "http://127.0.0.1:8787/v1" || provider["api"] != "openai-completions" {
+	if provider["baseUrl"] != "http://127.0.0.1:8787/openclaw/v1" || provider["api"] != "openai-completions" {
 		t.Fatalf("bad OpenClaw provider: %#v", provider)
 	}
 	if _, exists := provider["apiKey"]; exists {
@@ -924,6 +924,80 @@ func TestHandleClientConfigureWritesCodexConfig(t *testing.T) {
 	}
 }
 
+func TestNormalizeMigratesEnabledOpenClawRouteToIndependentSupplier(t *testing.T) {
+	cfg := normalizeSeparateModelProfiles(config{
+		ActiveTextProfileID: "opencode-selected",
+		ActiveTextProfileByClient: map[string]string{
+			textProfileClientOpenCode: "opencode-selected",
+		},
+		TextModelProfiles: []textModelProfile{
+			{
+				ID:       "opencode-selected",
+				Name:     "Existing OpenCode supplier",
+				Client:   textProfileClientOpenCode,
+				Provider: "openai",
+				BaseURL:  "https://example.test/v1",
+				APIKey:   "secret",
+				ModelMappings: []textModelMapping{
+					{Name: "client-model", Model: "upstream-model"},
+				},
+			},
+		},
+		ClientRouteEnabled: map[string]bool{clientOpenClaw: true},
+	})
+
+	openCode, ok := selectedTextProfileForClient(cfg, textProfileClientOpenCode)
+	if !ok {
+		t.Fatal("OpenCode supplier selection was lost during migration")
+	}
+	openClaw, ok := selectedTextProfileForClient(cfg, textProfileClientOpenClaw)
+	if !ok {
+		t.Fatal("enabled legacy OpenClaw route did not receive an independent supplier")
+	}
+	if openClaw.ID == openCode.ID || openClaw.Client != textProfileClientOpenClaw {
+		t.Fatalf("OpenClaw supplier was not cloned into its own group: %#v", openClaw)
+	}
+	if openClaw.BaseURL != openCode.BaseURL || openClaw.APIKey != openCode.APIKey || openClaw.ModelOverride != openCode.ModelOverride {
+		t.Fatalf("migrated OpenClaw supplier does not preserve the selected OpenCode configuration: %#v", openClaw)
+	}
+	routeCfg, err := textConfigForClientRoute(cfg, clientOpenClaw)
+	if err != nil {
+		t.Fatalf("migrated OpenClaw route is not configurable: %v", err)
+	}
+	if routeCfg.TextBaseURL != openClaw.BaseURL || routeCfg.TextModelOverride != "upstream-model" {
+		t.Fatalf("OpenClaw route did not use the migrated supplier: %#v", routeCfg)
+	}
+}
+
+func TestNormalizeDoesNotPopulateUnusedOpenClawGroup(t *testing.T) {
+	cfg := normalizeSeparateModelProfiles(config{
+		ActiveTextProfileID: "opencode-selected",
+		ActiveTextProfileByClient: map[string]string{
+			textProfileClientOpenCode: "opencode-selected",
+		},
+		TextModelProfiles: []textModelProfile{{
+			ID: "opencode-selected", Name: "OpenCode supplier", Client: textProfileClientOpenCode,
+			Provider: "openai", ModelMappings: []textModelMapping{{Name: "model", Model: "model"}},
+		}},
+		ClientRouteEnabled: map[string]bool{clientOpenClaw: false},
+	})
+	if _, ok := selectedTextProfileForClient(cfg, textProfileClientOpenClaw); ok {
+		t.Fatal("disabled OpenClaw group should stay empty")
+	}
+}
+
+func TestOpenCodeAndOpenClawUseIndependentSupplierGroups(t *testing.T) {
+	if got := textProfileClientForRoute(clientOpenCode); got != textProfileClientOpenCode {
+		t.Fatalf("OpenCode supplier group = %q, want %q", got, textProfileClientOpenCode)
+	}
+	if got := textProfileClientForRoute(clientOpenClaw); got != textProfileClientOpenClaw {
+		t.Fatalf("OpenClaw supplier group = %q, want %q", got, textProfileClientOpenClaw)
+	}
+	if textProfileClientForRoute(clientOpenCode) == textProfileClientForRoute(clientOpenClaw) {
+		t.Fatal("OpenCode and OpenClaw must not share a supplier group")
+	}
+}
+
 func TestHandleClientConfigureWithProfileOnlyUpdatesSelectedClient(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -932,15 +1006,20 @@ func TestHandleClientConfigureWithProfileOnlyUpdatesSelectedClient(t *testing.T)
 	codexPath := filepath.Join(home, "clients", "codex.toml")
 	openCodePath := filepath.Join(home, "clients", "opencode.json")
 	claudePath := filepath.Join(home, "clients", "claude.json")
+	openClawPath := filepath.Join(home, "clients", "openclaw.json5")
 	if err := os.MkdirAll(filepath.Dir(codexPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	openCodeBefore := []byte(`{"sentinel":"opencode"}`)
 	claudeBefore := []byte(`{"sentinel":"claude"}`)
+	openClawBefore := []byte(`{"sentinel":"openclaw"}`)
 	if err := os.WriteFile(openCodePath, openCodeBefore, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(claudePath, claudeBefore, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(openClawPath, openClawBefore, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg := normalizeSeparateModelProfiles(config{
@@ -951,17 +1030,20 @@ func TestHandleClientConfigureWithProfileOnlyUpdatesSelectedClient(t *testing.T)
 			{ID: "codex-target", Name: "Codex target", Client: textProfileClientCodex, Provider: "openai", WireAPI: "responses", BaseURL: "https://codex.example/v1", APIKey: "sk-codex", ModelMappings: []textModelMapping{{Name: "gpt-target", Model: "gpt-target"}}},
 			{ID: "claude-current", Name: "Claude current", Client: textProfileClientClaude, Provider: "anthropic", BaseURL: "https://claude.example", ModelMappings: []textModelMapping{{Name: "claude-target", Model: "claude-target"}}},
 			{ID: "opencode-current", Name: "OpenCode current", Client: textProfileClientOpenCode, Provider: "openai", BaseURL: "https://opencode.example/v1", ModelMappings: []textModelMapping{{Name: "open-target", Model: "open-target"}}},
+			{ID: "openclaw-current", Name: "OpenClaw current", Client: textProfileClientOpenClaw, Provider: "openai", BaseURL: "https://openclaw.example/v1", ModelMappings: []textModelMapping{{Name: "claw-target", Model: "claw-target"}}},
 		},
 		ActiveTextProfileID: "opencode-current",
 		ActiveTextProfileByClient: map[string]string{
 			textProfileClientCodex:    "codex-target",
 			textProfileClientClaude:   "claude-current",
 			textProfileClientOpenCode: "opencode-current",
+			textProfileClientOpenClaw: "openclaw-current",
 		},
 		ClientConfigPaths: map[string]string{
 			clientCodex:      codexPath,
 			clientOpenCode:   openCodePath,
 			clientClaudeCode: claudePath,
+			clientOpenClaw:   openClawPath,
 		},
 	})
 	a := &app{
@@ -986,10 +1068,12 @@ func TestHandleClientConfigureWithProfileOnlyUpdatesSelectedClient(t *testing.T)
 	}
 	assertFileBytes(t, openCodePath, openCodeBefore)
 	assertFileBytes(t, claudePath, claudeBefore)
+	assertFileBytes(t, openClawPath, openClawBefore)
 	got := a.currentConfig()
 	if got.ActiveTextProfileByClient[textProfileClientCodex] != "codex-target" ||
 		got.ActiveTextProfileByClient[textProfileClientClaude] != "claude-current" ||
-		got.ActiveTextProfileByClient[textProfileClientOpenCode] != "opencode-current" {
+		got.ActiveTextProfileByClient[textProfileClientOpenCode] != "opencode-current" ||
+		got.ActiveTextProfileByClient[textProfileClientOpenClaw] != "openclaw-current" {
 		t.Fatalf("client supplier selections changed unexpectedly: %#v", got.ActiveTextProfileByClient)
 	}
 }

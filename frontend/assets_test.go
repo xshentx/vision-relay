@@ -56,17 +56,44 @@ func TestClientConfigureActionsAreEmbedded(t *testing.T) {
 		`fetch("/api/client/configure"`,
 		`clientConfigureActions.forEach(({button, client, profileGroup, name}) => {`,
 		`configureClient({button, client, profileGroup, name})`,
+		`setClientConfigureLoading(button, true)`,
+		`button.classList.add("is-loading")`,
+		`button.setAttribute("aria-busy", "true")`,
+		`button.textContent = "配置中"`,
+		`setClientConfigureLoading(button, false)`,
+		"setStatus(`${name} 正在写入客户端配置…`)",
+		"setStatus(`${name} 配置请求已提交，等待客户端启动或重启…`)",
+		"setStatus(`${name} 配置完成，正在确认客户端状态…`)",
+		"if (result.programRestarted) return `${name} 配置完成，客户端已重启`",
+		"if (result.programRestartRequired) return `${name} 配置完成，等待客户端重启`",
+		"setStatus(`${name} 配置失败`)",
 		`body: JSON.stringify({client, ...(profile ? {profile_id: profile.id} : {})})`,
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("client configure action %q is not wired to the selected supplier", expected)
 		}
 	}
+	restartRequiredStatus := strings.Index(script, "if (result.programRestartRequired) return `${name} 配置完成，等待客户端重启`")
+	restartedStatus := strings.Index(script, "if (result.programRestarted) return `${name} 配置完成，客户端已重启`")
+	if restartRequiredStatus < 0 || restartedStatus < 0 || restartRequiredStatus > restartedStatus {
+		t.Fatal("pending client restart must take priority over another program's successful restart")
+	}
+	for _, expected := range []string{
+		`const programStarted = programResults.some((program) => program?.started === true && program?.restarted !== true)`,
+		`const restartRequiredPrograms = programNames((program) => program?.restart_required === true);`,
+		`const pendingTarget = restartRequiredPrograms.join("、") || "客户端";`,
+		`${pendingTarget}等待手动重启`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("mixed client program status detail %q is missing", expected)
+		}
+	}
+
 	for _, groupedAction := range []string{
 		`client: "codex", profileGroup: "codex"`,
 		`client: "claude-code", profileGroup: "claude"`,
 		`client: "opencode", profileGroup: "opencode"`,
-		`client: "openclaw", profileGroup: "opencode"`,
+		`client: "openclaw", profileGroup: "openclaw"`,
 	} {
 		if !strings.Contains(script, groupedAction) {
 			t.Fatalf("client configure supplier mapping %q is missing", groupedAction)
@@ -101,7 +128,8 @@ func TestClientPreviewsUseTheirSelectedSupplierGroup(t *testing.T) {
 		`return textProfiles.find((profile) => profile.client === normalizedGroup && profile.id === selectedId) || null;`,
 		`renderForSupplier("codex", [codexConfig]`,
 		`renderForSupplier("claude", [claudeCodeConfig]`,
-		`renderForSupplier("opencode", [opencodeConfig, openclawConfig]`,
+		`renderForSupplier("opencode", [opencodeConfig]`,
+		`renderForSupplier("openclaw", [openclawConfig]`,
 	} {
 		if !strings.Contains(script, expected) {
 			t.Fatalf("grouped client preview behavior %q is missing", expected)
@@ -151,6 +179,7 @@ func TestLocalAPIHasNoTokenManagement(t *testing.T) {
 		`<code class="log-endpoint">`,
 		`<div class="log-metrics">`,
 		`formatRequestMode(log)`,
+		"String(log.protocol || \"\").trim() === \"\u6a21\u578b\u6d4b\u8bd5\"",
 		`return {className: "unknown", label: "未知"};`,
 		`formatLogTimestamp(log.at)`,
 		`formatFirstTokenDuration(log.first_token_ms)`,
@@ -173,7 +202,7 @@ func TestLocalAPIHasNoTokenManagement(t *testing.T) {
 		t.Fatal(err)
 	}
 	style := string(styleRaw)
-	for _, expected := range []string{".log-item::before", ".log-item.failed::before", ".log-mode.stream", ".log-mode.sync", ".log-details", ".log-metrics", ".layout > .standard-page.active"} {
+	for _, expected := range []string{".log-item::before", ".log-item.failed::before", ".log-mode.stream", ".log-mode.sync", ".log-mode.test", ".log-details", ".log-metrics", ".layout > .standard-page.active"} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("request log style %q is missing", expected)
 		}
@@ -199,9 +228,12 @@ func TestClientProviderRoutesAreEmbedded(t *testing.T) {
 		`<option value="codex">Codex</option>`,
 		`<option value="claude">Claude</option>`,
 		`<option value="opencode">OpenCode</option>`,
+		`<option value="openclaw">OpenClaw</option>`,
 		`data-provider-client-tab="codex"`,
 		`data-provider-client-tab="claude"`,
 		`data-provider-client-tab="opencode"`,
+		`data-provider-client-tab="openclaw"`,
+		`Codex · Claude · OpenCode · OpenClaw`,
 	} {
 		if !strings.Contains(index, expected) {
 			t.Fatalf("client supplier grouping field %q is missing", expected)
@@ -218,9 +250,6 @@ func TestClientProviderRoutesAreEmbedded(t *testing.T) {
 		`fetch("/api/client/routes/apply", {method: "POST"})`,
 		`const textProfileClientGroups = [`,
 		`active_text_profile_by_client`,
-		`if (programSettings.localAPIEnabled) {`,
-		`await persistConfig("");`,
-		`showToast("\u5207\u6362\u6210\u529f", "success");`,
 		`fetch("/api/client/configure", {`,
 		`body: JSON.stringify({client: group.routeClient, profile_id: profile.id})`,
 		`activeTextProfileByClient[clientGroup] = profile.id;`,
@@ -242,14 +271,19 @@ func TestClientProviderRoutesAreEmbedded(t *testing.T) {
 	if strings.Contains(switchBody, "applyEnabledClientRoutes") || strings.Contains(switchBody, "/api/client/routes/apply") {
 		t.Fatal("supplier switch must only configure its own client, not all enabled client routes")
 	}
-	localRouteStart := strings.Index(switchBody, "if (programSettings.localAPIEnabled) {")
-	clientConfigureStart := strings.Index(switchBody, `fetch("/api/client/configure", {`)
-	if localRouteStart < 0 || clientConfigureStart < 0 {
-		t.Fatal("supplier switch must handle local and direct API modes")
+	for _, expected := range []string{
+		`const result = clientConfigurationResult(payload);`,
+		`clientRouteEnabled[group.routeClient] = payload?.route_enabled !== false;`,
+		`${result.routeMessage}`,
+		`${result.behaviorMessage}${result.warning}`,
+		`setStatus(clientConfigurationStatus(group.label, result));`,
+	} {
+		if !strings.Contains(switchBody, expected) {
+			t.Fatalf("supplier switch must share one-click client behavior %q", expected)
+		}
 	}
-	localRouteReturn := strings.Index(switchBody[localRouteStart:clientConfigureStart], "return;")
-	if localRouteReturn < 0 {
-		t.Fatal("local API supplier switches must return before client configuration and restart handling")
+	if strings.Contains(switchBody, "programSettings.localAPIEnabled") || strings.Contains(switchBody, `persistConfig("")`) {
+		t.Fatal("local API supplier switches must configure the selected client instead of only saving the selection")
 	}
 }
 
@@ -805,6 +839,8 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 		`id="autoStartOpenClaw"`,
 		`id="detectClientPaths"`,
 		`id="saveProgramSettings"`,
+		`两个开关会在“一键配置”或切换该客户端的供应商时生效。`,
+		`点击某分组供应商的“使用”会更新对应客户端配置并自动开启路由；客户端启动或重启行为以“设置 → 客户端行为”为准。`,
 	} {
 		if !strings.Contains(index, expected) {
 			t.Fatalf("program settings element %q is missing", expected)
@@ -1302,15 +1338,24 @@ func TestBreakArmorWorkbenchIsEmbeddedAndIndependent(t *testing.T) {
 	}
 }
 
-func TestOpenClawDirectRouteRefreshesWithOpenCodeSupplier(t *testing.T) {
+func TestDirectRouteRefreshKeepsOpenCodeAndOpenClawIndependent(t *testing.T) {
 	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
 	if err != nil {
 		t.Fatal(err)
 	}
 	script := string(scriptRaw)
-	expected := `if (groupId === "opencode") return clientRouteEnabled.opencode === true || clientRouteEnabled.openclaw === true;`
+	expected := `return group && clientRouteEnabled[group.routeClient] === true;`
 	if !strings.Contains(script, expected) {
-		t.Fatal("OpenClaw-only direct routing is not refreshed after an OpenCode supplier change")
+		t.Fatal("direct route refresh must resolve only the client associated with each supplier group")
+	}
+	for _, forbidden := range []string{
+		`clientRouteEnabled.opencode === true || clientRouteEnabled.openclaw === true`,
+		`if (groupId === "openclaw")`,
+		`affectedGroups.push("openclaw")`,
+	} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("OpenCode and OpenClaw routing are still coupled by %q", forbidden)
+		}
 	}
 }
 
@@ -1375,7 +1420,7 @@ func TestRelayEndpointsAndClientPreviewsUseConfiguredRelayAddress(t *testing.T) 
 		"openaiBaseEndpoint: `${origin}/v1`",
 		"responsesEndpoint: `${origin}/v1/responses`",
 		"baseURL: directUpstream ? clientVersionedBaseURL(profile) : `${relayOrigin()}/v1`",
-		"baseUrl: directUpstream ? openClawDirectBaseURL(profile) : `${relayOrigin()}/v1`",
+		"baseUrl: directUpstream ? openClawDirectBaseURL(profile) : `${relayOrigin()}/openclaw/v1`",
 		`inferenceGatewayBaseUrl: directUpstream ? claudeDesktopGatewayBaseURL(profile) : relayOrigin()`,
 		`: relayOrigin(),`,
 		`renderRelayEndpoints();`,
@@ -1389,5 +1434,39 @@ func TestRelayEndpointsAndClientPreviewsUseConfiguredRelayAddress(t *testing.T) 
 	}
 	if strings.Contains(script, "setServiceOnline(true)") {
 		t.Fatal("management API success must not directly mark the relay API online")
+	}
+}
+
+func TestCompactShellKeepsNavigationVisibleWithoutPageOverflow(t *testing.T) {
+	styleRaw, err := fs.ReadFile(FS, "assets/css/app.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	style := strings.ReplaceAll(string(styleRaw), "\r\n", "\n")
+	for _, expected := range []string{
+		`@media (max-width: 1040px) {`,
+		`.app {
+    grid-template-columns: minmax(0, 1fr);`,
+		`.sidebar {
+    position: sticky;`,
+		`width: 100%;
+    height: auto;`,
+		`overflow-x: auto;
+    overflow-y: hidden;`,
+		`.content {
+    width: 100%;`,
+		`.page-stage {
+    width: min(calc(100% - 24px), 940px);`,
+	} {
+		if !strings.Contains(style, expected) {
+			t.Fatalf("compact shell regression guard %q is missing", expected)
+		}
+	}
+
+	compactGuard := strings.LastIndex(style, `@media (max-width: 1040px) {`)
+	desktopTheme := strings.LastIndex(style, `.app {
+  grid-template-columns: 226px minmax(0, 1fr);`)
+	if compactGuard < desktopTheme {
+		t.Fatal("compact shell guard must follow the desktop theme overrides")
 	}
 }

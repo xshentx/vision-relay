@@ -21,6 +21,7 @@ const (
 	textProfileClientCodex    = "codex"
 	textProfileClientClaude   = "claude"
 	textProfileClientOpenCode = "opencode"
+	textProfileClientOpenClaw = "openclaw"
 	defaultVisionModel        = "gpt-4o-mini"
 	defaultVisionPrompt       = "你只是图片识别器，不是最终回答模型。只提取图片事实，禁止回答用户需求、禁止写代码、禁止给方案、禁止推理下一步。按图片复杂度输出必要细节，用简洁中文列出：1. 可见文字；2. 主要对象/页面结构；3. 颜色和布局；4. 与用户需求直接相关的细节。"
 )
@@ -526,6 +527,7 @@ func normalizeSeparateModelProfiles(cfg config) config {
 		cfg.VisionModelProfiles = []visionModelProfile{visionProfileFromConfig(cfg, "vision-default", "默认视觉模型")}
 	}
 	cfg.TextModelProfiles = normalizeTextProfiles(cfg.TextModelProfiles)
+	cfg = migrateEnabledOpenClawSupplier(cfg)
 	cfg.VisionModelProfiles = normalizeVisionProfiles(cfg.VisionModelProfiles)
 	for i := range cfg.VisionModelProfiles {
 		if cfg.VisionModelProfiles[i].ProxyURL == nil {
@@ -661,6 +663,8 @@ func normalizeTextProfileClientID(client string) (string, bool) {
 		return textProfileClientClaude, true
 	case textProfileClientOpenCode, "open-code":
 		return textProfileClientOpenCode, true
+	case textProfileClientOpenClaw, "open-claw":
+		return textProfileClientOpenClaw, true
 	default:
 		return "", false
 	}
@@ -677,6 +681,57 @@ func normalizeTextProfileClient(client, provider, wireAPI string) string {
 		return textProfileClientCodex
 	}
 	return textProfileClientOpenCode
+}
+
+// migrateEnabledOpenClawSupplier preserves the supplier used by OpenClaw
+// before it received an independent provider group. Only an enabled legacy
+// OpenClaw route is migrated; new or intentionally unused groups stay empty.
+func migrateEnabledOpenClawSupplier(cfg config) config {
+	if !normalizeClientRouteEnabled(cfg.ClientRouteEnabled)[clientOpenClaw] {
+		return cfg
+	}
+	for _, profile := range cfg.TextModelProfiles {
+		if profile.Client == textProfileClientOpenClaw {
+			return cfg
+		}
+	}
+
+	active := normalizeActiveTextProfilesByClient(cfg.TextModelProfiles, cfg.ActiveTextProfileByClient, cfg.ActiveTextProfileID)
+	sourceID := active[textProfileClientOpenCode]
+	for _, profile := range cfg.TextModelProfiles {
+		if profile.ID != sourceID || profile.Client != textProfileClientOpenCode {
+			continue
+		}
+		migrated := profile
+		migrated.ID = uniqueTextProfileID(cfg.TextModelProfiles, profile.ID+"-openclaw")
+		migrated.Client = textProfileClientOpenClaw
+		migrated.Name = strings.TrimSpace(profile.Name) + " (OpenClaw)"
+		cfg.TextModelProfiles = append(cfg.TextModelProfiles, migrated)
+		active[textProfileClientOpenClaw] = migrated.ID
+		cfg.ActiveTextProfileByClient = active
+		return cfg
+	}
+	return cfg
+}
+
+func uniqueTextProfileID(profiles []textModelProfile, preferred string) string {
+	preferred = strings.TrimSpace(preferred)
+	if preferred == "" {
+		preferred = "text-openclaw"
+	}
+	used := make(map[string]bool, len(profiles))
+	for _, profile := range profiles {
+		used[profile.ID] = true
+	}
+	if !used[preferred] {
+		return preferred
+	}
+	for suffix := 2; ; suffix++ {
+		candidate := preferred + "-" + strconv.Itoa(suffix)
+		if !used[candidate] {
+			return candidate
+		}
+	}
 }
 
 func normalizeActiveTextProfilesByClient(profiles []textModelProfile, active map[string]string, legacyActiveID string) map[string]string {
@@ -702,7 +757,7 @@ func normalizeActiveTextProfilesByClient(profiles []textModelProfile, active map
 			}
 		}
 	}
-	for _, client := range []string{textProfileClientCodex, textProfileClientClaude, textProfileClientOpenCode} {
+	for _, client := range []string{textProfileClientCodex, textProfileClientClaude, textProfileClientOpenCode, textProfileClientOpenClaw} {
 		if out[client] != "" {
 			continue
 		}

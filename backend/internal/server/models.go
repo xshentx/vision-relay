@@ -27,7 +27,7 @@ func (a *app) handleOpenAIModels(w http.ResponseWriter, r *http.Request) {
 		a.handleRawProxy(w, r)
 		return
 	}
-	cfg := a.currentConfig()
+	cfg := a.textConfigForRequest(r)
 	if len(textModelOverrides(cfg)) > 0 {
 		writeJSON(w, http.StatusOK, augmentModelListPayload(defaultModelListPayload(cfg), cfg))
 		return
