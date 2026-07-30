@@ -14,6 +14,8 @@ import (
 
 const upstreamStreamDrainTimeout = 15 * time.Second
 
+type upstreamStreamingRequestKey struct{}
+
 func upstreamStreamContext(parent context.Context, stream bool) (context.Context, func(), func()) {
 	return upstreamStreamContextWithDrainTimeout(parent, stream, upstreamStreamDrainTimeout)
 }
@@ -23,7 +25,8 @@ func upstreamStreamContextWithDrainTimeout(parent context.Context, stream bool, 
 		return parent, func() {}, func() {}
 	}
 
-	ctx, cancel := context.WithCancel(context.WithoutCancel(parent))
+	streamParent := context.WithValue(context.WithoutCancel(parent), upstreamStreamingRequestKey{}, true)
+	ctx, cancel := context.WithCancel(streamParent)
 	var mu sync.Mutex
 	preserve := false
 	released := false
@@ -74,6 +77,11 @@ func upstreamStreamContextWithDrainTimeout(parent context.Context, stream bool, 
 	return ctx, keepAfterHeaders, release
 }
 
+func upstreamStreamingRequest(ctx context.Context) bool {
+	stream, _ := ctx.Value(upstreamStreamingRequestKey{}).(bool)
+	return stream
+}
+
 func (a *app) forwardJSON(ctx context.Context, ep endpoint, method, requestURI string, body []byte, originalHeader http.Header) (*http.Response, error) {
 	if method == "" {
 		method = http.MethodPost
@@ -112,9 +120,13 @@ func (a *app) forwardRaw(ctx context.Context, ep endpoint, method, requestURI st
 	if shouldRecordProviderFailure(ctx, resp, err) {
 		router.recordFailure(candidate, providerAttemptError(resp, err))
 	} else if err == nil && resp != nil {
-		if resp.Body == nil || resp.Body == http.NoBody || resp.ContentLength == 0 {
+		emptyBody := resp.Body == nil || resp.Body == http.NoBody || resp.ContentLength == 0
+		if emptyBody && !upstreamStreamingRequest(ctx) {
 			router.recordSuccess(candidate)
 		} else {
+			if resp.Body == nil {
+				resp.Body = http.NoBody
+			}
 			resp.Body = newProviderObservedBody(ctx, resp.Body, router, candidate)
 		}
 	} else {

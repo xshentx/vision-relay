@@ -3,24 +3,28 @@ package server
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 )
 
-const responsesFallbackHeader = "X-Vision-Relay-Stream-Fallback"
-
 func isEventStreamResponse(resp *http.Response) bool {
 	if resp == nil {
 		return false
 	}
+	beginProtocolValidation(resp)
 	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
 	if strings.Contains(contentType, "text/event-stream") {
+		acceptProtocolValidation(resp)
 		return true
 	}
-	return responseStartsWithSSE(resp)
+	if responseStartsWithSSE(resp) {
+		acceptProtocolValidation(resp)
+		return true
+	}
+	return false
 }
 
 // responseStartsWithSSE recognizes a stream even when a compatible gateway
@@ -80,47 +84,35 @@ func isSuccessfulResponse(resp *http.Response) bool {
 	return resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
-// shouldRetryResponseSynchronously is deliberately narrow. Authentication,
-// rate-limit, and transient server failures are returned as-is; only statuses
-// commonly used for an unsupported streaming request are retried.
-func shouldRetryResponseSynchronously(resp *http.Response) bool {
-	if resp == nil {
-		return true
+func writeUnexpectedStreamingResponse(w http.ResponseWriter, resp *http.Response, expected string) {
+	contentType := ""
+	if resp != nil {
+		contentType = strings.TrimSpace(resp.Header.Get("Content-Type"))
 	}
-	switch resp.StatusCode {
-	case http.StatusBadRequest,
-		http.StatusNotFound,
-		http.StatusMethodNotAllowed,
-		http.StatusNotAcceptable,
-		http.StatusUnsupportedMediaType,
-		http.StatusUnprocessableEntity,
-		http.StatusNotImplemented,
-		http.StatusHTTPVersionNotSupported:
-		return true
-	default:
-		return false
+	if contentType == "" {
+		contentType = "missing"
 	}
-}
-
-func synchronousPayload(payload map[string]any) []byte {
-	payload["stream"] = false
-	delete(payload, "stream_options")
-	body, _ := json.Marshal(payload)
-	return body
-}
-
-func synchronousRequestHeaders(original http.Header) http.Header {
-	header := original.Clone()
-	header.Set("Accept", "application/json")
-	return header
+	protocolErr := fmt.Errorf("upstream returned a non-streaming response for a streaming request: expected %s, got Content-Type %q", expected, contentType)
+	if resp != nil && resp.Body != nil {
+		if reporter, ok := resp.Body.(providerProtocolObserver); ok {
+			reporter.reportProviderFailure(protocolErr)
+		}
+		_ = resp.Body.Close()
+	}
+	writeError(w, http.StatusBadGateway, protocolErr)
 }
 
 func isNDJSONResponse(resp *http.Response) bool {
 	if resp == nil {
 		return false
 	}
+	beginProtocolValidation(resp)
 	contentType := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
-	return strings.Contains(contentType, "ndjson") || strings.Contains(contentType, "json-seq")
+	valid := strings.Contains(contentType, "ndjson") || strings.Contains(contentType, "json-seq")
+	if valid {
+		acceptProtocolValidation(resp)
+	}
+	return valid
 }
 
 func ollamaStreamRequested(payload map[string]any) bool {
@@ -148,24 +140,13 @@ func geminiSSERequested(requestURI string, header http.Header) bool {
 	return strings.Contains(strings.ToLower(header.Get("Accept")), "text/event-stream")
 }
 
-func geminiSynchronousRequestURI(requestURI string) string {
-	parsed, err := url.Parse(requestURI)
-	if err != nil {
-		return strings.Replace(requestURI, ":streamGenerateContent", ":generateContent", 1)
-	}
-	parsed.Path = strings.TrimSuffix(parsed.Path, ":streamGenerateContent") + ":generateContent"
-	query := parsed.Query()
-	query.Del("alt")
-	parsed.RawQuery = query.Encode()
-	return parsed.String()
-}
-
 // responseStartsWithJSONArray checks only the first non-space byte and restores
 // the response body, so a genuine Gemini JSON-array stream is not buffered.
 func responseStartsWithJSONArray(resp *http.Response) bool {
 	if resp == nil || resp.Body == nil {
 		return false
 	}
+	beginProtocolValidation(resp)
 	reader := bufio.NewReader(resp.Body)
 	prefix := make([]byte, 0, 16)
 	for len(prefix) < 4096 {
@@ -179,13 +160,59 @@ func responseStartsWithJSONArray(resp *http.Response) bool {
 			continue
 		}
 		resp.Body = &readCloser{Reader: io.MultiReader(bytes.NewReader(prefix), reader), Closer: resp.Body}
-		return value == '['
+		valid := value == '['
+		if valid {
+			acceptProtocolValidation(resp)
+		}
+		return valid
 	}
 	resp.Body = &readCloser{Reader: io.MultiReader(bytes.NewReader(prefix), reader), Closer: resp.Body}
 	return false
 }
 
+type providerProtocolObserver interface {
+	beginProtocolValidation()
+	acceptProtocolValidation()
+	reportProviderFailure(error)
+}
+
+func beginProtocolValidation(resp *http.Response) {
+	if !isSuccessfulResponse(resp) || resp.Body == nil {
+		return
+	}
+	if observer, ok := resp.Body.(providerProtocolObserver); ok {
+		observer.beginProtocolValidation()
+	}
+}
+
+func acceptProtocolValidation(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	if observer, ok := resp.Body.(providerProtocolObserver); ok {
+		observer.acceptProtocolValidation()
+	}
+}
+
 type readCloser struct {
 	io.Reader
 	io.Closer
+}
+
+func (r *readCloser) reportProviderFailure(err error) {
+	if observer, ok := r.Closer.(providerProtocolObserver); ok {
+		observer.reportProviderFailure(err)
+	}
+}
+
+func (r *readCloser) beginProtocolValidation() {
+	if observer, ok := r.Closer.(providerProtocolObserver); ok {
+		observer.beginProtocolValidation()
+	}
+}
+
+func (r *readCloser) acceptProtocolValidation() {
+	if observer, ok := r.Closer.(providerProtocolObserver); ok {
+		observer.acceptProtocolValidation()
+	}
 }

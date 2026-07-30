@@ -129,7 +129,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.2.6 --arch arm64
+bash ./tools/build-macos.sh --version v2.2.7 --arch arm64
 ```
 
 支持的架构参数：
@@ -147,7 +147,7 @@ bash ./tools/build-macos.sh --version v2.2.6 --arch arm64
 Windows 无签名发布构建（当前 GitHub 标签工作流使用此模式）：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.2.6
+.\tools\build-windows.ps1 -Version v2.2.7
 ```
 
 ### Windows Authenticode 签名
@@ -159,7 +159,7 @@ Windows 无签名发布构建（当前 GitHub 标签工作流使用此模式）�
 ```powershell
 .\tools\build-windows.ps1 `
   -Output dist\vision-relay.exe `
-  -Version v2.2.6 `
+  -Version v2.2.7 `
   -SigningCertificatePath C:\secure\vision-relay-code-signing.pfx `
   -SigningCertificatePassword '<PFX 密码>' `
   -RequireSignature
@@ -181,7 +181,7 @@ $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter s
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.2.6 --arch universal
+bash ./tools/build-macos.sh --version v2.2.7 --arch universal
 ```
 
 生成的 Release 附件：
@@ -196,14 +196,14 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.2.6
-git push origin v2.2.6
+git tag v2.2.7
+git push origin v2.2.7
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.2.6
+Vision Relay v2.2.7
 ```
 
 附件上传时应包含对应平台的程序包和同名 `.sha256` 文件。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
@@ -407,7 +407,7 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 发布构建时请传入与 Git tag 相同的版本号：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.2.6
+.\tools\build-windows.ps1 -Version v2.2.7
 ```
 
 构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时必须同时上传这两个文件。当前 Windows Release 为无签名构建，SHA-256 仅用于验证下载完整性，首次运行可能出现 Windows SmartScreen 或未知发布者提示；代码签名与证书信誉仍是降低此类提示和安全软件误报的关键。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。

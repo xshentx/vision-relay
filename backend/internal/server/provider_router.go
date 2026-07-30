@@ -165,11 +165,14 @@ type providerRuntimeState struct {
 // response body has actually completed. Receiving a 2xx response header alone
 // is not sufficient for streaming and other long responses.
 type providerObservedBody struct {
-	ctx       context.Context
-	body      io.ReadCloser
-	router    *providerRouter
-	candidate providerRouteCandidate
-	once      sync.Once
+	ctx               context.Context
+	body              io.ReadCloser
+	router            *providerRouter
+	candidate         providerRouteCandidate
+	once              sync.Once
+	validationMu      sync.Mutex
+	validationPending bool
+	pendingEOF        bool
 }
 
 func newProviderObservedBody(ctx context.Context, body io.ReadCloser, router *providerRouter, candidate providerRouteCandidate) io.ReadCloser {
@@ -189,15 +192,49 @@ func (b *providerObservedBody) Read(p []byte) (int, error) {
 func (b *providerObservedBody) Close() error {
 	err := b.body.Close()
 	b.once.Do(func() {
-		// A caller may intentionally stop consuming a response (for example before
-		// a protocol fallback). Do not call that an upstream success or failure, but
+		// A caller may intentionally stop consuming a response before reading it to EOF.
+		// Do not call that an upstream success or failure, but
 		// make sure a half-open probe is not left permanently in flight.
 		b.router.releaseHalfOpenProbe(b.candidate)
 	})
 	return err
 }
 
+func (b *providerObservedBody) reportProviderFailure(err error) {
+	b.validationMu.Lock()
+	b.validationPending = false
+	b.pendingEOF = false
+	b.validationMu.Unlock()
+	b.finish(err)
+}
+
+func (b *providerObservedBody) beginProtocolValidation() {
+	b.validationMu.Lock()
+	b.validationPending = true
+	b.validationMu.Unlock()
+}
+
+func (b *providerObservedBody) acceptProtocolValidation() {
+	b.validationMu.Lock()
+	pendingEOF := b.validationPending && b.pendingEOF
+	b.validationPending = false
+	b.pendingEOF = false
+	b.validationMu.Unlock()
+	if pendingEOF {
+		b.finish(nil)
+	}
+}
+
 func (b *providerObservedBody) finish(readErr error) {
+	if readErr == nil {
+		b.validationMu.Lock()
+		if b.validationPending {
+			b.pendingEOF = true
+			b.validationMu.Unlock()
+			return
+		}
+		b.validationMu.Unlock()
+	}
 	b.once.Do(func() {
 		if readErr == nil {
 			b.router.recordSuccess(b.candidate)

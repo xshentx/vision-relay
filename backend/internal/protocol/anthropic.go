@@ -222,10 +222,6 @@ func WriteAnthropicStreamFromChatCompletion(w http.ResponseWriter, resp *http.Re
 		writeAnthropicSSE(w, nil, "error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": trimBody(body)}})
 		return
 	}
-	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "application/json") {
-		writeAnthropicSyntheticStreamFromChatCompletion(w, resp)
-		return
-	}
 	copyHeader(w.Header(), resp.Header)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -447,98 +443,6 @@ func WriteAnthropicStreamFromChatCompletion(w http.ResponseWriter, resp *http.Re
 	writeAnthropicSSE(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
 }
 
-// WriteAnthropicStreamFromSyncResponse adapts a completed native Anthropic
-// message to Anthropic SSE for a streaming client.
-func WriteAnthropicStreamFromSyncResponse(w http.ResponseWriter, resp *http.Response) {
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		copyHeader(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		_, _ = w.Write(body)
-		return
-	}
-	var message map[string]any
-	if err := json.Unmarshal(body, &message); err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Errorf("invalid upstream anthropic response: %w", err))
-		return
-	}
-	writeAnthropicSyntheticStream(w, resp.Header, message)
-}
-
-// WriteAnthropicStreamFromSyncChatCompletion adapts a completed Chat
-// Completions response to Anthropic SSE.
-func WriteAnthropicStreamFromSyncChatCompletion(w http.ResponseWriter, resp *http.Response) {
-	defer resp.Body.Close()
-	writeAnthropicSyntheticStreamFromChatCompletion(w, resp)
-}
-
-func writeAnthropicSyntheticStreamFromChatCompletion(w http.ResponseWriter, resp *http.Response) {
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	var chat map[string]any
-	if err := json.Unmarshal(body, &chat); err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	writeAnthropicSyntheticStream(w, resp.Header, chatCompletionToAnthropic(chat))
-}
-
-func writeAnthropicSyntheticStream(w http.ResponseWriter, header http.Header, message map[string]any) {
-	copyHeader(w.Header(), header)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.WriteHeader(http.StatusOK)
-	flusher, _ := w.(http.Flusher)
-
-	startedMessage := copyMap(message)
-	startedMessage["content"] = []any{}
-	startedMessage["stop_reason"] = nil
-	startedMessage["usage"] = map[string]any{"input_tokens": int64(0), "output_tokens": int64(0)}
-	writeAnthropicSSE(w, flusher, "message_start", map[string]any{"type": "message_start", "message": startedMessage})
-
-	content, _ := message["content"].([]any)
-	for index, value := range content {
-		block, _ := value.(map[string]any)
-		switch firstString(block["type"]) {
-		case "text":
-			writeAnthropicSSE(w, flusher, "content_block_start", map[string]any{
-				"type": "content_block_start", "index": index,
-				"content_block": map[string]any{"type": "text", "text": ""},
-			})
-			writeAnthropicSSE(w, flusher, "content_block_delta", map[string]any{
-				"type": "content_block_delta", "index": index,
-				"delta": map[string]any{"type": "text_delta", "text": firstString(block["text"])},
-			})
-		case "tool_use":
-			writeAnthropicSSE(w, flusher, "content_block_start", map[string]any{
-				"type": "content_block_start", "index": index,
-				"content_block": map[string]any{"type": "tool_use", "id": block["id"], "name": block["name"], "input": map[string]any{}},
-			})
-			input, _ := json.Marshal(block["input"])
-			writeAnthropicSSE(w, flusher, "content_block_delta", map[string]any{
-				"type": "content_block_delta", "index": index,
-				"delta": map[string]any{"type": "input_json_delta", "partial_json": string(input)},
-			})
-		}
-		writeAnthropicSSE(w, flusher, "content_block_stop", map[string]any{"type": "content_block_stop", "index": index})
-	}
-
-	writeAnthropicSSE(w, flusher, "message_delta", map[string]any{
-		"type":  "message_delta",
-		"delta": map[string]any{"stop_reason": message["stop_reason"], "stop_sequence": nil},
-		"usage": message["usage"],
-	})
-	writeAnthropicSSE(w, flusher, "message_stop", map[string]any{"type": "message_stop"})
-}
-
 func chatCompletionToAnthropic(chat map[string]any) map[string]any {
 	id := firstString(chat["id"], "msg_"+strconv.FormatInt(time.Now().UnixNano(), 36))
 	content := chatCompletionToAnthropicContent(chat)
@@ -672,12 +576,4 @@ func writeAnthropicSSE(w http.ResponseWriter, flusher http.Flusher, event string
 	if flusher != nil {
 		flusher.Flush()
 	}
-}
-
-func copyMap(src map[string]any) map[string]any {
-	dst := make(map[string]any, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }

@@ -184,28 +184,3 @@ func TestWriteAnthropicStreamRejectsIncompleteUpstream(t *testing.T) {
 		t.Fatalf("incomplete stream was reported as successful:\n%s", body)
 	}
 }
-
-func TestWriteAnthropicStreamConvertsJSONFallback(t *testing.T) {
-	upstream := `{"id":"chatcmpl-json","model":"test-model","choices":[{"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}`
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(upstream)),
-	}
-	recorder := httptest.NewRecorder()
-
-	WriteAnthropicStreamFromChatCompletion(recorder, resp)
-
-	body := recorder.Body.String()
-	for _, expected := range []string{
-		"event: message_start",
-		`"text":"hello"`,
-		`"input_tokens":5`,
-		`"output_tokens":2`,
-		"event: message_stop",
-	} {
-		if !strings.Contains(body, expected) {
-			t.Fatalf("synthetic stream is missing %q:\n%s", expected, body)
-		}
-	}
-}
