@@ -41,6 +41,13 @@ const settingsLocalAPIEnabled = document.querySelector("#settingsLocalAPIEnabled
 const localAPIWarning = document.querySelector("#localAPIWarning");
 const settingsAPIHost = document.querySelector("#settingsAPIHost");
 const settingsAPIPort = document.querySelector("#settingsAPIPort");
+const visionCacheTTLDays = document.querySelector("#visionCacheTTLDays");
+const visionCacheMaxEntries = document.querySelector("#visionCacheMaxEntries");
+const providerHealthCheckEnabled = document.querySelector("#providerHealthCheckEnabled");
+const providerHealthCheckIntervalMinutes = document.querySelector("#providerHealthCheckIntervalMinutes");
+const providerFailoverEnabled = document.querySelector("#providerFailoverEnabled");
+const visionCacheState = document.querySelector("#visionCacheState");
+const clearVisionCache = document.querySelector("#clearVisionCache");
 const saveProgramSettings = document.querySelector("#saveProgramSettings");
 const detectClientPaths = document.querySelector("#detectClientPaths");
 const clientPathDetectionState = document.querySelector("#clientPathDetectionState");
@@ -195,6 +202,7 @@ let legacyTextRouting = false;
 let activeProviderClientTab = "codex";
 let providerCircuitStatuses = new Map();
 let providerCircuitStatusTimer = 0;
+let providerFailoverProfiles = {};
 let visionProfiles = [];
 let activeVisionProfileId = "";
 let visionCapabilityEnabled = true;
@@ -204,6 +212,11 @@ let clientRouteEnabled = normalizeClientRoutes({});
 let programSettings = {
   addr: "127.0.0.1:8787",
   localAPIEnabled: true,
+  visionCacheTTLDays: 30,
+  visionCacheMaxEntries: 512,
+  providerHealthCheckEnabled: true,
+  providerHealthCheckIntervalMinutes: 5,
+  providerFailoverEnabled: false,
   autoCheckUpdates: true,
   openWindow: true,
   openBrowser: false,
@@ -1419,6 +1432,14 @@ function syncProgramSettingsInputs() {
   syncLocalAPIWarning();
   if (settingsAPIHost) settingsAPIHost.value = address.host;
   if (settingsAPIPort) settingsAPIPort.value = address.port || "8787";
+  if (visionCacheTTLDays) visionCacheTTLDays.value = String(programSettings.visionCacheTTLDays || 30);
+  if (visionCacheMaxEntries) visionCacheMaxEntries.value = String(programSettings.visionCacheMaxEntries || 512);
+  if (providerHealthCheckEnabled) providerHealthCheckEnabled.checked = programSettings.providerHealthCheckEnabled !== false;
+  if (providerFailoverEnabled) providerFailoverEnabled.checked = programSettings.providerFailoverEnabled === true;
+  if (providerHealthCheckIntervalMinutes) {
+    providerHealthCheckIntervalMinutes.value = String(programSettings.providerHealthCheckIntervalMinutes || 5);
+    providerHealthCheckIntervalMinutes.disabled = programSettings.providerHealthCheckEnabled === false;
+  }
   Object.entries(clientConfigPathInputs).forEach(([client, input]) => {
     if (input) input.value = programSettings.clientConfigPaths[client] || "";
   });
@@ -1444,6 +1465,16 @@ function collectClientBehavior(inputs) {
   return Object.fromEntries(Object.entries(inputs).map(([client, input]) => [client, input?.checked === true]));
 }
 
+async function refreshVisionCacheStats() {
+  if (!visionCacheState) return;
+  const res = await fetch("/api/vision-cache", {cache: "no-store"});
+  if (!res.ok) throw new Error(await readErrorMessage(res));
+  const payload = await res.json();
+  const entries = Number(payload?.entries || 0);
+  visionCacheState.textContent = `当前 ${entries} 条`;
+  visionCacheState.title = payload?.persistent === false ? "当前仅使用内存缓存" : "缓存已持久化到 SQLite";
+}
+
 async function loadConfig() {
   const res = await fetch("/api/config");
   if (!res.ok) throw new Error(`config ${res.status}`);
@@ -1452,6 +1483,13 @@ async function loadConfig() {
   programSettings = {
     addr: cfg.addr || "127.0.0.1:8787",
     localAPIEnabled: cfg.local_api_enabled !== false,
+    visionCacheTTLDays: Number.isInteger(Number(cfg.vision_cache_ttl_hours)) && Number(cfg.vision_cache_ttl_hours) > 0 ? Math.max(1, Math.ceil(Number(cfg.vision_cache_ttl_hours) / 24)) : 30,
+    visionCacheMaxEntries: Number.isInteger(Number(cfg.vision_cache_max_entries)) && Number(cfg.vision_cache_max_entries) > 0 ? Number(cfg.vision_cache_max_entries) : 512,
+    providerHealthCheckEnabled: cfg.provider_health_check_enabled !== false,
+    providerHealthCheckIntervalMinutes: Number.isInteger(Number(cfg.provider_health_check_interval_seconds)) && Number(cfg.provider_health_check_interval_seconds) > 0
+      ? Math.max(1, Math.ceil(Number(cfg.provider_health_check_interval_seconds) / 60))
+      : 5,
+    providerFailoverEnabled: cfg.provider_failover_enabled === true,
     autoCheckUpdates: cfg.auto_check_updates !== false,
     openWindow: cfg.open_window !== false,
     openBrowser: cfg.open_browser === true,
@@ -1463,6 +1501,7 @@ async function loadConfig() {
   };
   renderRelayEndpoints();
   syncProgramSettingsInputs();
+  refreshVisionCacheStats().catch(() => {});
   clientRouteEnabled = normalizeClientRoutes(cfg.client_route_enabled);
   syncClientRouteInputs();
   visionCapabilityEnabled = cfg.vision_enabled !== false;
@@ -1481,6 +1520,7 @@ async function loadConfig() {
     activeTextProfileId
   );
   legacyTextRouting = cfg.legacy_text_routing === true;
+  providerFailoverProfiles = normalizeProviderFailoverProfiles(cfg.provider_failover_profiles, textProfiles);
   visionProfiles = normalizeVisionProfiles(cfg.vision_model_profiles || migrated.visionProfiles);
   activeVisionProfileId = cfg.active_vision_profile_id || migrated.activeVisionProfileId || visionProfiles[0].id;
   if (!visionProfiles.some((profile) => profile.id === activeVisionProfileId)) {
@@ -1753,6 +1793,12 @@ async function persistConfig(successMessage = "配置已自动保存") {
   const data = {};
   data.addr = programSettings.addr;
   data.local_api_enabled = programSettings.localAPIEnabled;
+  data.vision_cache_ttl_hours = programSettings.visionCacheTTLDays * 24;
+  data.vision_cache_max_entries = programSettings.visionCacheMaxEntries;
+  data.provider_health_check_enabled = programSettings.providerHealthCheckEnabled;
+  data.provider_health_check_interval_seconds = programSettings.providerHealthCheckIntervalMinutes * 60;
+  data.provider_failover_enabled = programSettings.providerFailoverEnabled === true;
+  data.provider_failover_profiles = normalizeProviderFailoverProfiles(providerFailoverProfiles, textProfiles);
   data.auto_check_updates = programSettings.autoCheckUpdates;
   data.client_config_paths = normalizeClientConfigPaths(programSettings.clientConfigPaths);
   data.client_program_paths = normalizeClientProgramPaths(programSettings.clientProgramPaths);
@@ -1806,6 +1852,12 @@ settingsLocalAPIEnabled?.addEventListener("change", () => {
   }
 });
 
+providerHealthCheckEnabled?.addEventListener("change", () => {
+  if (providerHealthCheckIntervalMinutes) {
+    providerHealthCheckIntervalMinutes.disabled = !providerHealthCheckEnabled.checked;
+  }
+});
+
 saveProgramSettings?.addEventListener("click", async () => {
   const port = Number(settingsAPIPort?.value);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -1813,12 +1865,36 @@ saveProgramSettings?.addEventListener("click", async () => {
     settingsAPIPort?.focus();
     return;
   }
+  const cacheTTLDays = Number(visionCacheTTLDays?.value);
+  if (!Number.isInteger(cacheTTLDays) || cacheTTLDays < 1 || cacheTTLDays > 3650) {
+    showToast("缓存保留时间必须是 1 到 3650 之间的整数天", "error");
+    visionCacheTTLDays?.focus();
+    return;
+  }
+  const cacheMaxEntries = Number(visionCacheMaxEntries?.value);
+  if (!Number.isInteger(cacheMaxEntries) || cacheMaxEntries < 1 || cacheMaxEntries > 10000) {
+    showToast("最大缓存条数必须是 1 到 10000 之间的整数", "error");
+    visionCacheMaxEntries?.focus();
+    return;
+  }
+  const healthCheckIntervalMinutes = Number(providerHealthCheckIntervalMinutes?.value);
+  if (!Number.isInteger(healthCheckIntervalMinutes) || healthCheckIntervalMinutes < 1 || healthCheckIntervalMinutes > 1440) {
+    showToast("\u5065\u5eb7\u68c0\u67e5\u95f4\u9694\u5fc5\u987b\u662f 1 \u5230 1440 \u4e4b\u95f4\u7684\u6574\u6570\u5206\u949f", "error");
+    providerHealthCheckIntervalMinutes?.focus();
+    return;
+  }
+  const previousProgramSettings = programSettings;
   const previousAddress = programSettings.addr;
   const previousLocalAPIEnabled = programSettings.localAPIEnabled;
   programSettings = {
     ...programSettings,
     addr: joinListenAddress(settingsAPIHost?.value, port),
     localAPIEnabled: settingsLocalAPIEnabled?.checked !== false,
+    visionCacheTTLDays: cacheTTLDays,
+    visionCacheMaxEntries: cacheMaxEntries,
+    providerHealthCheckEnabled: providerHealthCheckEnabled?.checked !== false,
+    providerHealthCheckIntervalMinutes: healthCheckIntervalMinutes,
+    providerFailoverEnabled: providerFailoverEnabled?.checked === true,
     clientConfigPaths: collectClientPaths(clientConfigPathInputs),
     clientProgramPaths: collectClientPaths(clientProgramPathInputs),
     clientAutoRestart: collectClientBehavior(clientAutoRestartInputs),
@@ -1831,6 +1907,8 @@ saveProgramSettings?.addEventListener("click", async () => {
   try {
     await persistConfig("");
     settingsSaved = true;
+    await refreshVisionCacheStats();
+    renderTextProfiles();
     const updatedClients = localAPIModeChanged ? await applyEnabledClientRoutes() : [];
     syncProgramSettingsInputs();
     renderRelayEndpoints();
@@ -1857,12 +1935,34 @@ saveProgramSettings?.addEventListener("click", async () => {
     setStatus(restartRequired ? "\u8bbe\u7f6e\u5df2\u4fdd\u5b58\uff0c\u7b49\u5f85\u91cd\u542f\u751f\u6548" : "\u7a0b\u5e8f\u8bbe\u7f6e\u5df2\u4fdd\u5b58");
   } catch (err) {
     console.error(err);
-    const prefix = settingsSaved && localAPIModeChanged
-      ? "设置已保存，但同步客户端路由失败"
+    if (!settingsSaved) {
+      programSettings = previousProgramSettings;
+      syncProgramSettingsInputs();
+      renderTextProfiles();
+    }
+    const prefix = settingsSaved
+      ? (localAPIModeChanged ? "设置已保存，但后续同步未完成" : "设置已保存，但刷新页面状态失败")
       : "保存程序设置失败";
     showToast(`${prefix}：${err.message || err}`, "error");
   } finally {
     saveProgramSettings.disabled = false;
+  }
+});
+
+clearVisionCache?.addEventListener("click", async () => {
+  if (!window.confirm("确定清理全部视觉识别缓存吗？清理后，历史图片再次出现时需要重新调用视觉模型。")) return;
+  clearVisionCache.disabled = true;
+  try {
+    const res = await fetch("/api/vision-cache", {method: "DELETE"});
+    if (!res.ok) throw new Error(await readErrorMessage(res));
+    const payload = await res.json();
+    await refreshVisionCacheStats();
+    showToast(`已清理 ${Number(payload?.deleted || 0)} 条视觉识别缓存`, "success");
+  } catch (err) {
+    console.error(err);
+    showToast(`清理视觉识别缓存失败：${err.message || err}`, "error");
+  } finally {
+    clearVisionCache.disabled = false;
   }
 });
 
@@ -2696,6 +2796,61 @@ function providerCircuitStatusKey(group, profileId) {
   return `${group || ""}:${profileId || ""}`;
 }
 
+function normalizeProviderFailoverProfiles(value, profiles = textProfiles) {
+  const source = value && typeof value === "object" ? value : {};
+  const result = {};
+  textProfileClientGroups.forEach((group) => {
+    const valid = new Set(profiles.filter((profile) => profile.client === group.id).map((profile) => profile.id));
+    const seen = new Set();
+    result[group.id] = (Array.isArray(source[group.id]) ? source[group.id] : []).map((id) => String(id || "").trim()).filter((id) => {
+      if (!id || seen.has(id) || !valid.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  });
+  return result;
+}
+
+function syncProviderFailoverOrderToProfiles() {
+  const normalized = normalizeProviderFailoverProfiles(providerFailoverProfiles, textProfiles);
+  textProfileClientGroups.forEach((group) => {
+    const joined = new Set(normalized[group.id]);
+    normalized[group.id] = textProfiles.filter((profile) => profile.client === group.id && joined.has(profile.id)).map((profile) => profile.id);
+  });
+  providerFailoverProfiles = normalized;
+}
+
+function providerFailoverRank(profile) {
+  const queue = providerFailoverProfiles[profile?.client] || [];
+  const index = queue.indexOf(profile?.id);
+  return index >= 0 ? index + 1 : 0;
+}
+
+function providerFailoverBadge(profile) {
+  const rank = providerFailoverRank(profile);
+  return rank > 0 ? `<span class="provider-failover-badge" title="\u6545\u969c\u8f6c\u79fb\u4f18\u5148\u7ea7">P${rank}</span>` : "";
+}
+
+async function toggleProviderFailoverProfile(profile) {
+  const previous = normalizeProviderFailoverProfiles(providerFailoverProfiles, textProfiles);
+  providerFailoverProfiles = normalizeProviderFailoverProfiles(providerFailoverProfiles, textProfiles);
+  const queue = providerFailoverProfiles[profile.client] || (providerFailoverProfiles[profile.client] = []);
+  const index = queue.indexOf(profile.id);
+  const joined = index < 0;
+  if (joined) queue.push(profile.id);
+  else queue.splice(index, 1);
+  renderTextProfiles();
+  try {
+    await persistConfig(joined
+      ? `\u5df2\u52a0\u5165\u6545\u969c\u8f6c\u79fb\uff1a${profile.name || "\u672a\u547d\u540d"}`
+      : `\u5df2\u79fb\u51fa\u6545\u969c\u8f6c\u79fb\uff1a${profile.name || "\u672a\u547d\u540d"}`);
+  } catch (err) {
+    providerFailoverProfiles = previous;
+    renderTextProfiles();
+    throw err;
+  }
+}
+
 function providerCircuitPresentation(state) {
   switch (state) {
     case "open":
@@ -2745,6 +2900,7 @@ function startProviderCircuitStatusPolling() {
 }
 
 function renderTextProfiles() {
+  providerFailoverProfiles = normalizeProviderFailoverProfiles(providerFailoverProfiles, textProfiles);
   textProfileList.innerHTML = "";
   const group = textProfileClientGroups.find((item) => item.id === activeProviderClientTab) || textProfileClientGroups[0];
   activeProviderClientTab = group.id;
@@ -2838,16 +2994,25 @@ function renderProfileList(container, profiles, activeId, kind) {
         <div>
           <strong>${escapeHTML(profile.name || "未命名")}</strong>
           <span>${escapeHTML(profileSummary(profile, kind))}</span>
-          ${kind === "text" ? providerCircuitBadge(profile) : ""}
+          ${kind === "text" ? `${providerCircuitBadge(profile)}${programSettings.providerFailoverEnabled === true ? providerFailoverBadge(profile) : ""}` : ""}
         </div>
       </div>
       <div class="profile-actions">
+        ${kind === "text" && programSettings.providerFailoverEnabled === true ? `<button class="secondary small-action profile-failover${providerFailoverRank(profile) > 0 ? " is-joined" : ""}" type="button" data-action="failover" title="${providerFailoverRank(profile) > 0 ? "\u70b9\u51fb\u79fb\u51fa\u6545\u969c\u8f6c\u79fb" : "\u52a0\u5165\u540e\u624d\u53c2\u4e0e\u6545\u969c\u8f6c\u79fb"}">${providerFailoverRank(profile) > 0 ? "\u79fb\u51fa\u6545\u969c\u8f6c\u79fb" : "\u52a0\u5165\u6545\u969c\u8f6c\u79fb"}</button>` : ""}
         ${kind === "text" ? '<button class="secondary small-action profile-test" type="button" data-action="test">\u6a21\u578b\u6d4b\u8bd5</button>' : ""}
         <button class="secondary small-action profile-switch" type="button" data-action="switch"${profile.id === activeId ? " disabled" : ""}>使用</button>
         <button class="secondary small-action" type="button" data-action="edit">编辑</button>
         <button class="danger small-action" type="button" data-action="delete">删除</button>
       </div>
     `;
+    row.querySelector('[data-action="failover"]')?.addEventListener("click", (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      toggleProviderFailoverProfile(profile).catch((err) => {
+        console.error(err);
+        showToast(`\u4fdd\u5b58\u6545\u969c\u8f6c\u79fb\u961f\u5217\u5931\u8d25\uff1a${err.message || err}`, "error");
+      });
+    });
     row.querySelector('[data-action="test"]')?.addEventListener("click", () => {
       openModelTestDrawer(profile);
     });
@@ -2948,6 +3113,7 @@ function reorderProfiles(kind, draggedId, targetId, insertAfter) {
   profiles.splice(targetIndex + (insertAfter ? 1 : 0), 0, draggedProfile);
   if (profiles.map((profile) => profile.id).join("\n") === previousOrder) return;
   if (kind === "text") {
+    syncProviderFailoverOrderToProfiles();
     renderTextProfiles();
   } else {
     renderVisionProfiles();
@@ -2970,6 +3136,7 @@ async function deleteProfile(kind, id) {
   const previousTextSelections = isText ? {...activeTextProfileByClient} : null;
   profiles.splice(index, 1);
   if (isText) {
+    providerFailoverProfiles = normalizeProviderFailoverProfiles(providerFailoverProfiles, profiles);
     if (activeTextProfileId === id) {
       activeTextProfileId = profiles[Math.max(0, index - 1)]?.id || profiles[0].id;
       applyTextProfile(activeTextProfileId);

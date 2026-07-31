@@ -20,9 +20,10 @@ func acquireDesktopInstance(activation chan<- struct{}) (bool, func(), error) {
 }
 
 // desktopInstanceObjectNames uses the global kernel-object namespace so the
-// same Windows user cannot start separate primaries through Fast User
-// Switching or RDP sessions. Including the user SID keeps independent Windows
-// accounts isolated from one another.
+// relay backend and its database remain single-instance across Fast User
+// Switching and RDP sessions. If the owning session's HWND is inaccessible,
+// duplicate launches fall back to the management page in the current session.
+// Including the user SID keeps independent Windows accounts isolated.
 func desktopInstanceObjectNames() (string, string, error) {
 	tokenUser, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
@@ -114,15 +115,15 @@ func signalDesktopInstance(activationName string) error {
 		event, openErr := windows.OpenEvent(windows.EVENT_MODIFY_STATE, false, activationNamePtr)
 		if openErr == nil {
 			defer windows.CloseHandle(event)
+
+			// Try from the newly launched process first because it is closest to
+			// the user's launch gesture. The event remains necessary when the
+			// primary is reopening a closed window.
+			focused := focusClientWindow()
 			if err := windows.SetEvent(event); err != nil {
 				return fmt.Errorf("signal existing instance: %w", err)
 			}
-			// The newly launched process owns the user activation permission, so it
-			// has a better chance of passing Windows foreground-lock restrictions
-			// than the already-running background process. The event remains
-			// necessary when the primary currently has no window to focus.
-			focusClientWindow()
-			return nil
+			return finishDesktopInstanceActivation(focused, focusClientWindow, time.Second, openDesktopManagementInCurrentSession)
 		}
 		lastErr = openErr
 		if time.Now().After(deadline) {
@@ -130,4 +131,36 @@ func signalDesktopInstance(activationName string) error {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+}
+
+func finishDesktopInstanceActivation(alreadyFocused bool, focus func() bool, timeout time.Duration, fallback func() error) error {
+	if alreadyFocused {
+		return nil
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if focus() {
+			return nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return fallback()
+}
+
+func openDesktopManagementInCurrentSession() error {
+	return openHealthyDesktopManagement(
+		localServerURL(defaultManagementAddr),
+		existingVisionRelayHealthy,
+		openBrowser,
+	)
+}
+
+func openHealthyDesktopManagement(managementURL string, healthy func(string) bool, open func(string) error) error {
+	if !healthy(managementURL) {
+		return nil
+	}
+	if err := open(managementURL); err != nil {
+		return fmt.Errorf("open management UI in current Windows session: %w", err)
+	}
+	return nil
 }

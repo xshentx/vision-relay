@@ -37,10 +37,12 @@ type providerRouteContextKey struct{}
 type providerRouteTraceContextKey struct{}
 
 type providerRouteRequest struct {
-	once       sync.Once
-	group      providerGroup
-	candidate  providerRouteCandidate
-	configured bool
+	once           sync.Once
+	group          providerGroup
+	candidates     []providerRouteCandidate
+	configured     bool
+	originalModel  string
+	containsImages bool
 }
 
 type providerRouteTrace struct {
@@ -83,15 +85,23 @@ func providerRouteRequestFromContext(ctx context.Context) *providerRouteRequest 
 	return route
 }
 
-func (a *app) resolveProviderRoute(ctx context.Context, primary endpoint) (providerRouteCandidate, bool) {
+func (a *app) resolveProviderRoutes(ctx context.Context, primary endpoint) ([]providerRouteCandidate, bool) {
 	route := providerRouteRequestFromContext(ctx)
 	if route == nil || !route.group.valid() {
-		return providerRouteCandidate{}, false
+		return nil, false
 	}
 	route.once.Do(func() {
-		route.candidate, route.configured = providerRouteCandidateForGroup(a.currentConfig(), route.group, primary)
+		route.candidates, route.configured = providerRouteCandidatesForGroup(a.currentConfig(), route.group, primary)
 	})
-	return route.candidate, route.configured
+	return route.candidates, route.configured
+}
+
+func (a *app) resolveProviderRoute(ctx context.Context, primary endpoint) (providerRouteCandidate, bool) {
+	candidates, configured := a.resolveProviderRoutes(ctx, primary)
+	if !configured || len(candidates) == 0 {
+		return providerRouteCandidate{}, false
+	}
+	return candidates[0], true
 }
 
 func providerRouteTraceFromContext(ctx context.Context) *providerRouteTrace {
@@ -159,6 +169,7 @@ type providerRuntimeState struct {
 	LastError               string
 	LastFailureAt           time.Time
 	LastSuccessAt           time.Time
+	LastHealthCheckAt       time.Time
 }
 
 // providerObservedBody delays a successful circuit result until the upstream
@@ -284,24 +295,51 @@ type providerRouteCandidate struct {
 	recoveryProbeModel      string
 }
 
-func providerRouteCandidateForGroup(cfg config, group providerGroup, primary endpoint) (providerRouteCandidate, bool) {
+func providerRouteCandidatesForGroup(cfg config, group providerGroup, primary endpoint) ([]providerRouteCandidate, bool) {
 	profiles := normalizeTextProfiles(cfg.TextModelProfiles)
-	active := normalizeActiveTextProfilesByClient(profiles, cfg.ActiveTextProfileByClient, cfg.ActiveTextProfileID)[string(group)]
+	byID := make(map[string]textModelProfile, len(profiles))
 	for _, profile := range profiles {
-		if profile.Client != string(group) || profile.ID != active {
-			continue
+		if profile.Client == string(group) {
+			byID[profile.ID] = profile
 		}
-		return providerRouteCandidateForProfile(cfg, group, profile), true
+	}
+
+	if providerFailoverEnabled(cfg) {
+		queue := normalizeProviderFailoverProfiles(profiles, cfg.ProviderFailoverProfiles)[string(group)]
+		if len(queue) > 0 {
+			candidates := make([]providerRouteCandidate, 0, len(queue))
+			for _, profileID := range queue {
+				if profile, ok := byID[profileID]; ok {
+					candidates = append(candidates, providerRouteCandidateForProfile(cfg, group, profile))
+				}
+			}
+			if len(candidates) > 0 {
+				return candidates, true
+			}
+		}
+	}
+
+	active := normalizeActiveTextProfilesByClient(profiles, cfg.ActiveTextProfileByClient, cfg.ActiveTextProfileID)[string(group)]
+	if profile, ok := byID[active]; ok {
+		return []providerRouteCandidate{providerRouteCandidateForProfile(cfg, group, profile)}, true
 	}
 	if cfg.legacyTextRouting || len(cfg.TextModelProfiles) == 0 {
 		// Preserve only genuine configurations that predate client groups. The
 		// runtime state remains namespaced by group, so failures never cross them.
-		return providerRouteCandidate{
+		return []providerRouteCandidate{{
 			Group: group, ProfileID: "legacy-" + string(group), Name: "\u5f53\u524d\u6587\u672c\u4e0a\u6e38",
 			Config: cfg, Endpoint: primary,
-		}, true
+		}}, true
 	}
-	return providerRouteCandidate{Group: group}, false
+	return nil, false
+}
+
+func providerRouteCandidateForGroup(cfg config, group providerGroup, primary endpoint) (providerRouteCandidate, bool) {
+	candidates, configured := providerRouteCandidatesForGroup(cfg, group, primary)
+	if !configured || len(candidates) == 0 {
+		return providerRouteCandidate{Group: group}, false
+	}
+	return candidates[0], true
 }
 
 func providerRouteCandidateForProfile(cfg config, group providerGroup, profile textModelProfile) providerRouteCandidate {
@@ -339,27 +377,55 @@ func (r *providerRouter) selectCandidate(candidate providerRouteCandidate) (prov
 	return candidate, true
 }
 
-// claimDueRecoveryProbes moves only due open circuits into half-open state.
-// Closed providers are intentionally excluded so periodic recovery checks never
-// create background traffic during normal operation.
+// claimDueRecoveryProbes preserves the original recovery-only selector for
+// callers and tests that explicitly need open-circuit probes.
 func (r *providerRouter) claimDueRecoveryProbes(cfg config) []providerRouteCandidate {
+	return r.claimDueProviderProbes(cfg, false)
+}
+
+// claimDueHealthProbes selects both due open-circuit recovery probes and, when
+// enabled, closed providers that have not had a completed request or model test
+// during the configured interval.
+func (r *providerRouter) claimDueHealthProbes(cfg config) []providerRouteCandidate {
+	return r.claimDueProviderProbes(cfg, true)
+}
+
+func (r *providerRouter) claimDueProviderProbes(cfg config, includeHealthy bool) []providerRouteCandidate {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	now := r.now()
+	interval := time.Duration(normalizeProviderHealthCheckIntervalSeconds(cfg.ProviderHealthCheckIntervalSeconds)) * time.Second
+	activeChecks := includeHealthy && providerHealthCheckEnabled(cfg)
 	var due []providerRouteCandidate
 	for _, candidate := range providerRecoveryCandidates(cfg) {
 		groupRuntime := r.groups[candidate.Group]
-		if groupRuntime == nil {
+		if groupRuntime == nil && !activeChecks {
 			continue
 		}
-		state := groupRuntime.Providers[candidate.ProfileID]
-		if state == nil || state.CircuitState != providerCircuitOpen || state.HalfOpenInFlight {
+		state := r.providerStateLocked(candidate.Group, candidate.ProfileID)
+		if state.HalfOpenInFlight {
 			continue
 		}
-		if !state.OpenUntil.IsZero() && now.Before(state.OpenUntil) {
-			continue
+
+		recovery := state.CircuitState == providerCircuitOpen
+		if recovery {
+			if !state.OpenUntil.IsZero() && now.Before(state.OpenUntil) {
+				continue
+			}
+		} else {
+			if state.CircuitState != providerCircuitClosed || !activeChecks {
+				continue
+			}
+			if state.LastHealthCheckAt.IsZero() {
+				state.LastHealthCheckAt = now
+				continue
+			}
+			if now.Sub(state.LastHealthCheckAt) < interval {
+				continue
+			}
 		}
+
 		model := strings.TrimSpace(state.LastRequestedModel)
 		if model == "" {
 			var err error
@@ -367,14 +433,16 @@ func (r *providerRouter) claimDueRecoveryProbes(cfg config) []providerRouteCandi
 			if err != nil {
 				// A provider without model mappings can still route arbitrary models.
 				// Wait until a routed request supplies one instead of treating a
-				// local inability to construct a probe as another provider failure.
+				// local inability to construct a probe as a provider failure.
 				continue
 			}
 		}
-		state.CircuitState = providerCircuitHalfOpen
+		if recovery {
+			state.CircuitState = providerCircuitHalfOpen
+			candidate.halfOpen = true
+		}
 		state.HalfOpenInFlight = true
 		state.RecoveryProbeGeneration++
-		candidate.halfOpen = true
 		candidate.recoveryProbeGeneration = state.RecoveryProbeGeneration
 		candidate.recoveryProbeModel = model
 		due = append(due, candidate)
@@ -477,6 +545,7 @@ func (r *providerRouter) reconcileConfigChange(previous, current config) {
 		*state = providerRuntimeState{
 			CircuitState:            providerCircuitClosed,
 			RecoveryProbeGeneration: generation,
+			LastHealthCheckAt:       r.now(),
 		}
 	}
 	r.mu.Unlock()
@@ -487,9 +556,9 @@ func (r *providerRouter) reconcileConfigChange(previous, current config) {
 }
 
 // attachRecoveryProbe registers the cancellation function only while the
-// claimed probe still owns the provider's current half-open generation. A
-// successful request can close the circuit between claiming and attaching;
-// in that case the caller must not start the obsolete probe.
+// claimed periodic or recovery probe still owns the provider generation. A
+// completed real request can supersede the claim before attachment; in that
+// case the caller must not start the obsolete probe.
 func (r *providerRouter) attachRecoveryProbe(candidate providerRouteCandidate, cancel context.CancelFunc) bool {
 	if candidate.recoveryProbeGeneration == 0 || cancel == nil {
 		return false
@@ -497,7 +566,11 @@ func (r *providerRouter) attachRecoveryProbe(candidate providerRouteCandidate, c
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state := r.providerStateLocked(candidate.Group, candidate.ProfileID)
-	if state.CircuitState != providerCircuitHalfOpen || !state.HalfOpenInFlight ||
+	expectedState := providerCircuitClosed
+	if candidate.halfOpen {
+		expectedState = providerCircuitHalfOpen
+	}
+	if state.CircuitState != expectedState || !state.HalfOpenInFlight ||
 		state.RecoveryProbeGeneration != candidate.recoveryProbeGeneration || state.RecoveryProbeCancel != nil {
 		return false
 	}
@@ -513,7 +586,7 @@ func (r *providerRouter) providerStateLocked(group providerGroup, profileID stri
 	}
 	state := groupState.Providers[profileID]
 	if state == nil {
-		state = &providerRuntimeState{CircuitState: providerCircuitClosed}
+		state = &providerRuntimeState{CircuitState: providerCircuitClosed, LastHealthCheckAt: r.now()}
 		groupState.Providers[profileID] = state
 	}
 	return state
@@ -551,6 +624,17 @@ func (r *providerRouter) recordRequestedModel(candidate providerRouteCandidate, 
 	r.mu.Unlock()
 }
 
+func (r *providerRouter) recordHealthCheckModel(candidate providerRouteCandidate, model string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
+	r.mu.Lock()
+	state := r.providerStateLocked(candidate.Group, candidate.ProfileID)
+	state.LastRequestedModel = model
+	r.mu.Unlock()
+}
+
 func (r *providerRouter) recordSuccess(candidate providerRouteCandidate) {
 	r.mu.Lock()
 	state := r.providerStateLocked(candidate.Group, candidate.ProfileID)
@@ -568,7 +652,9 @@ func (r *providerRouter) recordSuccess(candidate providerRouteCandidate) {
 	state.OpenUntil = time.Time{}
 	state.HalfOpenInFlight = false
 	state.LastError = ""
-	state.LastSuccessAt = r.now()
+	now := r.now()
+	state.LastSuccessAt = now
+	state.LastHealthCheckAt = now
 	r.mu.Unlock()
 	if cancelRecoveryProbe != nil {
 		cancelRecoveryProbe()
@@ -576,7 +662,7 @@ func (r *providerRouter) recordSuccess(candidate providerRouteCandidate) {
 }
 
 func (r *providerRouter) releaseHalfOpenProbe(candidate providerRouteCandidate) {
-	if !candidate.halfOpen {
+	if !candidate.halfOpen && candidate.recoveryProbeGeneration == 0 {
 		return
 	}
 	r.mu.Lock()
@@ -593,19 +679,28 @@ func (r *providerRouter) releaseHalfOpenProbe(candidate providerRouteCandidate) 
 
 func (r *providerRouter) recordFailure(candidate providerRouteCandidate, err error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	state := r.providerStateLocked(candidate.Group, candidate.ProfileID)
 	if candidate.recoveryProbeGeneration != 0 && state.RecoveryProbeGeneration != candidate.recoveryProbeGeneration {
+		r.mu.Unlock()
 		return
 	}
+	cancelRecoveryProbe := context.CancelFunc(nil)
 	if candidate.recoveryProbeGeneration != 0 {
+		state.RecoveryProbeCancel = nil
+		state.RecoveryProbeGeneration++
+	} else if state.RecoveryProbeCancel != nil {
+		// A real request or manual model test supersedes a concurrent periodic
+		// probe, so cancel it and make any late result harmless.
+		cancelRecoveryProbe = state.RecoveryProbeCancel
 		state.RecoveryProbeCancel = nil
 		state.RecoveryProbeGeneration++
 	}
 	state.FailureCount++
 	state.ConsecutiveFailures++
 	state.HalfOpenInFlight = false
-	state.LastFailureAt = r.now()
+	now := r.now()
+	state.LastFailureAt = now
+	state.LastHealthCheckAt = now
 	if err != nil {
 		state.LastError = err.Error()
 	}
@@ -614,6 +709,10 @@ func (r *providerRouter) recordFailure(candidate providerRouteCandidate, err err
 		state.OpenUntil = state.LastFailureAt.Add(providerCircuitCooldown)
 	} else {
 		state.CircuitState = providerCircuitClosed
+	}
+	r.mu.Unlock()
+	if cancelRecoveryProbe != nil {
+		cancelRecoveryProbe()
 	}
 }
 
@@ -640,8 +739,39 @@ func providerAttemptError(resp *http.Response, err error) error {
 	return fmt.Errorf("upstream returned %s", resp.Status)
 }
 
-func adaptProviderAttempt(candidate providerRouteCandidate, requestURI string, body []byte) (string, []byte) {
-	adaptedURI := geminiRequestURIWithEffectiveModel(candidate.Config, requestURI)
+func providerRouteCandidatesCompatible(route *providerRouteRequest, prepared, candidate providerRouteCandidate) bool {
+	if providerRequestTransformKind(prepared.Group, prepared.Config) != providerRequestTransformKind(candidate.Group, candidate.Config) {
+		return false
+	}
+	if route == nil || !route.containsImages {
+		return true
+	}
+	return textSupportsImages(prepared.Config, route.originalModel) == textSupportsImages(candidate.Config, route.originalModel)
+}
+
+func providerRequestTransformKind(group providerGroup, cfg config) string {
+	switch group {
+	case providerGroupCodex:
+		if normalizeProvider(cfg.TextProvider) == "openai" && normalizeWireAPI(cfg.TextWireAPI) != "responses" {
+			return "openai_chat"
+		}
+		return "native_responses"
+	case providerGroupClaude:
+		if normalizeProvider(cfg.TextProvider) == "openai" {
+			return "openai_chat"
+		}
+		return "native_anthropic"
+	default:
+		return "native"
+	}
+}
+
+func adaptProviderAttempt(candidate providerRouteCandidate, requestURI string, body []byte, originalRequested string) (string, []byte) {
+	modelRequestURI := requestURI
+	if originalRequested != "" && geminiRequestedModel(requestURI) != "" {
+		modelRequestURI = replaceGeminiRequestedModel(requestURI, originalRequested)
+	}
+	adaptedURI := geminiRequestURIWithEffectiveModel(candidate.Config, modelRequestURI)
 	if len(body) == 0 {
 		return adaptedURI, body
 	}
@@ -649,17 +779,41 @@ func adaptProviderAttempt(candidate providerRouteCandidate, requestURI string, b
 	if payload == nil {
 		return adaptedURI, body
 	}
-	requested := firstString(payload["model"])
-	if requested == "" {
+	current := strings.TrimSpace(firstString(payload["model"]))
+	if current == "" {
 		return adaptedURI, body
 	}
-	if model := effectiveTextModel(candidate.Config, requested); model != "" && model != requested {
-		payload["model"] = model
+	requested := strings.TrimSpace(originalRequested)
+	if requested == "" {
+		requested = current
+	}
+	desired := requested
+	if model := effectiveTextModel(candidate.Config, requested); model != "" {
+		desired = model
+	}
+	if desired != "" && desired != current {
+		payload["model"] = desired
 		if encoded, err := jsonMarshal(payload); err == nil {
 			return adaptedURI, encoded
 		}
 	}
 	return adaptedURI, body
+}
+
+func replaceGeminiRequestedModel(requestURI, model string) string {
+	for _, prefix := range []string{"/v1beta/models/", "/v1/models/"} {
+		if !strings.HasPrefix(requestURI, prefix) {
+			continue
+		}
+		modelStart := len(prefix)
+		suffixIndex := strings.Index(requestURI[modelStart:], ":")
+		if suffixIndex < 0 {
+			return requestURI
+		}
+		modelEnd := modelStart + suffixIndex
+		return requestURI[:modelStart] + model + requestURI[modelEnd:]
+	}
+	return requestURI
 }
 
 // jsonMarshal is a small seam used by provider routing without changing the
@@ -683,7 +837,7 @@ func runProviderRecoveryProbes(ctx context.Context, a *app) {
 			return
 		case <-ticker.C:
 			router := a.textProviderRouter()
-			candidates := router.claimDueRecoveryProbes(a.currentConfig())
+			candidates := router.claimDueHealthProbes(a.currentConfig())
 			for _, candidate := range candidates {
 				probeContext, cancel := context.WithCancel(ctx)
 				if !router.attachRecoveryProbe(candidate, cancel) {
@@ -717,17 +871,17 @@ func (a *app) probeProviderRecovery(parent context.Context, candidate providerRo
 	profile := recoveryProbeProfile(candidate)
 	model := strings.TrimSpace(candidate.recoveryProbeModel)
 	if model == "" {
-		recordFailure(errors.New("provider recovery probe has no model"))
+		recordFailure(errors.New("provider health probe has no model"))
 		return
 	}
 	spec, err := buildModelTestSpec(profile, model, "hi")
 	if err != nil {
-		recordFailure(fmt.Errorf("provider recovery probe: %w", err))
+		recordFailure(fmt.Errorf("provider health probe: %w", err))
 		return
 	}
 	body, err := json.Marshal(spec.Payload)
 	if err != nil {
-		recordFailure(fmt.Errorf("provider recovery probe: %w", err))
+		recordFailure(fmt.Errorf("provider health probe: %w", err))
 		return
 	}
 
@@ -738,7 +892,7 @@ func (a *app) probeProviderRecovery(parent context.Context, candidate providerRo
 		"Content-Type": []string{"application/json"},
 	})
 	if err != nil {
-		recordFailure(fmt.Errorf("provider recovery probe: %w", err))
+		recordFailure(fmt.Errorf("provider health probe: %w", err))
 		return
 	}
 	if parent.Err() != nil {
@@ -749,13 +903,13 @@ func (a *app) probeProviderRecovery(parent context.Context, candidate providerRo
 		return
 	}
 	if resp == nil {
-		recordFailure(errors.New("provider recovery probe returned no response"))
+		recordFailure(errors.New("provider health probe returned no response"))
 		return
 	}
 	defer resp.Body.Close()
 	_, readErr := io.Copy(io.Discard, io.LimitReader(resp.Body, providerRecoveryProbeMaxBodyBytes))
 	if readErr != nil {
-		recordFailure(fmt.Errorf("provider recovery probe response: %w", readErr))
+		recordFailure(fmt.Errorf("provider health probe response: %w", readErr))
 		return
 	}
 	if parent.Err() != nil {
@@ -763,7 +917,12 @@ func (a *app) probeProviderRecovery(parent context.Context, candidate providerRo
 		return
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		recordFailure(fmt.Errorf("provider recovery probe returned %s", resp.Status))
+		statusErr := fmt.Errorf("provider health probe returned %s", resp.Status)
+		if shouldRecordProviderFailure(parent, resp, nil) {
+			recordFailure(statusErr)
+		} else {
+			router.recordSuccess(candidate)
+		}
 		return
 	}
 	router.recordSuccess(candidate)
@@ -794,6 +953,8 @@ type providerEndpointStatus struct {
 	LastError          string               `json:"last_error,omitempty"`
 	LastFailureAt      *time.Time           `json:"last_failure_at,omitempty"`
 	LastSuccessAt      *time.Time           `json:"last_success_at,omitempty"`
+	LastHealthCheckAt  *time.Time           `json:"last_health_check_at,omitempty"`
+	HealthCheckRunning bool                 `json:"health_check_running,omitempty"`
 }
 
 func (a *app) providerRouterStatus() providerStatusResponse {
@@ -832,6 +993,8 @@ func (a *app) providerRouterStatus() providerStatusResponse {
 					status.OpenUntil = timePtrOrNil(state.OpenUntil)
 					status.LastFailureAt = timePtrOrNil(state.LastFailureAt)
 					status.LastSuccessAt = timePtrOrNil(state.LastSuccessAt)
+					status.LastHealthCheckAt = timePtrOrNil(state.LastHealthCheckAt)
+					status.HealthCheckRunning = state.HalfOpenInFlight && state.RecoveryProbeCancel != nil
 				}
 			}
 			groupStatus.Providers = append(groupStatus.Providers, status)

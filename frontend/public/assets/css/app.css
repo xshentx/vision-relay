@@ -903,6 +903,28 @@ h3 {
   color: #dc2626;
 }
 
+.profile-main .provider-failover-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  margin-top: 7px;
+  margin-left: 6px;
+  padding: 3px 7px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.35;
+}
+
+.profile-failover.is-joined {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 .profile-actions {
   display: flex;
   flex-wrap: wrap;
@@ -3446,7 +3468,7 @@ body:has(.el-message) > .toast {
 .layout > .settings-page.active {
   display: grid;
   align-content: start;
-  row-gap: 18px;
+  row-gap: 24px;
 }
 
 .settings-page-heading .panel-actions {
@@ -3468,6 +3490,19 @@ body:has(.el-message) > .toast {
 
 .api-settings-grid {
   grid-template-columns: minmax(0, 1.5fr) minmax(180px, 0.5fr);
+}
+
+.cache-settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.health-settings-grid {
+  grid-template-columns: minmax(220px, 420px);
+}
+
+.settings-cache-head,
+.settings-health-head {
+  align-items: center;
 }
 
 .api-settings-grid label {
@@ -3689,7 +3724,9 @@ body:has(.el-message) > .toast {
     width: 100%;
   }
 
-  .api-settings-grid {
+  .api-settings-grid,
+  .cache-settings-grid,
+  .health-settings-grid {
     grid-template-columns: 1fr;
   }
 

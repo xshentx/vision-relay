@@ -98,41 +98,73 @@ func (a *app) forwardRaw(ctx context.Context, ep endpoint, method, requestURI st
 	if !routed {
 		return a.forwardRawOnce(ctx, ep, method, requestURI, body, originalHeader)
 	}
-	candidate, configured := a.resolveProviderRoute(ctx, ep)
+	candidates, configured := a.resolveProviderRoutes(ctx, ep)
 	if !configured {
 		return providerGroupUnconfiguredResponse(group), nil
 	}
 	trace := providerRouteTraceFromContext(ctx)
-	trace.set(providerRouteSelection{
-		Group: candidate.Group, ProfileID: candidate.ProfileID, Name: candidate.Name,
-		Provider: candidate.Endpoint.Provider, Model: candidate.Endpoint.ModelOverride,
-	})
-
+	route := providerRouteRequestFromContext(ctx)
 	router := a.textProviderRouter()
-	router.recordRequestedModel(candidate, requestURI, body)
-	candidate, allowed := router.selectCandidate(candidate)
+	preparedCandidate := candidates[0]
+
+	nextCandidate := func(start int) (providerRouteCandidate, int, bool) {
+		for index := start; index < len(candidates); index++ {
+			if !providerRouteCandidatesCompatible(route, preparedCandidate, candidates[index]) {
+				continue
+			}
+			candidate, allowed := router.selectCandidate(candidates[index])
+			if allowed {
+				return candidate, index, true
+			}
+		}
+		return providerRouteCandidate{}, len(candidates), false
+	}
+
+	candidate, candidateIndex, allowed := nextCandidate(0)
 	if !allowed {
 		return providerCircuitOpenResponse(), nil
 	}
-	router.recordSelection(candidate)
-	adaptedURI, adaptedBody := adaptProviderAttempt(candidate, requestURI, body)
-	resp, err := a.forwardRawOnce(ctx, candidate.Endpoint, method, adaptedURI, adaptedBody, originalHeader)
-	if shouldRecordProviderFailure(ctx, resp, err) {
-		router.recordFailure(candidate, providerAttemptError(resp, err))
-	} else if err == nil && resp != nil {
-		emptyBody := resp.Body == nil || resp.Body == http.NoBody || resp.ContentLength == 0
-		if emptyBody && !upstreamStreamingRequest(ctx) {
-			router.recordSuccess(candidate)
-		} else {
-			if resp.Body == nil {
-				resp.Body = http.NoBody
-			}
-			resp.Body = newProviderObservedBody(ctx, resp.Body, router, candidate)
+	for {
+		trace.set(providerRouteSelection{
+			Group: candidate.Group, ProfileID: candidate.ProfileID, Name: candidate.Name,
+			Provider: candidate.Endpoint.Provider, Model: candidate.Endpoint.ModelOverride,
+		})
+		router.recordSelection(candidate)
+		originalModel := ""
+		if route != nil {
+			originalModel = route.originalModel
 		}
-	} else {
-		router.releaseHalfOpenProbe(candidate)
+		adaptedURI, adaptedBody := adaptProviderAttempt(candidate, requestURI, body, originalModel)
+		router.recordRequestedModel(candidate, adaptedURI, adaptedBody)
+		resp, err := a.forwardRawOnce(ctx, candidate.Endpoint, method, adaptedURI, adaptedBody, originalHeader)
+		if shouldRecordProviderFailure(ctx, resp, err) {
+			router.recordFailure(candidate, providerAttemptError(resp, err))
+			next, nextIndex, hasNext := nextCandidate(candidateIndex + 1)
+			if hasNext {
+				if resp != nil && resp.Body != nil {
+					_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 32<<10))
+					_ = resp.Body.Close()
+				}
+				candidate, candidateIndex = next, nextIndex
+				continue
+			}
+			return resp, err
+		}
+		if err == nil && resp != nil {
+			emptyBody := resp.Body == nil || resp.Body == http.NoBody || resp.ContentLength == 0
+			if emptyBody && !upstreamStreamingRequest(ctx) {
+				router.recordSuccess(candidate)
+			} else {
+				if resp.Body == nil {
+					resp.Body = http.NoBody
+				}
+				resp.Body = newProviderObservedBody(ctx, resp.Body, router, candidate)
+			}
+		} else {
+			router.releaseHalfOpenProbe(candidate)
+		}
+		return resp, err
 	}
-	return resp, err
 }
 
 func providerGroupUnconfiguredResponse(group providerGroup) *http.Response {

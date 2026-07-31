@@ -196,7 +196,7 @@ func TestHandleModelTestReportsUpstreamError(t *testing.T) {
 	defer upstream.Close()
 	a := &app{
 		cfg: config{TextModelProfiles: []textModelProfile{{
-			ID: "profile-1", Provider: "openai", BaseURL: upstream.URL,
+			ID: "profile-1", Client: "codex", Provider: "openai", BaseURL: upstream.URL,
 			ModelMappings: []textModelMapping{{Name: "gpt-test", Model: "gpt-test"}},
 		}}},
 		httpClient: upstream.Client(),
@@ -229,6 +229,60 @@ func TestHandleModelTestReportsUpstreamError(t *testing.T) {
 	logs := a.currentLogs()
 	if len(logs) != 1 || logs[0].Protocol != "\u6a21\u578b\u6d4b\u8bd5" || logs[0].Status != http.StatusTooManyRequests || !strings.Contains(logs[0].Error, "rate limited") {
 		t.Fatalf("failed model test was not logged correctly: %#v", logs)
+	}
+	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "profile-1")
+	if status.ConsecutiveFailure != 0 || status.LastFailureAt != nil || status.LastHealthCheckAt == nil || status.LastSuccessAt == nil {
+		t.Fatalf("upstream 4xx should complete the health check without tripping the circuit: %#v", status)
+	}
+}
+
+func TestHandleModelTestDoesNotCountCanceledRequestAsProviderFailure(t *testing.T) {
+	a := &app{
+		cfg: config{TextModelProfiles: []textModelProfile{{
+			ID: "profile-1", Client: "codex", Provider: "openai", BaseURL: "https://example.invalid",
+			ModelMappings: []textModelMapping{{Name: "gpt-test", Model: "gpt-test"}},
+		}}},
+		httpClient: &http.Client{Transport: providerRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, context.Canceled
+		})},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, "/api/model-test", strings.NewReader(`{"profile_id":"profile-1","model":"gpt-test","prompt":"hi"}`)).WithContext(ctx)
+	recorder := httptest.NewRecorder()
+	a.handleModelTest(recorder, req)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "profile-1")
+	if status.ConsecutiveFailure != 0 || status.LastFailureAt != nil || status.LastSuccessAt != nil {
+		t.Fatalf("canceled model test should not change provider health: %#v", status)
+	}
+}
+
+func TestHandleModelTestCountsUpstreamServerErrorAsProviderFailure(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	a := &app{
+		cfg: config{TextModelProfiles: []textModelProfile{{
+			ID: "profile-1", Client: "codex", Provider: "openai", BaseURL: upstream.URL,
+			ModelMappings: []textModelMapping{{Name: "gpt-test", Model: "gpt-test"}},
+		}}},
+		httpClient: upstream.Client(),
+	}
+	recorder := httptest.NewRecorder()
+	a.handleModelTest(recorder, httptest.NewRequest(http.MethodPost, "/api/model-test", strings.NewReader(`{"profile_id":"profile-1","model":"gpt-test","prompt":"hi"}`)))
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "profile-1")
+	if status.ConsecutiveFailure != 1 || status.LastFailureAt == nil || status.LastHealthCheckAt == nil || status.LastSuccessAt != nil {
+		t.Fatalf("upstream 5xx was not counted as a provider failure: %#v", status)
 	}
 }
 

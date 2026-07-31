@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -39,6 +40,7 @@ func (a *app) handleRoute(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	if group, ok := providerGroupForClient(textProfileClientForRequest(r)); ok {
 		r = r.WithContext(withProviderRouteContext(r.Context(), group))
+		setProviderRouteRequestMetadata(r.Context(), path, r.URL.RequestURI(), body)
 		// Reject an unconfigured text group before model rewriting or image
 		// augmentation. Vision configuration is global and independent from text
 		// supplier grouping; a request that cannot reach a text supplier must never
@@ -168,6 +170,83 @@ func (a *app) textConfigForRequest(r *http.Request) config {
 		return cfg
 	}
 	return textConfigForClient(cfg, client)
+}
+
+func setProviderRouteRequestMetadata(ctx context.Context, path, requestURI string, body []byte) {
+	route := providerRouteRequestFromContext(ctx)
+	if route == nil {
+		return
+	}
+	payload := decodeJSONMap(body)
+	if payload != nil {
+		route.originalModel = strings.TrimSpace(firstString(payload["model"]))
+	}
+	if route.originalModel == "" && isGeminiGeneratePath(path) {
+		route.originalModel = strings.TrimSpace(geminiRequestedModel(requestURI))
+	}
+	route.containsImages = providerRequestContainsImages(path, payload)
+}
+
+func providerRequestContainsImages(path string, payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	switch {
+	case isOpenAIChatPath(path):
+		messages, err := decodeMessages(payload["messages"])
+		if err != nil {
+			return false
+		}
+		for _, message := range messages {
+			if len(parseOpenAIMessage(message).Images) > 0 {
+				return true
+			}
+		}
+	case isOpenAIResponsesPath(path):
+		input, _ := payload["input"].([]any)
+		for _, item := range input {
+			message, _ := item.(map[string]any)
+			if message == nil {
+				continue
+			}
+			parsed := parsedMessage{}
+			if content, ok := message["content"]; ok {
+				parsed = parseOpenAIContent(content)
+			} else {
+				parsed = parseOpenAIContent([]any{message})
+			}
+			if len(parsed.Images) > 0 {
+				return true
+			}
+		}
+	case isAnthropicMessagesPath(path):
+		messages, _ := payload["messages"].([]any)
+		for _, item := range messages {
+			message, _ := item.(map[string]any)
+			if message != nil && len(parseAnthropicContent(message["content"]).Images) > 0 {
+				return true
+			}
+		}
+	case isGeminiGeneratePath(path):
+		contents, _ := payload["contents"].([]any)
+		for _, item := range contents {
+			content, _ := item.(map[string]any)
+			if content != nil && len(parseGeminiParts(content["parts"]).Images) > 0 {
+				return true
+			}
+		}
+	case isOllamaChatPath(path):
+		messages, _ := payload["messages"].([]any)
+		for _, item := range messages {
+			message, _ := item.(map[string]any)
+			if message != nil && len(parseOllamaMessage(message).Images) > 0 {
+				return true
+			}
+		}
+	case isOllamaGeneratePath(path):
+		return len(parseOllamaGenerate(payload).Images) > 0
+	}
+	return false
 }
 
 func canonicalRequestURI(requestURI string) string {

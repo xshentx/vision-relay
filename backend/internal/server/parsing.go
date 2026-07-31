@@ -73,9 +73,12 @@ func parseOpenAIContentPart(part map[string]any, pm *parsedMessage, textParts *[
 		appendImageFilePart(part, pm)
 	case "":
 		appendTextPart(firstString(part["text"], part["content"]), pm, textParts)
+		// Some clients omit the type for image_url-shaped parts, so keep
+		// accepting explicit image fields. A generic `url` on an untyped
+		// content object is not necessarily an image (for example, a link
+		// annotation); only treat it as an image when there is image evidence.
 		appendImageFromAny(part["image_url"], pm)
 		appendImageFromAny(part["imageUrl"], pm)
-		appendImageFromAny(part["url"], pm)
 		appendImageFilePart(part, pm)
 	}
 }

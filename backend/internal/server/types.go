@@ -10,43 +10,49 @@ import (
 )
 
 type config struct {
-	Addr                              string               `json:"addr"`
-	ManagementAddr                    string               `json:"-"`
-	ActiveModelProfileID              string               `json:"active_model_profile_id,omitempty"`
-	ModelProfiles                     []modelProfile       `json:"model_profiles,omitempty"`
-	ActiveTextProfileID               string               `json:"active_text_profile_id"`
-	ActiveTextProfileByClient         map[string]string    `json:"active_text_profile_by_client,omitempty"`
-	TextModelProfiles                 []textModelProfile   `json:"text_model_profiles"`
-	ActiveVisionProfileID             string               `json:"active_vision_profile_id"`
-	VisionModelProfiles               []visionModelProfile `json:"vision_model_profiles"`
-	TextProvider                      string               `json:"text_provider"`
-	TextBaseURL                       string               `json:"text_base_url"`
-	TextAPIKey                        string               `json:"text_api_key"`
-	TextModelOverride                 string               `json:"text_model_override"`
-	TextModelOverrides                []string             `json:"text_model_overrides,omitempty"`
-	TextModelMappings                 []textModelMapping   `json:"text_model_mappings,omitempty"`
-	TextWireAPI                       string               `json:"text_wire_api"`
-	TextSupportsImages                bool                 `json:"text_supports_images,omitempty"`
-	ProxyURL                          string               `json:"proxy_url"`
-	VisionProvider                    string               `json:"vision_provider"`
-	VisionBaseURL                     string               `json:"vision_base_url"`
-	VisionAPIKey                      string               `json:"vision_api_key"`
-	VisionModel                       string               `json:"vision_model"`
-	VisionPrompt                      string               `json:"vision_prompt"`
-	VisionEnabled                     *bool                `json:"vision_enabled"`
-	PreserveCodexOfficialAuthOnSwitch *bool                `json:"preserve_codex_official_auth_on_switch"`
-	UnifyCodexSessionHistory          bool                 `json:"unify_codex_session_history"`
-	ClientRouteEnabled                map[string]bool      `json:"client_route_enabled"`
-	LocalAPIEnabled                   *bool                `json:"local_api_enabled"`
-	ClientConfigPaths                 map[string]string    `json:"client_config_paths"`
-	ClientProgramPaths                map[string]string    `json:"client_program_paths"`
-	ClientAutoRestart                 map[string]bool      `json:"client_auto_restart"`
-	ClientAutoStart                   map[string]bool      `json:"client_auto_start"`
-	ClientPathsDetected               bool                 `json:"client_paths_detected"`
-	ClientPathDetectionVersion        int                  `json:"client_path_detection_version"`
-	AutoCheckUpdates                  *bool                `json:"auto_check_updates"`
-	OpenWindow                        bool                 `json:"open_window"`
-	OpenBrowser                       bool                 `json:"open_browser"`
+	Addr                               string               `json:"addr"`
+	ManagementAddr                     string               `json:"-"`
+	ActiveModelProfileID               string               `json:"active_model_profile_id,omitempty"`
+	ModelProfiles                      []modelProfile       `json:"model_profiles,omitempty"`
+	ActiveTextProfileID                string               `json:"active_text_profile_id"`
+	ActiveTextProfileByClient          map[string]string    `json:"active_text_profile_by_client,omitempty"`
+	TextModelProfiles                  []textModelProfile   `json:"text_model_profiles"`
+	ActiveVisionProfileID              string               `json:"active_vision_profile_id"`
+	VisionModelProfiles                []visionModelProfile `json:"vision_model_profiles"`
+	TextProvider                       string               `json:"text_provider"`
+	TextBaseURL                        string               `json:"text_base_url"`
+	TextAPIKey                         string               `json:"text_api_key"`
+	TextModelOverride                  string               `json:"text_model_override"`
+	TextModelOverrides                 []string             `json:"text_model_overrides,omitempty"`
+	TextModelMappings                  []textModelMapping   `json:"text_model_mappings,omitempty"`
+	TextWireAPI                        string               `json:"text_wire_api"`
+	TextSupportsImages                 bool                 `json:"text_supports_images,omitempty"`
+	ProxyURL                           string               `json:"proxy_url"`
+	VisionProvider                     string               `json:"vision_provider"`
+	VisionBaseURL                      string               `json:"vision_base_url"`
+	VisionAPIKey                       string               `json:"vision_api_key"`
+	VisionModel                        string               `json:"vision_model"`
+	VisionPrompt                       string               `json:"vision_prompt"`
+	VisionEnabled                      *bool                `json:"vision_enabled"`
+	VisionCacheTTLHours                int                  `json:"vision_cache_ttl_hours"`
+	VisionCacheMaxEntries              int                  `json:"vision_cache_max_entries"`
+	ProviderHealthCheckEnabled         *bool                `json:"provider_health_check_enabled"`
+	ProviderHealthCheckIntervalSeconds int                  `json:"provider_health_check_interval_seconds"`
+	ProviderFailoverEnabled            *bool                `json:"provider_failover_enabled"`
+	ProviderFailoverProfiles           map[string][]string  `json:"provider_failover_profiles,omitempty"`
+	PreserveCodexOfficialAuthOnSwitch  *bool                `json:"preserve_codex_official_auth_on_switch"`
+	UnifyCodexSessionHistory           bool                 `json:"unify_codex_session_history"`
+	ClientRouteEnabled                 map[string]bool      `json:"client_route_enabled"`
+	LocalAPIEnabled                    *bool                `json:"local_api_enabled"`
+	ClientConfigPaths                  map[string]string    `json:"client_config_paths"`
+	ClientProgramPaths                 map[string]string    `json:"client_program_paths"`
+	ClientAutoRestart                  map[string]bool      `json:"client_auto_restart"`
+	ClientAutoStart                    map[string]bool      `json:"client_auto_start"`
+	ClientPathsDetected                bool                 `json:"client_paths_detected"`
+	ClientPathDetectionVersion         int                  `json:"client_path_detection_version"`
+	AutoCheckUpdates                   *bool                `json:"auto_check_updates"`
+	OpenWindow                         bool                 `json:"open_window"`
+	OpenBrowser                        bool                 `json:"open_browser"`
 	// LegacyTextRouting persists the compatibility mode assigned while migrating
 	// configurations that predate per-client supplier groups. The private field
 	// is the normalized runtime copy used by routing code.
@@ -151,7 +157,7 @@ type app struct {
 	db                      *sql.DB
 	httpClient              *http.Client
 	lastVision              visionDebugInfo
-	visionCache             map[string]string
+	visionCache             *visionCacheStore
 	clientProgramController clientProgramController
 	breakArmorMu            sync.Mutex // serializes break-armor, session, and client configuration file writes
 	logMu                   sync.Mutex

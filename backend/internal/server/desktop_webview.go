@@ -20,7 +20,10 @@ type clientWindow interface {
 func runClientWindow(rawURL string, runEnded func()) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	runClientWindowInstance(webview.New(false), rawURL, runEnded)
+	w := webview.New(false)
+	forgetWindow := rememberClientWindow(uintptr(w.Window()))
+	defer forgetWindow()
+	runClientWindowInstance(w, rawURL, runEnded)
 }
 
 func runClientWindowInstance(w clientWindow, rawURL string, runEnded func()) {

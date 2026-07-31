@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-const maxVisionCacheEntries = 128
-
 func (a *app) describeImages(ctx context.Context, cfg config, pm parsedMessage) (string, error) {
 	if len(pm.Images) == 0 {
 		return "", nil
@@ -93,25 +91,6 @@ func (a *app) recordVisionDebug(ep endpoint, pm parsedMessage, text string, cach
 	a.mu.Lock()
 	a.lastVision = info
 	a.mu.Unlock()
-}
-
-func (a *app) cachedVisionText(key string) (string, bool) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	if a.visionCache == nil {
-		return "", false
-	}
-	text, ok := a.visionCache[key]
-	return text, ok
-}
-
-func (a *app) storeVisionText(key, text string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.visionCache == nil || len(a.visionCache) >= maxVisionCacheEntries {
-		a.visionCache = make(map[string]string)
-	}
-	a.visionCache[key] = text
 }
 
 func visionCacheKey(ep endpoint, prompt string, pm parsedMessage) string {

@@ -150,6 +150,9 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 		db:         db,
 		httpClient: &http.Client{Timeout: 180 * time.Second},
 	}
+	if err := a.initializeVisionCache(); err != nil {
+		log.Printf("vision cache initialization warning: %v", err)
+	}
 
 	managementHandler := newManagementHandler(a, desktopActivation)
 	relayHandler := newRelayHandler(a)
@@ -280,6 +283,7 @@ func newManagementHandler(a *app, desktopActivation chan<- struct{}) http.Handle
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/desktop/activate", desktopActivationHandler(desktopActivation))
 	mux.HandleFunc("/api/config", a.handleConfig)
+	mux.HandleFunc("/api/vision-cache", a.handleVisionCache)
 	mux.HandleFunc("/api/relay/status", a.handleRelayStatus)
 	mux.HandleFunc("/api/provider-router/status", a.handleProviderRouterStatus)
 	mux.HandleFunc("/api/update", a.handleUpdate)

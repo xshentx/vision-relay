@@ -901,7 +901,7 @@ func TestProgramSettingsAreEmbedded(t *testing.T) {
 		t.Fatal(err)
 	}
 	style := string(styleRaw)
-	for _, expected := range []string{`.layout > .settings-page.active`, `row-gap: 18px`, `.access-page .component-card`, `.settings-page > .component-card`, `.client-settings-list`, `.client-settings-list-head`, `.client-path-row`, `.client-path-fields`, `.client-behavior-list`, `.client-behavior-row`, `.client-behavior-options`, `.client-behavior-option`, `grid-column: 2 / -1`, `grid-template-columns: repeat(2, minmax(0, 1fr))`} {
+	for _, expected := range []string{`.layout > .settings-page.active`, `row-gap: 24px`, `.access-page .component-card`, `.settings-page > .component-card`, `.client-settings-list`, `.client-settings-list-head`, `.client-path-row`, `.client-path-fields`, `.client-behavior-list`, `.client-behavior-row`, `.client-behavior-options`, `.client-behavior-option`, `grid-column: 2 / -1`, `grid-template-columns: repeat(2, minmax(0, 1fr))`} {
 		if !strings.Contains(style, expected) {
 			t.Fatalf("program settings style %q is missing", expected)
 		}

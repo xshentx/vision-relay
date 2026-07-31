@@ -55,6 +55,34 @@ func (a *app) handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *app) handleVisionCache(w http.ResponseWriter, r *http.Request) {
+	cfg := a.currentConfig()
+	maxEntries, ttlHours := visionCacheSettings(cfg)
+	switch r.Method {
+	case http.MethodGet:
+		entries, err := a.visionCacheEntryCount()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"entries":     entries,
+			"max_entries": maxEntries,
+			"ttl_hours":   ttlHours,
+			"persistent":  a.db != nil,
+		})
+	case http.MethodDelete:
+		deleted, err := a.clearVisionCache()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": deleted})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
 func (a *app) handleRelayStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)

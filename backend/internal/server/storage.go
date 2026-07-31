@@ -164,6 +164,15 @@ CREATE TABLE IF NOT EXISTS request_logs (
 	error TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_at ON request_logs(at DESC);
+CREATE TABLE IF NOT EXISTS vision_cache (
+	cache_key TEXT PRIMARY KEY,
+	result_text TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	last_used_at TEXT NOT NULL,
+	expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vision_cache_last_used ON vision_cache(last_used_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vision_cache_expires ON vision_cache(expires_at);
 `)
 	if err != nil {
 		return err

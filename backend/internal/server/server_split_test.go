@@ -2,9 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -70,6 +73,35 @@ func TestSetConfigPreservesRuntimeManagementFallback(t *testing.T) {
 	}
 	if got := a.currentConfig().ManagementAddr; got != "127.0.0.1:32123" {
 		t.Fatalf("runtime management address = %q, want fallback address", got)
+	}
+}
+
+func TestSetConfigDoesNotPublishRuntimeStateWhenPersistenceFails(t *testing.T) {
+	cfg := providerRouterTestConfig([]textModelProfile{{
+		ID: "stable", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://stable.invalid",
+		ModelMappings: []textModelMapping{{Name: "test", Model: "test"}},
+	}}, map[string]string{"codex": "stable"})
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("block"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	router := newProviderRouter()
+	a := &app{cfg: cfg, configPath: filepath.Join(blocker, "config.json"), providerRouter: router}
+	candidate := providerRouteCandidateForProfile(cfg, providerGroupCodex, cfg.TextModelProfiles[0])
+	router.recordFailure(candidate, errors.New("existing failure"))
+
+	updated := cfg
+	updated.TextModelProfiles = append([]textModelProfile(nil), cfg.TextModelProfiles...)
+	updated.TextModelProfiles[0].BaseURL = "https://replacement.invalid"
+	if err := a.setConfig(updated); err == nil {
+		t.Fatal("setConfig unexpectedly succeeded with an invalid config path")
+	}
+	if got := a.currentConfig().TextModelProfiles[0].BaseURL; got != "https://stable.invalid" {
+		t.Fatalf("runtime config changed after persistence failure: %q", got)
+	}
+	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "stable")
+	if status.ConsecutiveFailure != 1 || status.LastFailureAt == nil {
+		t.Fatalf("provider runtime state was reconciled after persistence failure: %#v", status)
 	}
 }
 

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,50 +12,63 @@ import (
 )
 
 const (
-	appDisplayName            = "Vision Relay"
-	appSlug                   = "vision-relay"
-	legacyAppSlug             = "codex-proxy"
-	defaultAddr               = "127.0.0.1:8787"
-	defaultManagementAddr     = "127.0.0.1:18473"
-	defaultTextProvider       = "openai"
-	defaultTextWireAPI        = "chat_completions"
-	textProfileClientCodex    = "codex"
-	textProfileClientClaude   = "claude"
-	textProfileClientOpenCode = "opencode"
-	textProfileClientOpenClaw = "openclaw"
-	defaultVisionModel        = "gpt-4o-mini"
-	defaultVisionPrompt       = "你只是图片识别器，不是最终回答模型。只提取图片事实，禁止回答用户需求、禁止写代码、禁止给方案、禁止推理下一步。按图片复杂度输出必要细节，用简洁中文列出：1. 可见文字；2. 主要对象/页面结构；3. 颜色和布局；4. 与用户需求直接相关的细节。"
+	appDisplayName                            = "Vision Relay"
+	appSlug                                   = "vision-relay"
+	legacyAppSlug                             = "codex-proxy"
+	defaultAddr                               = "127.0.0.1:8787"
+	defaultManagementAddr                     = "127.0.0.1:18473"
+	defaultTextProvider                       = "openai"
+	defaultTextWireAPI                        = "chat_completions"
+	textProfileClientCodex                    = "codex"
+	textProfileClientClaude                   = "claude"
+	textProfileClientOpenCode                 = "opencode"
+	textProfileClientOpenClaw                 = "openclaw"
+	defaultVisionModel                        = "gpt-4o-mini"
+	defaultVisionCacheTTLHours                = 720
+	defaultVisionCacheMaxEntries              = 512
+	maxVisionCacheTTLHours                    = 87600
+	maxVisionCacheEntries                     = 10000
+	defaultProviderHealthCheckIntervalSeconds = 300
+	minProviderHealthCheckIntervalSeconds     = 60
+	maxProviderHealthCheckIntervalSeconds     = 86400
+	defaultVisionPrompt                       = "你只是图片识别器，不是最终回答模型。只提取图片事实，禁止回答用户需求、禁止写代码、禁止给方案、禁止推理下一步。按图片复杂度输出必要细节，用简洁中文列出：1. 可见文字；2. 主要对象/页面结构；3. 颜色和布局；4. 与用户需求直接相关的细节。"
 )
 
 var codexAccountModelAliases = []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 
 func defaultConfig() config {
 	cfg := config{
-		Addr:                              envAny(defaultAddr, "VISION_RELAY_ADDR", "CODEX_PROXY_ADDR"),
-		ManagementAddr:                    defaultManagementAddr,
-		TextProvider:                      env("TEXT_PROVIDER", defaultTextProvider),
-		TextBaseURL:                       env("TEXT_BASE_URL", "https://api.openai.com"),
-		TextAPIKey:                        env("TEXT_API_KEY", ""),
-		TextModelOverride:                 env("TEXT_MODEL_OVERRIDE", ""),
-		TextWireAPI:                       env("TEXT_WIRE_API", defaultTextWireAPI),
-		ProxyURL:                          env("PROXY_URL", ""),
-		VisionProvider:                    env("VISION_PROVIDER", "openai"),
-		VisionBaseURL:                     env("VISION_BASE_URL", "https://api.openai.com"),
-		VisionAPIKey:                      env("VISION_API_KEY", ""),
-		VisionModel:                       env("VISION_MODEL", defaultVisionModel),
-		VisionPrompt:                      defaultVisionPrompt,
-		VisionEnabled:                     boolPtr(env("VISION_ENABLED", "true") != "false"),
-		PreserveCodexOfficialAuthOnSwitch: boolPtr(true),
-		ClientRouteEnabled:                defaultClientRouteEnabled(),
-		LocalAPIEnabled:                   boolPtr(env("LOCAL_API_ENABLED", "true") != "false"),
-		ClientConfigPaths:                 map[string]string{},
-		ClientProgramPaths:                map[string]string{},
-		ClientAutoRestart:                 defaultClientAutoRestart(),
-		ClientAutoStart:                   defaultClientAutoStart(),
-		AutoCheckUpdates:                  boolPtr(true),
-		OpenWindow:                        env("OPEN_WINDOW", "true") != "false",
-		OpenBrowser:                       env("OPEN_BROWSER", "false") == "true",
-		legacyTextRouting:                 true,
+		Addr:                               envAny(defaultAddr, "VISION_RELAY_ADDR", "CODEX_PROXY_ADDR"),
+		ManagementAddr:                     defaultManagementAddr,
+		TextProvider:                       env("TEXT_PROVIDER", defaultTextProvider),
+		TextBaseURL:                        env("TEXT_BASE_URL", "https://api.openai.com"),
+		TextAPIKey:                         env("TEXT_API_KEY", ""),
+		TextModelOverride:                  env("TEXT_MODEL_OVERRIDE", ""),
+		TextWireAPI:                        env("TEXT_WIRE_API", defaultTextWireAPI),
+		ProxyURL:                           env("PROXY_URL", ""),
+		VisionProvider:                     env("VISION_PROVIDER", "openai"),
+		VisionBaseURL:                      env("VISION_BASE_URL", "https://api.openai.com"),
+		VisionAPIKey:                       env("VISION_API_KEY", ""),
+		VisionModel:                        env("VISION_MODEL", defaultVisionModel),
+		VisionPrompt:                       defaultVisionPrompt,
+		VisionEnabled:                      boolPtr(env("VISION_ENABLED", "true") != "false"),
+		VisionCacheTTLHours:                defaultVisionCacheTTLHours,
+		VisionCacheMaxEntries:              defaultVisionCacheMaxEntries,
+		ProviderHealthCheckEnabled:         boolPtr(true),
+		ProviderHealthCheckIntervalSeconds: defaultProviderHealthCheckIntervalSeconds,
+		ProviderFailoverEnabled:            boolPtr(false),
+		ProviderFailoverProfiles:           map[string][]string{},
+		PreserveCodexOfficialAuthOnSwitch:  boolPtr(true),
+		ClientRouteEnabled:                 defaultClientRouteEnabled(),
+		LocalAPIEnabled:                    boolPtr(env("LOCAL_API_ENABLED", "true") != "false"),
+		ClientConfigPaths:                  map[string]string{},
+		ClientProgramPaths:                 map[string]string{},
+		ClientAutoRestart:                  defaultClientAutoRestart(),
+		ClientAutoStart:                    defaultClientAutoStart(),
+		AutoCheckUpdates:                   boolPtr(true),
+		OpenWindow:                         env("OPEN_WINDOW", "true") != "false",
+		OpenBrowser:                        env("OPEN_BROWSER", "false") == "true",
+		legacyTextRouting:                  true,
 	}
 	cfg.TextModelProfiles = []textModelProfile{textProfileFromConfig(cfg, "text-default", "默认文本模型")}
 	cfg.ActiveTextProfileID = cfg.TextModelProfiles[0].ID
@@ -184,6 +198,24 @@ func mergeConfig(base, loaded config) config {
 	if loaded.VisionEnabled != nil {
 		base.VisionEnabled = loaded.VisionEnabled
 	}
+	if loaded.VisionCacheTTLHours > 0 {
+		base.VisionCacheTTLHours = normalizeVisionCacheTTLHours(loaded.VisionCacheTTLHours)
+	}
+	if loaded.VisionCacheMaxEntries > 0 {
+		base.VisionCacheMaxEntries = normalizeVisionCacheMaxEntries(loaded.VisionCacheMaxEntries)
+	}
+	if loaded.ProviderHealthCheckEnabled != nil {
+		base.ProviderHealthCheckEnabled = loaded.ProviderHealthCheckEnabled
+	}
+	if loaded.ProviderHealthCheckIntervalSeconds > 0 {
+		base.ProviderHealthCheckIntervalSeconds = normalizeProviderHealthCheckIntervalSeconds(loaded.ProviderHealthCheckIntervalSeconds)
+	}
+	if loaded.ProviderFailoverEnabled != nil {
+		base.ProviderFailoverEnabled = loaded.ProviderFailoverEnabled
+	}
+	if loaded.ProviderFailoverProfiles != nil {
+		base.ProviderFailoverProfiles = loaded.ProviderFailoverProfiles
+	}
 	if loaded.PreserveCodexOfficialAuthOnSwitch != nil {
 		base.PreserveCodexOfficialAuthOnSwitch = loaded.PreserveCodexOfficialAuthOnSwitch
 	}
@@ -288,6 +320,15 @@ func (a *app) setConfig(cfg config) error {
 	if cfg.VisionEnabled == nil {
 		cfg.VisionEnabled = boolPtr(true)
 	}
+	cfg.VisionCacheTTLHours = normalizeVisionCacheTTLHours(cfg.VisionCacheTTLHours)
+	cfg.VisionCacheMaxEntries = normalizeVisionCacheMaxEntries(cfg.VisionCacheMaxEntries)
+	if cfg.ProviderHealthCheckEnabled == nil {
+		cfg.ProviderHealthCheckEnabled = boolPtr(true)
+	}
+	cfg.ProviderHealthCheckIntervalSeconds = normalizeProviderHealthCheckIntervalSeconds(cfg.ProviderHealthCheckIntervalSeconds)
+	if cfg.ProviderFailoverEnabled == nil {
+		cfg.ProviderFailoverEnabled = boolPtr(false)
+	}
 	if cfg.PreserveCodexOfficialAuthOnSwitch == nil {
 		cfg.PreserveCodexOfficialAuthOnSwitch = boolPtr(true)
 	}
@@ -310,14 +351,95 @@ func (a *app) setConfig(cfg config) error {
 	cfg.VisionProvider = normalizeProvider(cfg.VisionProvider)
 	cfg = normalizeSeparateModelProfiles(cfg)
 
+	var saveErr error
+	if a.db != nil {
+		saveErr = saveConfigToDB(a.db, cfg)
+	} else {
+		saveErr = saveConfig(a.configPath, cfg)
+	}
+	if saveErr != nil {
+		return saveErr
+	}
 	a.mu.Lock()
 	a.cfg = cfg
 	a.mu.Unlock()
 	a.textProviderRouter().reconcileConfigChange(previousConfig, cfg)
-	if a.db != nil {
-		return saveConfigToDB(a.db, cfg)
+	if err := a.configureVisionCache(cfg, normalizeVisionCacheTTLHours(previousConfig.VisionCacheTTLHours) != cfg.VisionCacheTTLHours); err != nil {
+		// Vision recognition remains usable without the cache. The configuration
+		// has already been persisted and published, so report cache maintenance as
+		// a warning instead of returning a misleading settings-save failure.
+		log.Printf("vision cache configuration warning: %v", err)
 	}
-	return saveConfig(a.configPath, cfg)
+	return nil
+}
+
+func normalizeVisionCacheTTLHours(value int) int {
+	if value <= 0 {
+		return defaultVisionCacheTTLHours
+	}
+	if value > maxVisionCacheTTLHours {
+		return maxVisionCacheTTLHours
+	}
+	return value
+}
+
+func normalizeVisionCacheMaxEntries(value int) int {
+	if value <= 0 {
+		return defaultVisionCacheMaxEntries
+	}
+	if value > maxVisionCacheEntries {
+		return maxVisionCacheEntries
+	}
+	return value
+}
+
+func providerHealthCheckEnabled(cfg config) bool {
+	return cfg.ProviderHealthCheckEnabled == nil || *cfg.ProviderHealthCheckEnabled
+}
+
+func providerFailoverEnabled(cfg config) bool {
+	return cfg.ProviderFailoverEnabled != nil && *cfg.ProviderFailoverEnabled
+}
+
+func normalizeProviderFailoverProfiles(profiles []textModelProfile, configured map[string][]string) map[string][]string {
+	valid := make(map[string]map[string]bool, len(providerGroups))
+	for _, group := range providerGroups {
+		valid[string(group)] = map[string]bool{}
+	}
+	for _, profile := range profiles {
+		group, ok := providerGroupForClient(profile.Client)
+		if !ok || strings.TrimSpace(profile.ID) == "" {
+			continue
+		}
+		valid[string(group)][profile.ID] = true
+	}
+	out := make(map[string][]string)
+	for _, group := range providerGroups {
+		key := string(group)
+		seen := map[string]bool{}
+		for _, rawID := range configured[key] {
+			id := strings.TrimSpace(rawID)
+			if id == "" || seen[id] || !valid[key][id] {
+				continue
+			}
+			seen[id] = true
+			out[key] = append(out[key], id)
+		}
+	}
+	return out
+}
+
+func normalizeProviderHealthCheckIntervalSeconds(value int) int {
+	if value <= 0 {
+		return defaultProviderHealthCheckIntervalSeconds
+	}
+	if value < minProviderHealthCheckIntervalSeconds {
+		return minProviderHealthCheckIntervalSeconds
+	}
+	if value > maxProviderHealthCheckIntervalSeconds {
+		return maxProviderHealthCheckIntervalSeconds
+	}
+	return value
 }
 
 func normalizeListenAddress(value string) (string, error) {
@@ -537,6 +659,7 @@ func normalizeSeparateModelProfiles(cfg config) config {
 		}
 	}
 	cfg.ActiveTextProfileByClient = normalizeActiveTextProfilesByClient(cfg.TextModelProfiles, cfg.ActiveTextProfileByClient, cfg.ActiveTextProfileID)
+	cfg.ProviderFailoverProfiles = normalizeProviderFailoverProfiles(cfg.TextModelProfiles, cfg.ProviderFailoverProfiles)
 	if cfg.ActiveTextProfileID == "" || !hasTextProfile(cfg.TextModelProfiles, cfg.ActiveTextProfileID) {
 		cfg.ActiveTextProfileID = cfg.TextModelProfiles[0].ID
 	}

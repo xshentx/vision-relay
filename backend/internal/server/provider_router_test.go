@@ -288,6 +288,94 @@ func TestProviderRecoveryProbeClaimsOnlyDueOpenCircuits(t *testing.T) {
 	}
 }
 
+func TestProviderHealthCheckClaimsClosedProvidersOnlyAfterIdleInterval(t *testing.T) {
+	enabled := true
+	cfg := providerRouterTestConfig([]textModelProfile{
+		{ID: "recent", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://recent.invalid", ModelMappings: []textModelMapping{{Name: "test", Model: "test"}}},
+		{ID: "idle", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://idle.invalid", ModelMappings: []textModelMapping{{Name: "test", Model: "test"}}},
+	}, map[string]string{"codex": "recent"})
+	cfg.ProviderHealthCheckEnabled = &enabled
+	cfg.ProviderHealthCheckIntervalSeconds = 300
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 31, 10, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+
+	if initial := router.claimDueHealthProbes(cfg); len(initial) != 0 {
+		t.Fatalf("providers were checked immediately after startup: %#v", initial)
+	}
+	now = now.Add(4*time.Minute + 59*time.Second)
+	router.recordSuccess(providerRouteCandidate{Group: providerGroupCodex, ProfileID: "recent"})
+	now = now.Add(time.Second)
+	candidates := router.claimDueHealthProbes(cfg)
+	if len(candidates) != 1 || candidates[0].ProfileID != "idle" || candidates[0].halfOpen {
+		t.Fatalf("due periodic health probes = %#v", candidates)
+	}
+	router.mu.Lock()
+	idle := router.providerStateLocked(providerGroupCodex, "idle")
+	recent := router.providerStateLocked(providerGroupCodex, "recent")
+	if idle.CircuitState != providerCircuitClosed || !idle.HalfOpenInFlight {
+		t.Fatalf("idle provider was not claimed without opening its circuit: %#v", idle)
+	}
+	if recent.HalfOpenInFlight || !recent.LastHealthCheckAt.Equal(now.Add(-time.Second)) {
+		t.Fatalf("recent request did not postpone its health check: %#v", recent)
+	}
+	router.mu.Unlock()
+}
+
+func TestProviderHealthCheckCanBeDisabledWithoutDisablingCircuitRecovery(t *testing.T) {
+	disabled := false
+	cfg := providerRouterTestConfig([]textModelProfile{
+		{ID: "closed", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://closed.invalid", ModelMappings: []textModelMapping{{Name: "test", Model: "test"}}},
+		{ID: "open", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://open.invalid", ModelMappings: []textModelMapping{{Name: "test", Model: "test"}}},
+	}, map[string]string{"codex": "closed"})
+	cfg.ProviderHealthCheckEnabled = &disabled
+	cfg.ProviderHealthCheckIntervalSeconds = 60
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 31, 10, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	router.mu.Lock()
+	closed := router.providerStateLocked(providerGroupCodex, "closed")
+	closed.LastHealthCheckAt = now.Add(-time.Hour)
+	open := router.providerStateLocked(providerGroupCodex, "open")
+	open.CircuitState = providerCircuitOpen
+	open.OpenUntil = now
+	router.mu.Unlock()
+
+	candidates := router.claimDueHealthProbes(cfg)
+	if len(candidates) != 1 || candidates[0].ProfileID != "open" || !candidates[0].halfOpen {
+		t.Fatalf("disabled active checks should claim only circuit recovery: %#v", candidates)
+	}
+	if closed.HalfOpenInFlight {
+		t.Fatalf("closed provider was checked while disabled: %#v", closed)
+	}
+}
+
+func TestPeriodicProviderHealthFailureUsesNormalFailureThreshold(t *testing.T) {
+	enabled := true
+	cfg := providerRouterTestConfig([]textModelProfile{{
+		ID: "periodic", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://periodic.invalid",
+		ModelMappings: []textModelMapping{{Name: "test", Model: "test"}},
+	}}, map[string]string{"codex": "periodic"})
+	cfg.ProviderHealthCheckEnabled = &enabled
+	cfg.ProviderHealthCheckIntervalSeconds = 60
+	router := newProviderRouter()
+	now := time.Date(2026, time.July, 31, 10, 0, 0, 0, time.UTC)
+	router.now = func() time.Time { return now }
+	if got := router.claimDueHealthProbes(cfg); len(got) != 0 {
+		t.Fatalf("unexpected initial probes: %#v", got)
+	}
+	now = now.Add(time.Minute)
+	candidate := router.claimDueHealthProbes(cfg)[0]
+	router.recordFailure(candidate, errors.New("periodic check failed"))
+
+	router.mu.Lock()
+	state := router.providerStateLocked(providerGroupCodex, "periodic")
+	if state.CircuitState != providerCircuitClosed || state.ConsecutiveFailures != 1 || !state.LastHealthCheckAt.Equal(now) {
+		t.Fatalf("one periodic failure should not immediately open the circuit: %#v", state)
+	}
+	router.mu.Unlock()
+}
+
 func TestProviderSuccessCancelsRecoveryProbeAndIgnoresItsLateFailure(t *testing.T) {
 	cfg := providerRouterTestConfig([]textModelProfile{{
 		ID: "recovering", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://recovering.invalid",
