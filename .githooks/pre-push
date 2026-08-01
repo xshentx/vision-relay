@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+repo_root=$(git rev-parse --show-toplevel)
+if command -v pwsh >/dev/null 2>&1; then
+  ps=pwsh
+elif command -v powershell.exe >/dev/null 2>&1; then
+  ps=powershell.exe
+else
+  echo "PowerShell is required for the update signing key leak guard." >&2
+  exit 1
+fi
+exec "$ps" -NoProfile -ExecutionPolicy Bypass -File "$repo_root/tools/check-update-key-leak.ps1" -Scope Tracked -KeyFile "$repo_root/.vision-relay-secrets/vision-relay-update-signing.key" -RequireKnownKey

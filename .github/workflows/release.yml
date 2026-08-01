@@ -60,27 +60,44 @@ jobs:
           } else {
             & $windres.Source --version
           }
-      - name: Build Windows executable
+      - name: Build and verify signed Windows executable
         shell: pwsh
         env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 }}
+          UPDATE_SIGNING_PRIVATE_KEY_B64: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 }}
         run: |
           $keyPath = $null
           try {
-            if ([string]::IsNullOrWhiteSpace($env:UPDATE_SIGNING_KEY)) {
-              ./tools/build-windows.ps1 `
-                -Output dist/vision-relay.exe `
-                -Version "${{ github.ref_name }}"
-            } else {
-              $keyPath = Join-Path $env:RUNNER_TEMP "vision-relay-update-key.txt"
-              Set-Content -LiteralPath $keyPath -Value $env:UPDATE_SIGNING_KEY -Encoding ascii -NoNewline
-              ./tools/build-windows.ps1 `
-                -Output dist/vision-relay.exe `
-                -Version "${{ github.ref_name }}" `
-                -UpdateSigningPrivateKeyPath $keyPath `
-                -RequireUpdateSignature
+            if ([string]::IsNullOrWhiteSpace($env:UPDATE_SIGNING_PRIVATE_KEY_B64)) {
+              throw "UPDATE_SIGNING_PRIVATE_KEY_B64 is required for Windows releases."
             }
+            ./tools/check-update-key-leak.ps1 -Scope Tracked -RequireKnownKey
+            $keyPath = Join-Path $env:RUNNER_TEMP "vision-relay-update-key.txt"
+            Set-Content -LiteralPath $keyPath -Value $env:UPDATE_SIGNING_PRIVATE_KEY_B64 -Encoding ascii -NoNewline
+            $env:UPDATE_SIGNING_PRIVATE_KEY_B64 = $null
+
+            ./tools/build-windows.ps1 `
+              -Output dist/vision-relay.exe `
+              -Version "${{ github.ref_name }}" `
+              -UpdateSigningPrivateKeyPath $keyPath `
+              -RequireUpdateSignature
+
+            $artifacts = @(
+              "dist/vision-relay.exe",
+              "dist/vision-relay.exe.sha256",
+              "dist/vision-relay.exe.sig"
+            )
+            foreach ($artifact in $artifacts) {
+              if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+                throw "Required signed release artifact is missing: $artifact"
+              }
+            }
+            ./tools/check-update-key-leak.ps1 `
+              -Scope Paths `
+              -KeyFile $keyPath `
+              -Paths $artifacts `
+              -RequireKnownKey
           } finally {
+            $env:UPDATE_SIGNING_PRIVATE_KEY_B64 = $null
             if (-not [string]::IsNullOrWhiteSpace($keyPath)) {
               [IO.File]::Delete($keyPath)
             }

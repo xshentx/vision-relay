@@ -1,5 +1,11 @@
 # Local configuration and secrets
 .vision-relay-secrets/
+*.key
+*.pem
+*.pfx
+*.p12
+*.jks
+*.keystore
 .env
 .env.*
 !.env.example
