@@ -250,6 +250,7 @@ func TestDefaultDatabasePathUsesExecutableDirectory(t *testing.T) {
 
 func TestLegacyMigrationReadsUserConfigurationDatabase(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tempDir, "config"))
 	t.Setenv("APPDATA", filepath.Join(tempDir, "config"))
 
@@ -287,6 +288,7 @@ func TestLegacyMigrationReadsUserConfigurationDatabase(t *testing.T) {
 
 func TestLegacyMigrationSkipsEmptyCandidate(t *testing.T) {
 	tempDir := t.TempDir()
+	t.Setenv("HOME", tempDir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tempDir, "config"))
 	t.Setenv("APPDATA", filepath.Join(tempDir, "config"))
 	t.Chdir(tempDir)
