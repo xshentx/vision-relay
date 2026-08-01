@@ -78,7 +78,7 @@ fi
 
 PLIST_VERSION="${VERSION#v}"
 PLIST_VERSION="${PLIST_VERSION%%-*}"
-if [[ ! "$PLIST_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+if [[ ! "$PLIST_VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]]; then
   PLIST_VERSION="0.0.0"
 fi
 

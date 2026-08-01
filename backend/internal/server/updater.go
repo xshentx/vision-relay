@@ -750,7 +750,7 @@ func versionNewer(latest, current string) bool {
 	if !lok || !cok {
 		return strings.TrimPrefix(latest, "v") != strings.TrimPrefix(current, "v")
 	}
-	for i := 0; i < 3; i++ {
+	for i := range l {
 		if l[i] != c[i] {
 			return l[i] > c[i]
 		}
@@ -758,12 +758,12 @@ func versionNewer(latest, current string) bool {
 	return false
 }
 
-func numericVersion(value string) ([3]int, bool) {
-	var out [3]int
+func numericVersion(value string) ([4]int, bool) {
+	var out [4]int
 	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
 	value = strings.SplitN(value, "-", 2)[0]
 	parts := strings.Split(value, ".")
-	if len(parts) < 2 || len(parts) > 3 {
+	if len(parts) < 2 || len(parts) > len(out) {
 		return out, false
 	}
 	for i, p := range parts {
