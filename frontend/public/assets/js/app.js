@@ -1419,18 +1419,22 @@ function joinListenAddress(host, port) {
 function syncLocalAPIWarning() {
   const disabled = settingsLocalAPIEnabled?.checked === false;
   if (localAPIWarning) localAPIWarning.hidden = !disabled;
+  if (providerFailoverEnabled) {
+    providerFailoverEnabled.disabled = disabled;
+    if (disabled) providerFailoverEnabled.checked = false;
+  }
 }
 
 function syncProgramSettingsInputs() {
   const address = splitListenAddress(programSettings.addr);
   if (settingsLocalAPIEnabled) settingsLocalAPIEnabled.checked = programSettings.localAPIEnabled;
   if (autoCheckUpdates) autoCheckUpdates.checked = programSettings.autoCheckUpdates;
-  syncLocalAPIWarning();
   if (settingsAPIHost) settingsAPIHost.value = address.host;
   if (settingsAPIPort) settingsAPIPort.value = address.port || "8787";
   if (visionCacheTTLDays) visionCacheTTLDays.value = String(programSettings.visionCacheTTLDays || 30);
   if (visionCacheMaxEntries) visionCacheMaxEntries.value = String(programSettings.visionCacheMaxEntries || 512);
   if (providerFailoverEnabled) providerFailoverEnabled.checked = programSettings.providerFailoverEnabled === true;
+  syncLocalAPIWarning();
   Object.entries(clientConfigPathInputs).forEach(([client, input]) => {
     if (input) input.value = programSettings.clientConfigPaths[client] || "";
   });
@@ -1832,8 +1836,9 @@ async function persistConfig(successMessage = "配置已自动保存") {
 
 settingsLocalAPIEnabled?.addEventListener("change", () => {
   syncLocalAPIWarning();
+  renderTextProfiles();
   if (!settingsLocalAPIEnabled.checked) {
-    showToast("关闭本地服务后视觉模型将不可用；未勾选多模态的文本模型将无法实现图片识别。", "warning");
+    showToast("关闭本地服务后供应商故障转移和视觉模型将不可用；未勾选多模态的文本模型将无法实现图片识别。", "warning");
   }
 });
 
@@ -2807,7 +2812,7 @@ function providerFailoverBadge(profile) {
 }
 
 function providerFailoverControlsEnabled() {
-  return programSettings.providerFailoverEnabled === true && providerFailoverEnabled?.checked !== false;
+  return settingsLocalAPIEnabled?.checked !== false && programSettings.providerFailoverEnabled === true && providerFailoverEnabled?.checked !== false;
 }
 
 async function toggleProviderFailoverProfile(profile) {
@@ -3156,9 +3161,11 @@ function openProfileModal(kind, mode, profileId = "") {
   profileModalEditId = profile?.id || "";
   profileModalTitle.textContent = modalTitle(kind, mode);
   profileModalHelp.textContent = mode === "edit"
-    ? "修改后会更新该模型配置并自动保存。"
-    : (isText ? "填写新的文本上游配置，创建后保存到列表。" : "填写新的视觉上游配置，创建后保存到列表。");
-  profileModalSubmit.textContent = mode === "edit" ? "保存模型" : "创建模型";
+    ? (isText ? "修改后会更新该供应商配置并自动保存。" : "修改后会更新该模型配置并自动保存。")
+    : (isText ? "填写新的供应商配置，添加后保存到列表。" : "填写新的视觉上游配置，添加后保存到列表。");
+  profileModalSubmit.textContent = isText
+    ? (mode === "edit" ? "保存修改" : "添加供应商")
+    : (mode === "edit" ? "保存模型" : "添加模型");
   modalProfileName.value = profile?.name || (isText ? `文本模型 ${index}` : `视觉模型 ${index}`);
   modalProfileClient.value = isText ? normalizeTextProfileClient(profile?.client, profile) : "codex";
   modalProfileClientWrap.hidden = !isText;
@@ -3426,7 +3433,7 @@ async function createProfileFromModal() {
     activeProviderClientTab = profile.client;
     renderTextProfiles();
     showPage("text");
-    await persistTextProfileChanges(isEdit ? "\u5df2\u66f4\u65b0\u5e76\u4fdd\u5b58\u6587\u672c\u6a21\u578b" : "\u5df2\u65b0\u589e\u5e76\u4fdd\u5b58\u6587\u672c\u6a21\u578b", affectedGroups);
+    await persistTextProfileChanges(isEdit ? "\u5df2\u66f4\u65b0\u5e76\u4fdd\u5b58\u4f9b\u5e94\u5546" : "\u5df2\u6dfb\u52a0\u5e76\u4fdd\u5b58\u4f9b\u5e94\u5546", affectedGroups);
   } else {
     const id = isEdit ? profileModalEditId : `vision-${Date.now().toString(36)}`;
     const profile = normalizeVisionProfile({
@@ -3455,7 +3462,7 @@ async function createProfileFromModal() {
 }
 
 function modalTitle(kind, mode) {
-  if (kind === "text") return mode === "edit" ? "编辑文本模型" : "新增文本模型";
+  if (kind === "text") return mode === "edit" ? "编辑供应商" : "添加供应商";
   return mode === "edit" ? "编辑视觉模型" : "新增视觉模型";
 }
 

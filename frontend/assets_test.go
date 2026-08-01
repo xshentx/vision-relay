@@ -17,6 +17,44 @@ func TestTextNavigationUsesProviderWording(t *testing.T) {
 	}
 }
 
+func TestProfileActionsUseSupplierAndModelWording(t *testing.T) {
+	indexRaw, err := fs.ReadFile(FS, "index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexRaw)
+	for _, expected := range []string{
+		`id="addTextProfile" type="button">添加供应商</button>`,
+		`id="addVisionProfile" type="button">添加模型</button>`,
+		`id="profileModalTitle">添加供应商</h3>`,
+		`id="profileModalSubmit" type="submit">添加供应商</button>`,
+	} {
+		if !strings.Contains(index, expected) {
+			t.Fatalf("profile action wording %q is missing", expected)
+		}
+	}
+
+	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(scriptRaw)
+	for _, expected := range []string{
+		`if (kind === "text") return mode === "edit" ? "编辑供应商" : "添加供应商";`,
+		`? (mode === "edit" ? "保存修改" : "添加供应商")`,
+		`: (mode === "edit" ? "保存模型" : "添加模型");`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("profile modal wording %q is missing", expected)
+		}
+	}
+	for _, forbidden := range []string{"新增文本模型", "编辑文本模型", "创建模型"} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("obsolete text supplier wording %q is still embedded", forbidden)
+		}
+	}
+}
+
 func TestClientConfigureActionsAreEmbedded(t *testing.T) {
 	indexRaw, err := fs.ReadFile(FS, "index.html")
 	if err != nil {
@@ -916,7 +954,7 @@ func TestDisabledLocalAPIDirectSupplierUIIsEmbedded(t *testing.T) {
 	index := string(indexRaw)
 	for _, expected := range []string{
 		`id="localAPIWarning"`,
-		"关闭本地服务后视觉模型将不可用",
+		"关闭本地服务后供应商故障转移和视觉模型将不可用",
 		"只有勾选“支持多模态”的文本模型仍可识别图片",
 	} {
 		if !strings.Contains(index, expected) {

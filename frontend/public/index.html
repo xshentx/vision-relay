@@ -134,7 +134,7 @@
               <h3>模型供应商</h3>
               <p>供应商按 Codex、Claude、OpenCode、OpenClaw 分组；点击“使用”只更新该组对应的客户端配置，并执行设置中的客户端行为。</p>
             </div>
-            <button class="secondary" id="addTextProfile" type="button">新增</button>
+            <button class="secondary" id="addTextProfile" type="button">添加供应商</button>
           </div>
           <div class="provider-client-tabs" role="tablist" aria-label="供应商客户端分组">
             <button class="active" type="button" role="tab" aria-selected="true" data-provider-client-tab="codex">Codex</button>
@@ -151,7 +151,7 @@
               <h3>视觉模型</h3>
               <p>图片会先交给这里选中的视觉模型解析，再把解析结果交给文本模型。</p>
             </div>
-            <button class="secondary" id="addVisionProfile" type="button">新增</button>
+            <button class="secondary" id="addVisionProfile" type="button">添加模型</button>
           </div>
           <label class="toggle-line">
             <input id="visionEnabled" type="checkbox">
@@ -216,7 +216,7 @@
               <label><span>监听地址</span><input id="settingsAPIHost" type="text" autocomplete="off" placeholder="127.0.0.1"><small>127.0.0.1 仅允许本机访问；0.0.0.0 允许局域网设备访问。</small></label>
               <label><span>监听端口</span><input id="settingsAPIPort" type="number" min="1" max="65535" step="1" placeholder="8787"><small>地址或端口修改后，重启 Vision Relay 生效。</small></label>
             </div>
-            <div class="component-alert warning settings-api-warning" id="localAPIWarning" hidden><strong>功能提示</strong><span>关闭本地服务后视觉模型将不可用；客户端会直连当前文本供应商，只有勾选“支持多模态”的文本模型仍可识别图片。</span></div>
+            <div class="component-alert warning settings-api-warning" id="localAPIWarning" hidden><strong>功能提示</strong><span>关闭本地服务后供应商故障转移和视觉模型将不可用；客户端会直连当前文本供应商，只有勾选“支持多模态”的文本模型仍可识别图片。</span></div>
           </article>
 
           <article class="component-card settings-cache-card">
@@ -233,7 +233,7 @@
 
           <article class="component-card settings-failover-card">
             <div class="component-card-head settings-failover-head">
-              <div><h4>供应商故障转移</h4><p>主供应商发生网络错误、限流、认证或模型不可用等可重试错误时，按 P1、P2 优先级自动尝试下一家。</p></div>
+              <div><h4>供应商故障转移</h4><p>仅在本地 API 接口开启时可用；主供应商发生网络错误、限流、认证或模型不可用等可重试错误时，按 P1、P2 优先级自动尝试下一家。</p></div>
               <label class="client-route-control"><span>启用故障转移</span><span class="switch-control"><input id="providerFailoverEnabled" type="checkbox"><span aria-hidden="true"></span></span></label>
             </div>
             <div class="settings-note"><strong>生效规则</strong><span>只有在供应商列表中点击“加入”的供应商才会参与；已熔断供应商在冷却期内自动跳过，冷却结束后的下一次真实请求会作为半开探测，成功后重新参与。请求格式或语义错误（400/405/406/413/414/415/422/501）不切换供应商，也不影响熔断状态。</span></div>
@@ -718,8 +718,8 @@
     <form class="modal-card" id="profileModalForm">
       <div class="modal-head">
         <div>
-          <h3 id="profileModalTitle">新增模型</h3>
-          <p id="profileModalHelp">创建后会自动切换到新模型并保存。</p>
+          <h3 id="profileModalTitle">添加供应商</h3>
+          <p id="profileModalHelp">填写新的供应商配置，添加后保存到列表。</p>
         </div>
         <button class="icon-button" id="closeProfileModal" type="button" aria-label="关闭">×</button>
       </div>
@@ -818,7 +818,7 @@
 
       <div class="modal-actions">
         <button class="ghost-light" id="cancelProfileModal" type="button">取消</button>
-        <button id="profileModalSubmit" type="submit">创建并切换</button>
+        <button id="profileModalSubmit" type="submit">添加供应商</button>
       </div>
     </form>
   </dialog>

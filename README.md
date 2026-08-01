@@ -117,7 +117,7 @@ Vue 3 和 Element Plus 会复制到 `frontend/public/assets/vendor`，程序运�
 - `-H windowsgui` 会生成 Windows GUI 子系统程序，双击运行时不会弹出控制台窗口。
 - 前端页面、图标和 Windows 版本信息会随 Go 编译一起打进 `vision-relay.exe`。
 - 构建依赖 MinGW-w64 的 `windres.exe`；找不到资源编译器时脚本会直接失败，避免沿用旧版本的 VERSIONINFO。
-- 构建脚本支持可选 Authenticode 代码签名：可设置 `WINDOWS_SIGNING_CERTIFICATE_PATH` 与 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`，或传入 `-SigningCertificatePath`。当前 GitHub 标签工作流未配置 Authenticode，下载运行时仍可能出现 Windows SmartScreen 或未知发布者提示；独立的 Ed25519 更新签名则是标签发布和 Windows 自动更新的必需信任链。
+- 构建脚本支持可选 Authenticode 代码签名：可设置 `WINDOWS_SIGNING_CERTIFICATE_PATH` 与 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`，或传入 `-SigningCertificatePath`。当前 GitHub 标签工作流未配置 Authenticode，下载运行时仍可能出现 Windows SmartScreen 或未知发布者提示；独立的 Ed25519 更新签名仅在启用 Windows 应用内自动替换更新时需要。
 
 如果需要调试日志窗口，可以去掉 `-H windowsgui`：
 
@@ -131,7 +131,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.3.1 --arch arm64
+bash ./tools/build-macos.sh --version v2.3.2 --arch arm64
 ```
 
 支持的架构参数：
@@ -149,14 +149,14 @@ bash ./tools/build-macos.sh --version v2.3.1 --arch arm64
 Windows 本地开发构建（未提供更新签名密钥时，构建产物会禁用自动替换更新）：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.3.1
+.\tools\build-windows.ps1 -Version v2.3.2
 ```
 
 如需启用 Windows 应用内自动替换更新，可选提供 Ed25519 更新签名私钥，使构建脚本把对应公钥嵌入 EXE，并生成独立的 `.sig` 附件：
 
 ```powershell
 .\tools\build-windows.ps1 `
-  -Version v2.3.1 `
+  -Version v2.3.2 `
   -UpdateSigningPrivateKeyPath C:\secure\vision-relay-update-signing.key `
   -RequireUpdateSignature
 ```
@@ -172,7 +172,7 @@ Windows 本地开发构建（未提供更新签名密钥时，构建产物会禁
 ```powershell
 .\tools\build-windows.ps1 `
   -Output dist\vision-relay.exe `
-  -Version v2.3.1 `
+  -Version v2.3.2 `
   -SigningCertificatePath C:\secure\vision-relay-code-signing.pfx `
   -SigningCertificatePassword '<PFX 密码>' `
   -RequireSignature
@@ -194,7 +194,7 @@ $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter s
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.3.1 --arch universal
+bash ./tools/build-macos.sh --version v2.3.2 --arch universal
 ```
 
 生成的 Release 附件：
@@ -210,14 +210,14 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.3.1
-git push origin v2.3.1
+git tag v2.3.2
+git push origin v2.3.2
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.3.1
+Vision Relay v2.3.2
 ```
 
 附件上传时应包含对应平台的程序包和同名 `.sha256` 文件；启用 Ed25519 更新签名时，Windows 还应包含 `vision-relay.exe.sig`。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
@@ -277,7 +277,7 @@ OPEN_BROWSER=false
 - Go 主程序管理界面优先监听 `127.0.0.1:18473`，不在设置页提供修改入口；若首选端口被占用，程序会自动改用其他本地可用端口。可修改本地中转 API 的监听地址和端口，保存后需重启 Vision Relay 才会重新绑定。
 - 桌面 WebView、系统浏览器、托盘激活与管理接口会连接本次运行实际选定的管理端口；重复启动时由系统级单实例机制唤醒已运行窗口，不依赖固定端口。Codex、Claude、OpenCode、OpenClaw 及模型请求只连接可配置的中转 API 端口。
 - 可独立关闭或开启本地 API 转发接口。关闭时，中转端口上的 `/v1/*` 等模型接口返回 `503`；管理端口上的管理页面、设置 API 和 `/healthz` 仍可使用。该开关保存后立即生效。
-- 关闭本地 API 后，一键配置和文本供应商切换会让已配置客户端直连当前文本供应商，并写入供应商 API 地址、上游令牌和已添加模型的真实模型名（不会自动导入上游全部模型）；视觉模型中转不可用，文本模型的图片能力按每个模型的“支持多模态”设置写入客户端。 直连时 Codex 仅支持使用 Responses 协议的 OpenAI 兼容供应商，Claude 仅支持 Anthropic 协议供应商；协议不兼容或当前供应商未添加模型时会停止写入并给出提示。
+- 关闭本地 API 后，一键配置和文本供应商切换会让已配置客户端直连当前文本供应商，并写入供应商 API 地址、上游令牌和已添加模型的真实模型名（不会自动导入上游全部模型）；供应商故障转移和视觉模型中转都会停用，但已配置的 P1/P2 队列会保留，重新开启本地 API 后可再次启用故障转移。文本模型的图片能力按每个模型的“支持多模态”设置写入客户端。直连时 Codex 仅支持使用 Responses 协议的 OpenAI 兼容供应商，Claude 仅支持 Anthropic 协议供应商；协议不兼容或当前供应商未添加模型时会停止写入并给出提示。
 - 可查看和修改 Codex、Codex CLI、OpenCode、Claude、Claude CLI、OpenClaw 的配置文件位置与客户端程序位置；Codex 桌面端与 CLI 共用配置，Claude 桌面端与 CLI 使用独立配置。
 - Codex 桌面客户端支持自动检测 Microsoft Store 的 `OpenAI.Codex_*\app\ChatGPT.exe` 安装位置，不依赖固定版本号。
 - Claude Desktop 与 Claude CLI 的路径检测和程序生命周期管理彼此独立：Windows 桌面端可识别 `%LOCALAPPDATA%\AnthropicClaude\claude.exe` 及 Squirrel 版本目录，macOS 桌面端可识别 `/Applications` 或 `~/Applications` 中的 `Claude.app`；CLI 在两端都可从 `PATH` 识别 `claude` 命令，二者不会互相误判。
@@ -424,7 +424,7 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 
 ```powershell
 .\tools\build-windows.ps1 `
-  -Version v2.3.1 `
+  -Version v2.3.2 `
   -UpdateSigningPrivateKeyPath C:\secure\vision-relay-update-signing.key `
   -RequireUpdateSignature
 ```

@@ -391,7 +391,7 @@ func normalizeVisionCacheMaxEntries(value int) int {
 }
 
 func providerFailoverEnabled(cfg config) bool {
-	return cfg.ProviderFailoverEnabled != nil && *cfg.ProviderFailoverEnabled
+	return localAPIEnabled(cfg) && cfg.ProviderFailoverEnabled != nil && *cfg.ProviderFailoverEnabled
 }
 
 func normalizeProviderFailoverProfiles(profiles []textModelProfile, configured map[string][]string) map[string][]string {
@@ -640,6 +640,9 @@ func normalizeSeparateModelProfiles(cfg config) config {
 	}
 	cfg.ActiveTextProfileByClient = normalizeActiveTextProfilesByClient(cfg.TextModelProfiles, cfg.ActiveTextProfileByClient, cfg.ActiveTextProfileID)
 	cfg.ProviderFailoverProfiles = normalizeProviderFailoverProfiles(cfg.TextModelProfiles, cfg.ProviderFailoverProfiles)
+	if !localAPIEnabled(cfg) {
+		cfg.ProviderFailoverEnabled = boolPtr(false)
+	}
 	if cfg.ActiveTextProfileID == "" || !hasTextProfile(cfg.TextModelProfiles, cfg.ActiveTextProfileID) {
 		cfg.ActiveTextProfileID = cfg.TextModelProfiles[0].ID
 	}

@@ -11,6 +11,37 @@ import (
 	"testing"
 )
 
+func TestProviderFailoverAvailabilityFollowsLocalAPI(t *testing.T) {
+	enabled := true
+	disabled := false
+	raw := config{LocalAPIEnabled: &disabled, ProviderFailoverEnabled: &enabled}
+	if providerFailoverEnabled(raw) {
+		t.Fatal("failover must not run while the local API is disabled")
+	}
+
+	cfg := providerRouterTestConfig([]textModelProfile{
+		{ID: "primary", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://primary.example"},
+		{ID: "backup", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://backup.example"},
+	}, map[string]string{"codex": "primary"})
+	cfg.LocalAPIEnabled = &disabled
+	cfg.ProviderFailoverEnabled = &enabled
+	cfg.ProviderFailoverProfiles = map[string][]string{"codex": {"primary", "backup"}}
+	cfg = normalizeSeparateModelProfiles(cfg)
+	if cfg.ProviderFailoverEnabled == nil || *cfg.ProviderFailoverEnabled {
+		t.Fatalf("normalized failover setting = %#v, want false", cfg.ProviderFailoverEnabled)
+	}
+	if got := cfg.ProviderFailoverProfiles["codex"]; len(got) != 2 || got[0] != "primary" || got[1] != "backup" {
+		t.Fatalf("disabled failover should preserve its configured queue: %#v", got)
+	}
+
+	cfg.LocalAPIEnabled = &enabled
+	cfg.ProviderFailoverEnabled = &enabled
+	cfg = normalizeSeparateModelProfiles(cfg)
+	if !providerFailoverEnabled(cfg) {
+		t.Fatal("failover should be available while the local API is enabled")
+	}
+}
+
 func TestProviderFailoverUsesNextJoinedProviderOnServerError(t *testing.T) {
 	var primaryCalls atomic.Int64
 	var backupCalls atomic.Int64

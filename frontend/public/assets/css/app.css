@@ -1570,6 +1570,11 @@ button[type="submit"]:hover {
   outline-offset: 2px;
 }
 
+.switch-control input:disabled + span {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .client-snippet-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
