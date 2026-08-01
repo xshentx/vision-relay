@@ -1,4 +1,5 @@
 # Local configuration and secrets
+.vision-relay-secrets/
 .env
 .env.*
 !.env.example
