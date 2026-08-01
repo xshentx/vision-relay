@@ -78,16 +78,6 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	healthCandidate, healthCandidateOK := modelTestHealthCandidate(cfg, profile)
-	if healthCandidateOK {
-		a.textProviderRouter().recordHealthCheckModel(healthCandidate, model)
-	}
-	recordHealthFailure := func(resp *http.Response, callErr error) {
-		if healthCandidateOK && shouldRecordProviderFailure(r.Context(), resp, callErr) {
-			a.textProviderRouter().recordFailure(healthCandidate, callErr)
-		}
-	}
-
 	started := time.Now()
 	resp, err := a.forwardJSON(r.Context(), spec.Endpoint, http.MethodPost, spec.Path, body, http.Header{
 		"Accept":       []string{"application/json"},
@@ -95,14 +85,12 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 	})
 	durationMS := time.Since(started).Milliseconds()
 	if err != nil {
-		recordHealthFailure(nil, err)
 		a.appendModelTestLog(profile, model, started, http.StatusBadGateway, nil, err)
 		writeModelTestError(w, http.StatusBadGateway, err, 0, durationMS, "")
 		return
 	}
 	if resp == nil {
 		noResponseErr := errors.New("upstream returned no response")
-		recordHealthFailure(nil, noResponseErr)
 		a.appendModelTestLog(profile, model, started, http.StatusBadGateway, nil, noResponseErr)
 		writeModelTestError(w, http.StatusBadGateway, noResponseErr, 0, durationMS, "")
 		return
@@ -111,7 +99,6 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxModelTestResponseBytes))
 	requestID := modelTestRequestID(resp.Header)
 	if readErr != nil {
-		recordHealthFailure(resp, readErr)
 		a.appendModelTestLog(profile, model, started, http.StatusBadGateway, responseBody, readErr)
 		writeModelTestError(w, http.StatusBadGateway, readErr, resp.StatusCode, durationMS, requestID)
 		return
@@ -121,11 +108,6 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 		if detail := modelTestUpstreamError(responseBody); detail != "" {
 			err = fmt.Errorf("%w: %s", err, detail)
 		}
-		if shouldRecordProviderFailure(r.Context(), resp, nil) {
-			recordHealthFailure(resp, err)
-		} else if healthCandidateOK {
-			a.textProviderRouter().recordSuccess(healthCandidate)
-		}
 		a.appendModelTestLog(profile, model, started, resp.StatusCode, responseBody, err)
 		writeModelTestError(w, http.StatusBadGateway, err, resp.StatusCode, durationMS, requestID)
 		return
@@ -133,16 +115,9 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 	var payload any
 	if err := json.Unmarshal(responseBody, &payload); err != nil {
 		invalidJSONErr := errors.New("upstream returned invalid JSON")
-		recordHealthFailure(resp, invalidJSONErr)
 		a.appendModelTestLog(profile, model, started, http.StatusBadGateway, responseBody, invalidJSONErr)
 		writeModelTestError(w, http.StatusBadGateway, invalidJSONErr, resp.StatusCode, durationMS, requestID)
 		return
-	}
-	// A successful manual model test is also a successful provider request.
-	// Restore the circuit immediately and cancel any background recovery probe
-	// that may still be running for this provider.
-	if healthCandidateOK {
-		a.textProviderRouter().recordSuccess(healthCandidate)
 	}
 	output := strings.TrimSpace(modelTestOutput(payload))
 	if output == "" {
@@ -161,14 +136,6 @@ func (a *app) handleModelTest(w http.ResponseWriter, r *http.Request) {
 		RequestID:   requestID,
 		Output:      output,
 	})
-}
-
-func modelTestHealthCandidate(cfg config, profile textModelProfile) (providerRouteCandidate, bool) {
-	group, ok := providerGroupForClient(profile.Client)
-	if !ok || strings.TrimSpace(profile.ID) == "" {
-		return providerRouteCandidate{}, false
-	}
-	return providerRouteCandidateForProfile(cfg, group, profile), true
 }
 
 func (a *app) appendModelTestLog(profile textModelProfile, model string, started time.Time, status int, responseBody []byte, callErr error) {

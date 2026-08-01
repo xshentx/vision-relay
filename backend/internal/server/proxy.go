@@ -135,9 +135,9 @@ func (a *app) forwardRaw(ctx context.Context, ep endpoint, method, requestURI st
 			originalModel = route.originalModel
 		}
 		adaptedURI, adaptedBody := adaptProviderAttempt(candidate, requestURI, body, originalModel)
-		router.recordRequestedModel(candidate, adaptedURI, adaptedBody)
 		resp, err := a.forwardRawOnce(ctx, candidate.Endpoint, method, adaptedURI, adaptedBody, originalHeader)
-		if shouldRecordProviderFailure(ctx, resp, err) {
+		switch classifyProviderResult(ctx, resp, err) {
+		case providerResultRetryableFailure:
 			router.recordFailure(candidate, providerAttemptError(resp, err))
 			next, nextIndex, hasNext := nextCandidate(candidateIndex + 1)
 			if hasNext {
@@ -149,8 +149,10 @@ func (a *app) forwardRaw(ctx context.Context, ep endpoint, method, requestURI st
 				continue
 			}
 			return resp, err
-		}
-		if err == nil && resp != nil {
+		case providerResultNeutral:
+			router.releaseHalfOpenProbe(candidate)
+			return resp, err
+		case providerResultSuccess:
 			emptyBody := resp.Body == nil || resp.Body == http.NoBody || resp.ContentLength == 0
 			if emptyBody && !upstreamStreamingRequest(ctx) {
 				router.recordSuccess(candidate)
@@ -160,10 +162,10 @@ func (a *app) forwardRaw(ctx context.Context, ep endpoint, method, requestURI st
 				}
 				resp.Body = newProviderObservedBody(ctx, resp.Body, router, candidate)
 			}
-		} else {
-			router.releaseHalfOpenProbe(candidate)
+			return resp, err
+		default:
+			panic("unreachable provider result category")
 		}
-		return resp, err
 	}
 }
 
@@ -216,7 +218,9 @@ func (a *app) forwardRawOnce(ctx context.Context, ep endpoint, method, requestUR
 func (a *app) upstreamHTTPClient(proxyURL string) (*http.Client, error) {
 	proxyURL = strings.TrimSpace(proxyURL)
 	if proxyURL == "" {
-		return a.httpClient, nil
+		client := *a.httpClient
+		client.CheckRedirect = rejectUpstreamRedirect
+		return &client, nil
 	}
 	parsed, err := url.Parse(proxyURL)
 	if err != nil {
@@ -227,7 +231,12 @@ func (a *app) upstreamHTTPClient(proxyURL string) (*http.Client, error) {
 		Transport: &http.Transport{
 			Proxy: http.ProxyURL(parsed),
 		},
+		CheckRedirect: rejectUpstreamRedirect,
 	}, nil
+}
+
+func rejectUpstreamRedirect(_ *http.Request, _ []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 func joinTargetURL(baseURL, requestURI string) (string, error) {

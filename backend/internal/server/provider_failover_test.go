@@ -140,7 +140,7 @@ func TestProviderFailoverSkipsOpenCircuit(t *testing.T) {
 	router := a.textProviderRouter()
 	primaryCandidate := providerRouteCandidateForProfile(cfg, providerGroupCodex, cfg.TextModelProfiles[0])
 	for index := 0; index < providerFailureThreshold; index++ {
-		router.recordFailure(primaryCandidate, context.DeadlineExceeded)
+		recordProviderTestFailure(t, router, primaryCandidate, context.DeadlineExceeded)
 	}
 
 	resp := forwardProviderRouterTestRequest(t, a, cfg, providerGroupCodex, "codex", "/v1/responses")
@@ -236,6 +236,57 @@ func TestProviderFailoverUsesNextProviderOnNetworkError(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent || primaryCalls.Load() != 1 || backupCalls.Load() != 1 {
 		t.Fatalf("status=%d primary=%d backup=%d", resp.StatusCode, primaryCalls.Load(), backupCalls.Load())
+	}
+}
+
+func TestProviderFailoverUsesNextProviderOnRateLimit(t *testing.T) {
+	var primaryCalls atomic.Int64
+	var backupCalls atomic.Int64
+	client := &http.Client{Transport: providerRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Host {
+		case "primary.example":
+			primaryCalls.Add(1)
+			body := "rate limited"
+			return &http.Response{
+				StatusCode:    http.StatusTooManyRequests,
+				Status:        "429 Too Many Requests",
+				Header:        http.Header{},
+				Body:          io.NopCloser(strings.NewReader(body)),
+				ContentLength: int64(len(body)),
+				Request:       req,
+			}, nil
+		case "backup.example":
+			backupCalls.Add(1)
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Status:     "204 No Content",
+				Header:     http.Header{},
+				Body:       http.NoBody,
+				Request:    req,
+			}, nil
+		default:
+			t.Fatalf("unexpected host %q", req.URL.Host)
+			return nil, nil
+		}
+	})}
+	cfg := providerRouterTestConfig([]textModelProfile{
+		{ID: "primary", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://primary.example"},
+		{ID: "backup", Client: "codex", Provider: "openai", WireAPI: "responses", BaseURL: "https://backup.example"},
+	}, map[string]string{"codex": "primary"})
+	enabled := true
+	cfg.ProviderFailoverEnabled = &enabled
+	cfg.ProviderFailoverProfiles = map[string][]string{"codex": {"primary", "backup"}}
+	cfg = normalizeSeparateModelProfiles(cfg)
+	a := &app{cfg: cfg, httpClient: client}
+
+	resp := forwardProviderRouterTestRequest(t, a, cfg, providerGroupCodex, "codex", "/v1/responses")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || primaryCalls.Load() != 1 || backupCalls.Load() != 1 {
+		t.Fatalf("status=%d primary=%d backup=%d", resp.StatusCode, primaryCalls.Load(), backupCalls.Load())
+	}
+	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "primary")
+	if status.FailureCount != 1 || status.ConsecutiveFailure != 1 || status.CircuitState != providerCircuitClosed {
+		t.Fatalf("rate limit did not count as a retryable provider failure: %#v", status)
 	}
 }
 

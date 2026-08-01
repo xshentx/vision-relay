@@ -43,8 +43,6 @@ const settingsAPIHost = document.querySelector("#settingsAPIHost");
 const settingsAPIPort = document.querySelector("#settingsAPIPort");
 const visionCacheTTLDays = document.querySelector("#visionCacheTTLDays");
 const visionCacheMaxEntries = document.querySelector("#visionCacheMaxEntries");
-const providerHealthCheckEnabled = document.querySelector("#providerHealthCheckEnabled");
-const providerHealthCheckIntervalMinutes = document.querySelector("#providerHealthCheckIntervalMinutes");
 const providerFailoverEnabled = document.querySelector("#providerFailoverEnabled");
 const visionCacheState = document.querySelector("#visionCacheState");
 const clearVisionCache = document.querySelector("#clearVisionCache");
@@ -214,8 +212,6 @@ let programSettings = {
   localAPIEnabled: true,
   visionCacheTTLDays: 30,
   visionCacheMaxEntries: 512,
-  providerHealthCheckEnabled: true,
-  providerHealthCheckIntervalMinutes: 5,
   providerFailoverEnabled: false,
   autoCheckUpdates: true,
   openWindow: true,
@@ -1434,12 +1430,7 @@ function syncProgramSettingsInputs() {
   if (settingsAPIPort) settingsAPIPort.value = address.port || "8787";
   if (visionCacheTTLDays) visionCacheTTLDays.value = String(programSettings.visionCacheTTLDays || 30);
   if (visionCacheMaxEntries) visionCacheMaxEntries.value = String(programSettings.visionCacheMaxEntries || 512);
-  if (providerHealthCheckEnabled) providerHealthCheckEnabled.checked = programSettings.providerHealthCheckEnabled !== false;
   if (providerFailoverEnabled) providerFailoverEnabled.checked = programSettings.providerFailoverEnabled === true;
-  if (providerHealthCheckIntervalMinutes) {
-    providerHealthCheckIntervalMinutes.value = String(programSettings.providerHealthCheckIntervalMinutes || 5);
-    providerHealthCheckIntervalMinutes.disabled = programSettings.providerHealthCheckEnabled === false;
-  }
   Object.entries(clientConfigPathInputs).forEach(([client, input]) => {
     if (input) input.value = programSettings.clientConfigPaths[client] || "";
   });
@@ -1485,10 +1476,6 @@ async function loadConfig() {
     localAPIEnabled: cfg.local_api_enabled !== false,
     visionCacheTTLDays: Number.isInteger(Number(cfg.vision_cache_ttl_hours)) && Number(cfg.vision_cache_ttl_hours) > 0 ? Math.max(1, Math.ceil(Number(cfg.vision_cache_ttl_hours) / 24)) : 30,
     visionCacheMaxEntries: Number.isInteger(Number(cfg.vision_cache_max_entries)) && Number(cfg.vision_cache_max_entries) > 0 ? Number(cfg.vision_cache_max_entries) : 512,
-    providerHealthCheckEnabled: cfg.provider_health_check_enabled !== false,
-    providerHealthCheckIntervalMinutes: Number.isInteger(Number(cfg.provider_health_check_interval_seconds)) && Number(cfg.provider_health_check_interval_seconds) > 0
-      ? Math.max(1, Math.ceil(Number(cfg.provider_health_check_interval_seconds) / 60))
-      : 5,
     providerFailoverEnabled: cfg.provider_failover_enabled === true,
     autoCheckUpdates: cfg.auto_check_updates !== false,
     openWindow: cfg.open_window !== false,
@@ -1795,8 +1782,6 @@ async function persistConfig(successMessage = "配置已自动保存") {
   data.local_api_enabled = programSettings.localAPIEnabled;
   data.vision_cache_ttl_hours = programSettings.visionCacheTTLDays * 24;
   data.vision_cache_max_entries = programSettings.visionCacheMaxEntries;
-  data.provider_health_check_enabled = programSettings.providerHealthCheckEnabled;
-  data.provider_health_check_interval_seconds = programSettings.providerHealthCheckIntervalMinutes * 60;
   data.provider_failover_enabled = programSettings.providerFailoverEnabled === true;
   data.provider_failover_profiles = normalizeProviderFailoverProfiles(providerFailoverProfiles, textProfiles);
   data.auto_check_updates = programSettings.autoCheckUpdates;
@@ -1852,10 +1837,8 @@ settingsLocalAPIEnabled?.addEventListener("change", () => {
   }
 });
 
-providerHealthCheckEnabled?.addEventListener("change", () => {
-  if (providerHealthCheckIntervalMinutes) {
-    providerHealthCheckIntervalMinutes.disabled = !providerHealthCheckEnabled.checked;
-  }
+providerFailoverEnabled?.addEventListener("change", () => {
+  renderTextProfiles();
 });
 
 saveProgramSettings?.addEventListener("click", async () => {
@@ -1877,12 +1860,6 @@ saveProgramSettings?.addEventListener("click", async () => {
     visionCacheMaxEntries?.focus();
     return;
   }
-  const healthCheckIntervalMinutes = Number(providerHealthCheckIntervalMinutes?.value);
-  if (!Number.isInteger(healthCheckIntervalMinutes) || healthCheckIntervalMinutes < 1 || healthCheckIntervalMinutes > 1440) {
-    showToast("\u5065\u5eb7\u68c0\u67e5\u95f4\u9694\u5fc5\u987b\u662f 1 \u5230 1440 \u4e4b\u95f4\u7684\u6574\u6570\u5206\u949f", "error");
-    providerHealthCheckIntervalMinutes?.focus();
-    return;
-  }
   const previousProgramSettings = programSettings;
   const previousAddress = programSettings.addr;
   const previousLocalAPIEnabled = programSettings.localAPIEnabled;
@@ -1892,8 +1869,6 @@ saveProgramSettings?.addEventListener("click", async () => {
     localAPIEnabled: settingsLocalAPIEnabled?.checked !== false,
     visionCacheTTLDays: cacheTTLDays,
     visionCacheMaxEntries: cacheMaxEntries,
-    providerHealthCheckEnabled: providerHealthCheckEnabled?.checked !== false,
-    providerHealthCheckIntervalMinutes: healthCheckIntervalMinutes,
     providerFailoverEnabled: providerFailoverEnabled?.checked === true,
     clientConfigPaths: collectClientPaths(clientConfigPathInputs),
     clientProgramPaths: collectClientPaths(clientProgramPathInputs),
@@ -2831,6 +2806,10 @@ function providerFailoverBadge(profile) {
   return rank > 0 ? `<span class="provider-failover-badge" title="\u6545\u969c\u8f6c\u79fb\u4f18\u5148\u7ea7">P${rank}</span>` : "";
 }
 
+function providerFailoverControlsEnabled() {
+  return programSettings.providerFailoverEnabled === true && providerFailoverEnabled?.checked !== false;
+}
+
 async function toggleProviderFailoverProfile(profile) {
   const previous = normalizeProviderFailoverProfiles(providerFailoverProfiles, textProfiles);
   providerFailoverProfiles = normalizeProviderFailoverProfiles(providerFailoverProfiles, textProfiles);
@@ -2994,11 +2973,11 @@ function renderProfileList(container, profiles, activeId, kind) {
         <div>
           <strong>${escapeHTML(profile.name || "未命名")}</strong>
           <span>${escapeHTML(profileSummary(profile, kind))}</span>
-          ${kind === "text" ? `${providerCircuitBadge(profile)}${programSettings.providerFailoverEnabled === true ? providerFailoverBadge(profile) : ""}` : ""}
+          ${kind === "text" ? `${providerCircuitBadge(profile)}${providerFailoverControlsEnabled() ? providerFailoverBadge(profile) : ""}` : ""}
         </div>
       </div>
       <div class="profile-actions">
-        ${kind === "text" && programSettings.providerFailoverEnabled === true ? `<button class="secondary small-action profile-failover${providerFailoverRank(profile) > 0 ? " is-joined" : ""}" type="button" data-action="failover" title="${providerFailoverRank(profile) > 0 ? "\u70b9\u51fb\u79fb\u51fa\u6545\u969c\u8f6c\u79fb" : "\u52a0\u5165\u540e\u624d\u53c2\u4e0e\u6545\u969c\u8f6c\u79fb"}">${providerFailoverRank(profile) > 0 ? "\u79fb\u51fa\u6545\u969c\u8f6c\u79fb" : "\u52a0\u5165\u6545\u969c\u8f6c\u79fb"}</button>` : ""}
+        ${kind === "text" && providerFailoverControlsEnabled() ? `<button class="secondary small-action profile-failover${providerFailoverRank(profile) > 0 ? " is-joined" : ""}" type="button" data-action="failover" title="${providerFailoverRank(profile) > 0 ? "\u70b9\u51fb\u79fb\u51fa\u6545\u969c\u8f6c\u79fb" : "\u52a0\u5165\u540e\u624d\u53c2\u4e0e\u6545\u969c\u8f6c\u79fb"}">${providerFailoverRank(profile) > 0 ? "\u79fb\u51fa\u6545\u969c\u8f6c\u79fb" : "\u52a0\u5165\u6545\u969c\u8f6c\u79fb"}</button>` : ""}
         ${kind === "text" ? '<button class="secondary small-action profile-test" type="button" data-action="test">\u6a21\u578b\u6d4b\u8bd5</button>' : ""}
         <button class="secondary small-action profile-switch" type="button" data-action="switch"${profile.id === activeId ? " disabled" : ""}>使用</button>
         <button class="secondary small-action" type="button" data-action="edit">编辑</button>

@@ -14,16 +14,33 @@ import (
 )
 
 func defaultDBPath() string {
-	exe, err := os.Executable()
-	if err == nil && exe != "" {
-		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = resolved
-		}
-		if dir := filepath.Dir(exe); dir != "" && dir != "." {
-			return filepath.Join(dir, appSlug+".db")
-		}
+	if path := executableDBPath(appSlug + ".db"); path != "" {
+		return path
 	}
 	return appSlug + ".db"
+}
+
+func executableDBPath(name string) string {
+	exe, err := os.Executable()
+	if err != nil || strings.TrimSpace(exe) == "" {
+		return ""
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(exe); resolveErr == nil {
+		exe = resolved
+	}
+	dir := filepath.Dir(exe)
+	if dir == "" || dir == "." {
+		return ""
+	}
+	return filepath.Join(dir, name)
+}
+
+func userConfigDBPath() string {
+	dir, err := appUserConfigDir()
+	if err != nil || dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, appSlug+".db")
 }
 
 func legacyUserConfigDBPath() string {
@@ -69,17 +86,27 @@ func migrateLegacyDBIfNeeded(dst *sql.DB, dstPath string) (config, bool, error) 
 				_ = insertRequestLogDB(dst, logs[i])
 			}
 		}
-		return cfg, ok, nil
+		if ok || (err == nil && len(logs) > 0) {
+			return cfg, ok, nil
+		}
+		// An initialized but otherwise empty legacy database can be left behind by
+		// an interrupted launch. Keep searching later candidates for real data.
 	}
 	return cfg, false, nil
 }
 
 func legacyDBPaths(dstPath string) []string {
-	paths := []string{legacyUserConfigDBPath()}
+	paths := []string{
+		userConfigDBPath(),
+		legacyUserConfigDBPath(),
+		executableDBPath(appSlug + ".db"),
+		executableDBPath(legacyAppSlug + ".db"),
+		appSlug + ".db",
+		legacyAppSlug + ".db",
+	}
 	if dir := filepath.Dir(dstPath); dir != "" && dir != "." {
 		paths = append(paths, filepath.Join(dir, legacyAppSlug+".db"))
 	}
-	paths = append(paths, legacyAppSlug+".db")
 	return uniquePaths(paths)
 }
 
@@ -87,6 +114,9 @@ func uniquePaths(paths []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(paths))
 	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
 		key := path
 		if runtime.GOOS == "windows" {
 			key = strings.ToLower(path)
@@ -116,7 +146,7 @@ func sameFilePath(a, b string) bool {
 }
 
 func openAppDB(path string) (*sql.DB, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	db, err := sql.Open("sqlite", path)
@@ -128,6 +158,10 @@ func openAppDB(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	if err := initDB(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil && runtime.GOOS != "windows" {
 		_ = db.Close()
 		return nil, err
 	}

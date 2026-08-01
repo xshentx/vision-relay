@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -38,6 +39,7 @@ type clientConfigContext struct {
 	Provider             string
 	WireAPI              string
 	DirectUpstream       bool
+	RelayAuthRequired    bool
 	Model                string
 	ModelMappings        []textModelMapping
 	VisionEnabled        bool
@@ -104,18 +106,42 @@ func clientProgramTargets(client string) []string {
 	}
 }
 
+func decodeClientConfigRequest(r *http.Request) (clientConfigRequest, error) {
+	var request clientConfigRequest
+	if r == nil || r.Body == nil {
+		return request, errors.New("request body must contain a JSON object")
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return request, fmt.Errorf("invalid client configuration request: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return request, errors.New("request body must contain exactly one JSON object")
+		}
+		return request, fmt.Errorf("invalid trailing JSON data: %w", err)
+	}
+	if strings.TrimSpace(request.Client) == "" {
+		return request, errors.New("client is required")
+	}
+	return request, nil
+}
+
 func (a *app) handleClientConfigure(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var req clientConfigRequest
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	req, err := decodeClientConfigRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
 	client := normalizeClientID(req.Client)
 	if client == "" {
-		client = clientCodex
+		writeError(w, http.StatusBadRequest, errors.New("unsupported client"))
+		return
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -305,6 +331,9 @@ func (a *app) configureClientRouteWithConfig(client, workDir, origin, home strin
 	visionAvailable := false
 	if !directUpstream {
 		origin = strings.TrimSpace(origin)
+		if relayRequiresAuthentication(cfg.Addr) {
+			key = strings.TrimSpace(cfg.RelayToken)
+		}
 		visionAvailable = visionEnabled(cfg)
 	} else {
 		key = strings.TrimSpace(cfg.TextAPIKey)
@@ -328,6 +357,7 @@ func (a *app) configureClientRouteWithConfig(client, workDir, origin, home strin
 		Provider:             strings.TrimSpace(cfg.TextProvider),
 		WireAPI:              strings.TrimSpace(cfg.TextWireAPI),
 		DirectUpstream:       directUpstream,
+		RelayAuthRequired:    !directUpstream && relayRequiresAuthentication(cfg.Addr),
 		Model:                model,
 		ModelMappings:        modelMappings,
 		VisionEnabled:        visionAvailable,
@@ -443,13 +473,15 @@ func (a *app) handleClientRestore(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var req clientConfigRequest
-	if r.Body != nil {
-		_ = json.NewDecoder(r.Body).Decode(&req)
+	req, err := decodeClientConfigRequest(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
 	client := normalizeClientID(req.Client)
 	if client == "" {
-		client = clientCodex
+		writeError(w, http.StatusBadRequest, errors.New("unsupported client"))
+		return
 	}
 	if client != clientCodex {
 		writeError(w, http.StatusBadRequest, errors.New("only Codex account restore is supported"))
@@ -832,7 +864,11 @@ func writeCodexConfig(ctx clientConfigContext) (string, error) {
 
 func codexRelayConfigBlock(ctx clientConfigContext, model string) []string {
 	preserveOfficialAuth := preserveCodexOfficialAuthForContext(ctx)
-	requiresOpenAIAuth := ctx.DirectUpstream || preserveOfficialAuth
+	relayToken := ""
+	if !ctx.DirectUpstream && ctx.RelayAuthRequired {
+		relayToken = strings.TrimSpace(ctx.Key)
+	}
+	requiresOpenAIAuth := ctx.DirectUpstream || preserveOfficialAuth || relayToken != ""
 	block := []string{
 		"# Added by Vision Relay. Edit from the Client Access page.",
 		fmt.Sprintf("model = %q", model),
@@ -852,10 +888,13 @@ func codexRelayConfigBlock(ctx clientConfigContext, model string) []string {
 		fmt.Sprintf("requires_openai_auth = %t", requiresOpenAIAuth),
 		fmt.Sprintf("base_url = %q", clientVersionedBaseURL(ctx)),
 	)
-	if preserveOfficialAuth {
+	if preserveOfficialAuth || relayToken != "" {
 		bearerToken := strings.TrimSpace(ctx.Key)
 		if !ctx.DirectUpstream {
-			bearerToken = codexLocalBearerToken
+			bearerToken = relayToken
+			if bearerToken == "" {
+				bearerToken = codexLocalBearerToken
+			}
 		}
 		block = append(block, fmt.Sprintf("experimental_bearer_token = %q", bearerToken))
 	}
@@ -1776,7 +1815,7 @@ func writeOpenCodeConfig(ctx clientConfigContext) (string, error) {
 	options := map[string]any{
 		"baseURL": clientVersionedBaseURL(ctx),
 	}
-	if ctx.DirectUpstream {
+	if (ctx.DirectUpstream || ctx.RelayAuthRequired) && strings.TrimSpace(ctx.Key) != "" {
 		options["apiKey"] = ctx.Key
 	}
 	providers[relayProviderID] = map[string]any{
@@ -1825,7 +1864,7 @@ func writeClaudeCodeConfig(ctx clientConfigContext) (string, error) {
 	cfg["availableModels"] = modelIDs
 	env := ensureJSONMap(cfg, "env")
 	env["ANTHROPIC_BASE_URL"] = strings.TrimRight(ctx.Origin, "/")
-	if ctx.DirectUpstream {
+	if (ctx.DirectUpstream || ctx.RelayAuthRequired) && strings.TrimSpace(ctx.Key) != "" {
 		env["ANTHROPIC_AUTH_TOKEN"] = ctx.Key
 	} else {
 		delete(env, "ANTHROPIC_AUTH_TOKEN")
@@ -1918,7 +1957,7 @@ func writeOpenClawConfig(ctx clientConfigContext) (string, error) {
 		"api":     openClawProviderAPI(ctx),
 		"models":  openClawModels(ctx, mappings),
 	}
-	if ctx.DirectUpstream {
+	if (ctx.DirectUpstream || ctx.RelayAuthRequired) && strings.TrimSpace(ctx.Key) != "" {
 		provider["apiKey"] = ctx.Key
 	}
 	providers[relayProviderID] = provider

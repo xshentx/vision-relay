@@ -34,11 +34,12 @@ func TestUnexpectedStreamingResponseRecordsProviderFailureThroughSniffWrapper(t 
 			candidate := providerRouteCandidate{Group: providerGroupCodex, ProfileID: "non-streaming-provider"}
 
 			for attempt := 0; attempt < providerFailureThreshold; attempt++ {
+				selected := mustSelectProviderTestCandidate(t, router, candidate)
 				body := newProviderObservedBody(
 					context.Background(),
 					io.NopCloser(strings.NewReader(test.body)),
 					router,
-					candidate,
+					selected,
 				)
 				resp := &http.Response{
 					StatusCode: http.StatusOK,

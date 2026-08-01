@@ -5,7 +5,9 @@ param(
     [string]$SigningCertificatePath = $env:WINDOWS_SIGNING_CERTIFICATE_PATH,
     [string]$SigningCertificatePassword = $env:WINDOWS_SIGNING_CERTIFICATE_PASSWORD,
     [string]$TimestampUrl = "http://timestamp.digicert.com",
-    [switch]$RequireSignature
+    [switch]$RequireSignature,
+    [string]$UpdateSigningPrivateKeyPath = $env:UPDATE_SIGNING_PRIVATE_KEY_PATH,
+    [switch]$RequireUpdateSignature
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +28,12 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
 }
 if ($RequireSignature -and [string]::IsNullOrWhiteSpace($SigningCertificatePath)) {
     throw "A release signature is required. Set WINDOWS_SIGNING_CERTIFICATE_PATH or pass -SigningCertificatePath."
+}
+if ($RequireUpdateSignature -and [string]::IsNullOrWhiteSpace($UpdateSigningPrivateKeyPath)) {
+    throw "An Ed25519 update signature is required."
+}
+if ($UpdateSigningPrivateKeyPath -and -not (Test-Path -LiteralPath $UpdateSigningPrivateKeyPath -PathType Leaf)) {
+    throw "Update signing key file not found."
 }
 if (-not [string]::IsNullOrWhiteSpace($SigningCertificatePath) -and -not (Test-Path -LiteralPath $SigningCertificatePath -PathType Leaf)) {
     throw "Signing certificate not found: $SigningCertificatePath"
@@ -122,7 +130,19 @@ try {
         throw "windres was not found. Install MinGW-w64; refusing to build with stale Windows version metadata."
     }
 
-    & go build -trimpath "-ldflags=-s -w -H=windowsgui -X=vision-relay/backend/internal/server.Version=$Version" -o $tempPath ./backend/cmd/vision-relay
+    $updatePublicKey = ""
+    if ($UpdateSigningPrivateKeyPath) {
+        $updatePublicKey = (& go run ./tools/sign-update -key $UpdateSigningPrivateKeyPath -print-public-key)
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($updatePublicKey)) {
+            throw "Unable to derive the Ed25519 update public key."
+        }
+        $updatePublicKey = $updatePublicKey.Trim()
+    }
+    $linkerFlags = "-s -w -H=windowsgui -X=vision-relay/backend/internal/server.Version=$Version"
+    if ($updatePublicKey) {
+        $linkerFlags += " -X=vision-relay/backend/internal/server.UpdatePublicKey=$updatePublicKey"
+    }
+    & go build -trimpath "-ldflags=$linkerFlags" -o $tempPath ./backend/cmd/vision-relay
     if ($LASTEXITCODE -ne 0) {
         throw "Go build failed."
     }
@@ -163,6 +183,19 @@ try {
 
     $hash = (Get-FileHash -LiteralPath $outputPath -Algorithm SHA256).Hash.ToLowerInvariant()
     Set-Content -LiteralPath "$outputPath.sha256" -Value "$hash  $([IO.Path]::GetFileName($outputPath))" -Encoding ascii
+    # Never leave a signature from an earlier build beside a different binary.
+    [IO.File]::Delete("$outputPath.sig")
+    if ($UpdateSigningPrivateKeyPath) {
+        & go run ./tools/sign-update -key $UpdateSigningPrivateKeyPath -input $outputPath -output "$outputPath.sig"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Ed25519 update signing failed."
+        }
+        Write-Host "Ed25519 update signature: $outputPath.sig"
+    } elseif ($RequireUpdateSignature) {
+        throw "An Ed25519 update signature is required."
+    } else {
+        Write-Warning "No Ed25519 update key was provided; automatic update is disabled in this build."
+    }
     Write-Host "Built Windows GUI executable: $outputPath (version $Version)"
     Write-Host "SHA-256: $outputPath.sha256"
 } finally {

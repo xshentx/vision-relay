@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	stdlog "log"
 	"net/http"
 	"strconv"
@@ -328,18 +327,6 @@ func upstreamLogIdentityFromConfig(cfg config) (string, string) {
 		}
 	}
 	return firstString(cfg.TextModelOverride, "当前文本上游"), normalizeProvider(cfg.TextProvider)
-}
-
-func captureRequestBody(r *http.Request) ([]byte, error) {
-	if r.Body == nil {
-		return nil, nil
-	}
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil, err
-	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	return body, nil
 }
 
 func protocolName(path string) string {

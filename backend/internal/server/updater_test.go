@@ -3,7 +3,10 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -101,6 +104,9 @@ func TestFetchLatestReleaseUsesFeedWithoutAnonymousAPICall(t *testing.T) {
 	if _, ok := findAsset(release.Assets, "vision-relay.exe.sha256"); !ok {
 		t.Fatal("synthesized release is missing the Windows checksum asset")
 	}
+	if _, ok := findAsset(release.Assets, "vision-relay.exe.sig"); !ok {
+		t.Fatal("synthesized release is missing the Windows signature asset")
+	}
 }
 
 func TestFetchLatestReleaseFallsBackToFeedAfterAuthenticatedRateLimit(t *testing.T) {
@@ -165,9 +171,21 @@ func TestDownloadUpdateReportsProgress(t *testing.T) {
 	payload := append([]byte("MZ"), bytes.Repeat([]byte{0x5a}, 256*1024)...)
 	digest := sha256.Sum256(payload)
 	checksum := hex.EncodeToString(digest[:])
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousPublicKey := UpdatePublicKey
+	UpdatePublicKey = base64.StdEncoding.EncodeToString(publicKey)
+	t.Cleanup(func() { UpdatePublicKey = previousPublicKey })
+	signature := base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, digest[:]))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/checksum" {
 			_, _ = w.Write([]byte(checksum + "  vision-relay.exe\n"))
+			return
+		}
+		if r.URL.Path == "/signature" {
+			_, _ = w.Write([]byte(signature + "\n"))
 			return
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
@@ -177,7 +195,8 @@ func TestDownloadUpdateReportsProgress(t *testing.T) {
 
 	asset := githubAsset{Name: "vision-relay.exe", BrowserDownloadURL: server.URL, Size: int64(len(payload))}
 	checksumAsset := githubAsset{Name: "vision-relay.exe.sha256", BrowserDownloadURL: server.URL + "/checksum"}
-	info := updateInfo{AssetSize: asset.Size, asset: asset, release: githubRelease{Assets: []githubAsset{asset, checksumAsset}}}
+	signatureAsset := githubAsset{Name: "vision-relay.exe.sig", BrowserDownloadURL: server.URL + "/signature"}
+	info := updateInfo{AssetSize: asset.Size, asset: asset, release: githubRelease{Assets: []githubAsset{asset, checksumAsset, signatureAsset}}}
 	a := &app{httpClient: server.Client()}
 	var reports []updateProgress
 	destinationDir := t.TempDir()

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,12 +17,62 @@ func writeUpstream(w http.ResponseWriter, resp *http.Response) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
+const maxRelayRequestBodyBytes int64 = 64 << 20
+
+var errRequestBodyTooLarge = errors.New("request body exceeds 64 MB limit")
+
+type capturedRequestBodyContextKey struct{}
+
 func readBody(r *http.Request) ([]byte, error) {
-	if r.Body == nil {
+	if r == nil {
+		return nil, nil
+	}
+	if captured, ok := r.Context().Value(capturedRequestBodyContextKey{}).([]byte); ok {
+		if r.Body != nil {
+			_ = r.Body.Close()
+		}
+		return captured, nil
+	}
+	return readLimitedRequestBody(r)
+}
+
+func readLimitedRequestBody(r *http.Request) ([]byte, error) {
+	if r == nil || r.Body == nil {
 		return nil, nil
 	}
 	defer r.Body.Close()
-	return io.ReadAll(r.Body)
+	if r.ContentLength > maxRelayRequestBodyBytes {
+		return nil, errRequestBodyTooLarge
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxRelayRequestBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxRelayRequestBodyBytes {
+		return nil, errRequestBodyTooLarge
+	}
+	return body, nil
+}
+
+func captureRequestBody(r *http.Request) ([]byte, error) {
+	body, err := readLimitedRequestBody(r)
+	if err != nil {
+		return nil, err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	*r = *r.WithContext(contextWithCapturedRequestBody(r, body))
+	return body, nil
+}
+
+func contextWithCapturedRequestBody(r *http.Request, body []byte) context.Context {
+	return context.WithValue(r.Context(), capturedRequestBodyContextKey{}, body)
+}
+
+func requestBodyErrorStatus(err error) int {
+	if errors.Is(err, errRequestBodyTooLarge) {
+		return http.StatusRequestEntityTooLarge
+	}
+	return http.StatusBadRequest
 }
 
 func contentToText(content any) string {

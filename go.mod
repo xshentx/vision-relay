@@ -1,6 +1,6 @@
 module vision-relay
 
-go 1.25.0
+go 1.25.12
 
 require (
 	github.com/getlantern/systray v1.2.2

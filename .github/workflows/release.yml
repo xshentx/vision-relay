@@ -9,7 +9,21 @@ permissions:
   contents: write
 
 jobs:
+  security:
+    name: Test and vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./...
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+
   windows:
+    needs: security
     name: Build Windows
     runs-on: windows-latest
     steps:
@@ -46,21 +60,43 @@ jobs:
           } else {
             & $windres.Source --version
           }
-      - name: Build unsigned Windows executable
+      - name: Build Windows executable
         shell: pwsh
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 }}
         run: |
-          ./tools/build-windows.ps1 `
-            -Output dist/vision-relay.exe `
-            -Version "${{ github.ref_name }}"
+          $keyPath = $null
+          try {
+            if ([string]::IsNullOrWhiteSpace($env:UPDATE_SIGNING_KEY)) {
+              ./tools/build-windows.ps1 `
+                -Output dist/vision-relay.exe `
+                -Version "${{ github.ref_name }}"
+            } else {
+              $keyPath = Join-Path $env:RUNNER_TEMP "vision-relay-update-key.txt"
+              Set-Content -LiteralPath $keyPath -Value $env:UPDATE_SIGNING_KEY -Encoding ascii -NoNewline
+              ./tools/build-windows.ps1 `
+                -Output dist/vision-relay.exe `
+                -Version "${{ github.ref_name }}" `
+                -UpdateSigningPrivateKeyPath $keyPath `
+                -RequireUpdateSignature
+            }
+          } finally {
+            if (-not [string]::IsNullOrWhiteSpace($keyPath)) {
+              [IO.File]::Delete($keyPath)
+            }
+          }
+
       - uses: actions/upload-artifact@v4
         with:
           name: vision-relay-windows
           path: |
             dist/vision-relay.exe
             dist/vision-relay.exe.sha256
+            dist/vision-relay.exe.sig
           if-no-files-found: error
 
   macos:
+    needs: security
     name: Build macOS Universal
     runs-on: macos-14
     steps:

@@ -88,7 +88,7 @@ func TestSetConfigDoesNotPublishRuntimeStateWhenPersistenceFails(t *testing.T) {
 	router := newProviderRouter()
 	a := &app{cfg: cfg, configPath: filepath.Join(blocker, "config.json"), providerRouter: router}
 	candidate := providerRouteCandidateForProfile(cfg, providerGroupCodex, cfg.TextModelProfiles[0])
-	router.recordFailure(candidate, errors.New("existing failure"))
+	recordProviderTestFailure(t, router, candidate, errors.New("existing failure"))
 
 	updated := cfg
 	updated.TextModelProfiles = append([]textModelProfile(nil), cfg.TextModelProfiles...)
@@ -174,7 +174,7 @@ func TestRequestOriginAlwaysUsesRelayAddress(t *testing.T) {
 
 func TestManagementAndRelayHandlersAreIsolated(t *testing.T) {
 	cfg := defaultConfig()
-	a := &app{cfg: cfg}
+	a := &app{cfg: cfg, managementToken: testManagementToken}
 	management := newManagementHandler(a, make(chan struct{}, 1))
 	relay := newRelayHandler(a)
 
@@ -182,6 +182,9 @@ func TestManagementAndRelayHandlersAreIsolated(t *testing.T) {
 		t.Helper()
 		req := httptest.NewRequest(method, target, nil)
 		req.RemoteAddr = "127.0.0.1:5000"
+		if isManagementRequest(req) {
+			req.Header.Set("Authorization", "Bearer "+testManagementToken)
+		}
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, req)
 		return recorder
@@ -213,7 +216,7 @@ func TestManagementAndRelayHandlersAreIsolated(t *testing.T) {
 	}
 }
 func TestManagementAndRelayHandlersServeOnSeparateListeners(t *testing.T) {
-	a := &app{cfg: defaultConfig()}
+	a := &app{cfg: defaultConfig(), managementToken: testManagementToken}
 	management := httptest.NewServer(newManagementHandler(a, make(chan struct{}, 1)))
 	defer management.Close()
 	relay := httptest.NewServer(newRelayHandler(a))
@@ -231,7 +234,12 @@ func TestManagementAndRelayHandlersServeOnSeparateListeners(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			response, err := http.Get(test.url)
+			request, err := http.NewRequest(http.MethodGet, test.url, nil)
+			if err != nil {
+				t.Fatalf("build GET %s: %v", test.url, err)
+			}
+			request.Header.Set("Authorization", "Bearer "+testManagementToken)
+			response, err := http.DefaultClient.Do(request)
 			if err != nil {
 				t.Fatalf("GET %s: %v", test.url, err)
 			}
@@ -251,10 +259,11 @@ func TestManagementRelayStatusProbesRelaySurface(t *testing.T) {
 
 		cfg := defaultConfig()
 		cfg.Addr = strings.TrimPrefix(relay.URL, "http://")
-		a := &app{cfg: cfg}
+		a := &app{cfg: cfg, managementToken: testManagementToken}
 		handler := newManagementHandler(a, make(chan struct{}, 1))
 		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:18473/api/relay/status", nil)
 		req.RemoteAddr = "127.0.0.1:5000"
+		req.Header.Set("Authorization", "Bearer "+testManagementToken)
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, req)
 		if surface == "relay" && !strings.Contains(recorder.Body.String(), `"online":true`) {

@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -20,8 +22,11 @@ import (
 	"time"
 )
 
-// Version is replaced by the platform build scripts for release builds.
-var Version = "dev"
+// Version and UpdatePublicKey are replaced by the platform build scripts for release builds.
+var (
+	Version         = "dev"
+	UpdatePublicKey = ""
+)
 
 const (
 	githubOwner   = "xshentx"
@@ -253,7 +258,7 @@ func (a *app) checkForUpdate(ctx context.Context) (updateInfo, error) {
 	info := updateInfo{
 		CurrentVersion: Version, LatestVersion: release.TagName,
 		UpdateAvailable: versionNewer(release.TagName, Version),
-		CanUpdate:       runtime.GOOS == "windows" && Version != "dev" && ok && strings.EqualFold(filepath.Ext(executablePath()), ".exe"),
+		CanUpdate:       runtime.GOOS == "windows" && Version != "dev" && ok && updateSignatureTrustConfigured() && strings.EqualFold(filepath.Ext(executablePath()), ".exe"),
 		ReleaseName:     release.Name, ReleaseURL: release.HTMLURL, ReleaseNotes: release.Body,
 		PublishedAt: release.PublishedAt, release: release,
 	}
@@ -389,6 +394,7 @@ func canonicalReleaseAssets(tag string) []githubAsset {
 	names := []string{
 		"vision-relay.exe",
 		"vision-relay.exe.sha256",
+		"vision-relay.exe.sig",
 		"vision-relay-darwin-universal.zip",
 		"vision-relay-darwin-universal.zip.sha256",
 	}
@@ -523,15 +529,94 @@ func (a *app) downloadUpdate(ctx context.Context, info updateInfo, destinationDi
 	if report != nil {
 		report("verifying", n, total)
 	}
+	digest := hash.Sum(nil)
 	if expected, found, err := a.fetchChecksum(ctx, info.release.Assets, info.asset.Name); err != nil {
 		return "", err
 	} else if !found {
 		return "", errors.New("Release 缺少更新文件的 SHA-256 校验文件")
-	} else if !strings.EqualFold(expected, hex.EncodeToString(hash.Sum(nil))) {
+	} else if !strings.EqualFold(expected, hex.EncodeToString(digest)) {
 		return "", errors.New("更新文件 SHA-256 校验失败")
+	}
+	if err := a.verifyUpdateSignature(ctx, info.release.Assets, info.asset.Name, digest); err != nil {
+		return "", err
 	}
 	ok = true
 	return path, nil
+}
+
+func configuredUpdatePublicKey() (ed25519.PublicKey, error) {
+	encoded := strings.TrimSpace(UpdatePublicKey)
+	if encoded == "" {
+		return nil, errors.New("this build has no trusted update signing public key")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(encoded)
+	}
+	if err != nil || len(decoded) != ed25519.PublicKeySize {
+		return nil, errors.New("trusted update signing public key is invalid")
+	}
+	return ed25519.PublicKey(decoded), nil
+}
+
+func updateSignatureTrustConfigured() bool {
+	_, err := configuredUpdatePublicKey()
+	return err == nil
+}
+
+func (a *app) verifyUpdateSignature(ctx context.Context, assets []githubAsset, exeName string, digest []byte) error {
+	publicKey, err := configuredUpdatePublicKey()
+	if err != nil {
+		return err
+	}
+	data, found, err := a.fetchSmallReleaseAsset(ctx, assets, exeName+".sig", 1024)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("release is missing the Ed25519 update signature")
+	}
+	signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data)))
+	if err != nil {
+		signature, err = base64.RawStdEncoding.DecodeString(strings.TrimSpace(string(data)))
+	}
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return errors.New("update Ed25519 signature has an invalid format")
+	}
+	if !ed25519.Verify(publicKey, digest, signature) {
+		return errors.New("update publisher signature verification failed")
+	}
+	return nil
+}
+
+func (a *app) fetchSmallReleaseAsset(ctx context.Context, assets []githubAsset, wantedName string, limit int64) ([]byte, bool, error) {
+	for _, asset := range assets {
+		if !strings.EqualFold(asset.Name, wantedName) {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.BrowserDownloadURL, nil)
+		if err != nil {
+			return nil, true, err
+		}
+		req.Header.Set("User-Agent", "vision-relay/"+Version)
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return nil, true, err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, true, readErr
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, true, fmt.Errorf("download update signature: HTTP %d", resp.StatusCode)
+		}
+		if int64(len(data)) > limit {
+			return nil, true, errors.New("update signature file is too large")
+		}
+		return data, true, nil
+	}
+	return nil, false, nil
 }
 
 type updateProgressWriter struct {

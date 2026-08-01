@@ -359,7 +359,7 @@ func snapshotBreakArmorFile(path, kind string) (breakArmorSnapshotFile, error) {
 func createBreakArmorSnapshot(homeDir string, paths breakArmorPaths) (breakArmorSnapshotManifest, error) {
 	manifest := breakArmorSnapshotManifest{
 		Version: 3, Purpose: breakArmorSnapshotPurposeBaseline,
-		Client: paths.Client, Mode: paths.Mode, CreatedAt: time.Now(),
+		Client: paths.Client, Mode: paths.Mode,
 	}
 	promptEntry, err := snapshotBreakArmorFile(paths.PromptPath, "prompt")
 	if err != nil {
@@ -376,10 +376,11 @@ func createBreakArmorSnapshot(homeDir string, paths breakArmorPaths) (breakArmor
 		}
 		manifest.Files = append(manifest.Files, configEntry)
 	}
-	dir := filepath.Join(breakArmorSnapshotRoot(homeDir, paths.Client), manifest.CreatedAt.Format("20060102-150405.000000000"))
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	dir, createdAt, err := createBreakArmorSnapshotDirectory(breakArmorSnapshotRoot(homeDir, paths.Client), time.Now())
+	if err != nil {
 		return breakArmorSnapshotManifest{}, err
 	}
+	manifest.CreatedAt = createdAt
 	manifestRaw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return breakArmorSnapshotManifest{}, err
@@ -388,6 +389,26 @@ func createBreakArmorSnapshot(homeDir string, paths breakArmorPaths) (breakArmor
 		return breakArmorSnapshotManifest{}, err
 	}
 	return manifest, nil
+}
+
+func createBreakArmorSnapshotDirectory(root string, createdAt time.Time) (string, time.Time, error) {
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", time.Time{}, err
+	}
+	// time.Now can return the same value for consecutive calls on platforms with
+	// coarse wall-clock precision. Never reuse an existing snapshot directory:
+	// doing so could overwrite the last known-good baseline with a broken one.
+	for {
+		dir := filepath.Join(root, createdAt.Format("20060102-150405.000000000"))
+		err := os.Mkdir(dir, 0o700)
+		if err == nil {
+			return dir, createdAt, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return "", time.Time{}, err
+		}
+		createdAt = createdAt.Add(time.Nanosecond)
+	}
 }
 
 func latestBreakArmorSnapshot(homeDir, client string, modes ...string) (breakArmorSnapshotManifest, bool, error) {

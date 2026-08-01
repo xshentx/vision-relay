@@ -246,24 +246,32 @@ func TestHandleClientConfigureAppliesDesktopAndCLIPrograms(t *testing.T) {
 
 func TestCodexRelayConfigBlockAuthModes(t *testing.T) {
 	tests := []struct {
-		name             string
-		directUpstream   bool
-		preserveOfficial bool
-		requiresAuth     bool
-		bearerToken      string
+		name              string
+		directUpstream    bool
+		preserveOfficial  bool
+		relayAuthRequired bool
+		key               string
+		requiresAuth      bool
+		bearerToken       string
 	}{
 		{name: "local preserved", preserveOfficial: true, requiresAuth: true, bearerToken: codexLocalBearerToken},
 		{name: "local not preserved", preserveOfficial: false, requiresAuth: false},
+		{name: "authenticated relay", relayAuthRequired: true, key: "relay-secret", requiresAuth: true, bearerToken: "relay-secret"},
 		{name: "direct preserved", directUpstream: true, preserveOfficial: true, requiresAuth: true, bearerToken: "sk-upstream"},
 		{name: "direct managed", directUpstream: true, preserveOfficial: false, requiresAuth: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			preserveOfficial := test.preserveOfficial
+			key := test.key
+			if key == "" {
+				key = "sk-upstream"
+			}
 			ctx := clientConfigContext{
 				Origin:               "http://127.0.0.1:8787",
-				Key:                  "sk-upstream",
+				Key:                  key,
 				DirectUpstream:       test.directUpstream,
+				RelayAuthRequired:    test.relayAuthRequired,
 				PreserveOfficialAuth: &preserveOfficial,
 			}
 			config := strings.Join(codexRelayConfigBlock(ctx, "gpt-test"), "\n")

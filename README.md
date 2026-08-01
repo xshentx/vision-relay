@@ -11,7 +11,7 @@ Vision Relay 是一个本地桌面客户端式的多接口 AI 模型中转工具
 - Windows 桌面 WebView 与系统托盘菜单；macOS 菜单栏与系统浏览器管理页面
 - 支持文本模型与视觉模型分开配置，并保存多套模型方案
 - 支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Gemini、Ollama 等常见接口形态
-- 本地 API 默认无需访问令牌，可直接接入兼容客户端
+- 中转 API 默认仅监听 loopback 且无需访问令牌；改为非 loopback 地址时会自动生成并强制校验 Relay Token
 - 支持为 Codex、OpenCode、Claude、OpenClaw 等客户端生成接入配置
 - 模型供应商按 Codex、Claude、OpenCode、OpenClaw 独立分组，并提供运行状态与熔断保护
 - 支持一键配置 Codex、OpenCode、Claude、OpenClaw
@@ -95,6 +95,8 @@ http://127.0.0.1:8787
 .\vision-relay.exe -config .\config.json -db .\vision-relay.db
 ```
 
+默认数据库固定保存在程序可执行文件同一目录的 `vision-relay.db`，不会创建 `data` 子目录，也不会默认写入 `%APPDATA%` 或其他用户配置目录。升级时程序会从旧的程序目录数据库和历史用户配置目录数据库复制现有配置与日志；原数据库不会自动删除。可通过 `-db` 显式覆盖数据库路径。
+
 ## 编译 Windows 桌面客户端
 
 首次构建或更新 Vue / Element Plus 依赖后，先同步本地前端资源：
@@ -115,7 +117,7 @@ Vue 3 和 Element Plus 会复制到 `frontend/public/assets/vendor`，程序运�
 - `-H windowsgui` 会生成 Windows GUI 子系统程序，双击运行时不会弹出控制台窗口。
 - 前端页面、图标和 Windows 版本信息会随 Go 编译一起打进 `vision-relay.exe`。
 - 构建依赖 MinGW-w64 的 `windres.exe`；找不到资源编译器时脚本会直接失败，避免沿用旧版本的 VERSIONINFO。
-- 构建脚本支持可选 Authenticode 代码签名：可设置 `WINDOWS_SIGNING_CERTIFICATE_PATH` 与 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`，或传入 `-SigningCertificatePath`。当前 GitHub 标签工作流按无签名模式直接构建，下载运行时可能出现 Windows SmartScreen 或未知发布者提示。
+- 构建脚本支持可选 Authenticode 代码签名：可设置 `WINDOWS_SIGNING_CERTIFICATE_PATH` 与 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`，或传入 `-SigningCertificatePath`。当前 GitHub 标签工作流未配置 Authenticode，下载运行时仍可能出现 Windows SmartScreen 或未知发布者提示；独立的 Ed25519 更新签名则是标签发布和 Windows 自动更新的必需信任链。
 
 如果需要调试日志窗口，可以去掉 `-H windowsgui`：
 
@@ -129,7 +131,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.3.0 --arch arm64
+bash ./tools/build-macos.sh --version v2.3.1 --arch arm64
 ```
 
 支持的架构参数：
@@ -144,11 +146,22 @@ bash ./tools/build-macos.sh --version v2.3.0 --arch arm64
 
 ## 打包发布
 
-Windows 无签名发布构建（当前 GitHub 标签工作流使用此模式）：
+Windows 本地开发构建（未提供更新签名密钥时，构建产物会禁用自动替换更新）：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.3.0
+.\tools\build-windows.ps1 -Version v2.3.1
 ```
+
+如需启用 Windows 应用内自动替换更新，可选提供 Ed25519 更新签名私钥，使构建脚本把对应公钥嵌入 EXE，并生成独立的 `.sig` 附件：
+
+```powershell
+.\tools\build-windows.ps1 `
+  -Version v2.3.1 `
+  -UpdateSigningPrivateKeyPath C:\secure\vision-relay-update-signing.key `
+  -RequireUpdateSignature
+```
+
+密钥文件内容必须是 base64 编码的 32 字节 Ed25519 seed 或 64 字节 Ed25519 private key。私钥应离线生成并存放于受控密钥存储中，绝不能提交到仓库。GitHub 标签工作流在配置了 `UPDATE_SIGNING_PRIVATE_KEY_B64` Secret 时会写入临时文件并在构建后立即删除；未配置时直接生成无更新签名的 Windows GUI 程序。
 
 ### Windows Authenticode 签名
 
@@ -159,13 +172,13 @@ Windows 无签名发布构建（当前 GitHub 标签工作流使用此模式）�
 ```powershell
 .\tools\build-windows.ps1 `
   -Output dist\vision-relay.exe `
-  -Version v2.3.0 `
+  -Version v2.3.1 `
   -SigningCertificatePath C:\secure\vision-relay-code-signing.pfx `
   -SigningCertificatePassword '<PFX 密码>' `
   -RequireSignature
 ```
 
-脚本先嵌入当前版本资源，再构建、执行 SHA-256/RFC 3161 时间戳签名、验证签名，最后生成已签名文件对应的 `.sha256`。可以再次手动验证：
+脚本先嵌入当前版本资源，再构建、执行 SHA-256/RFC 3161 时间戳签名并验证签名，随后生成已签名文件对应的 `.sha256`；提供更新签名密钥时还会对该摘要生成 Ed25519 `.sig`。可以再次手动验证 Authenticode：
 
 ```powershell
 Get-AuthenticodeSignature .\dist\vision-relay.exe | Format-List Status,StatusMessage,SignerCertificate,TimeStamperCertificate
@@ -174,14 +187,14 @@ $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter s
 & $signtool.FullName verify /pa /all /v .\dist\vision-relay.exe
 ```
 
-`Status` 必须为 `Valid`。如果证书私钥位于 USB 硬件令牌或云签名服务中、无法导出 PFX，应使用证书颁发机构提供的 CSP/KSP 或云签名 GitHub Action；完成签名后必须重新生成 `.sha256`，不要把私钥导出到仓库。
+`Status` 必须为 `Valid`。如果证书私钥位于 USB 硬件令牌或云签名服务中、无法导出 PFX，应使用证书颁发机构提供的 CSP/KSP 或云签名 GitHub Action；完成 Authenticode 签名后必须重新生成 `.sha256` 和 Ed25519 `.sig`，不要把任何私钥导出到仓库。
 
-当前 GitHub 标签发布按用户要求执行无签名构建，不读取证书 Secret。以后若要恢复签名发布，应在工作流中安全接入证书或云签名服务，并在生成 `.sha256` 前完成签名和验证；不要把证书私钥提交到仓库。
+当前 GitHub 标签发布不读取 Authenticode 证书 Secret。若配置了 `UPDATE_SIGNING_PRIVATE_KEY_B64`，工作流会生成 Ed25519 更新签名；未配置时按无签名 GUI 模式直接编译，程序仍可检查和手动下载更新，但不会自动替换 EXE。以后若要接入 Authenticode，应使用证书或云签名服务，并在生成 `.sha256` 与可选 `.sig` 前完成签名和验证；不要把证书或更新签名私钥提交到仓库。
 
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.3.0 --arch universal
+bash ./tools/build-macos.sh --version v2.3.1 --arch universal
 ```
 
 生成的 Release 附件：
@@ -189,6 +202,7 @@ bash ./tools/build-macos.sh --version v2.3.0 --arch universal
 ```text
 vision-relay.exe
 vision-relay.exe.sha256
+vision-relay.exe.sig（配置更新签名时生成）
 vision-relay-darwin-universal.zip
 vision-relay-darwin-universal.zip.sha256
 ```
@@ -196,17 +210,17 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.3.0
-git push origin v2.3.0
+git tag v2.3.1
+git push origin v2.3.1
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.3.0
+Vision Relay v2.3.1
 ```
 
-附件上传时应包含对应平台的程序包和同名 `.sha256` 文件。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
+附件上传时应包含对应平台的程序包和同名 `.sha256` 文件；启用 Ed25519 更新签名时，Windows 还应包含 `vision-relay.exe.sig`。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
 
 ## 配置说明
 
@@ -214,12 +228,13 @@ Vision Relay v2.3.0
 
 文本供应商按 **Codex**、**Claude**、**OpenCode**、**OpenClaw** 四组管理，每个供应商只能属于一组，每组独立保存当前选择。OpenAI Responses 请求使用 Codex 组，Anthropic Messages 使用 Claude 组，普通 Chat Completions、Gemini 与 Ollama 使用 OpenCode 组；OpenClaw 通过专属的本机 `/openclaw/v1` 路径使用 OpenClaw 组。点击某组供应商的“使用”只写入该组关联的客户端配置，不会覆盖其他客户端，并按“设置 → 客户端行为”自动重启已运行客户端或启动未运行客户端。
 
-每组当前供应商都有独立熔断状态。连续 3 次可归因于上游的失败会进入 30 秒熔断，冷却后允许一次半开探测，成功即恢复；页面供应商卡片每 5 秒刷新“正常 / 熔断 / 探测”状态。
+每组供应商都有独立熔断状态。熔断仅由真实转发请求驱动，不会在后台定期请求正常供应商，也不会用手动模型测试改变熔断状态。网络错误、限流、认证/模型不可用及大多数上游错误会记为可重试失败并触发故障转移；明确属于请求格式或语义错误的 400/405/406/413/414/415/422/501 不切换供应商，也不影响熔断状态。连续 5 次可重试失败会进入 30 秒熔断；冷却期内自动跳过，冷却结束后的下一次真实请求作为唯一的半开探测，成功即恢复，失败则重新熔断 30 秒。页面供应商卡片每 5 秒只刷新本地状态，不会向供应商发起健康检查。
 
 常用环境变量：
 
 ```text
 VISION_RELAY_ADDR=127.0.0.1:8787
+VISION_RELAY_TOKEN=
 
 TEXT_PROVIDER=openai|anthropic|gemini|ollama
 TEXT_BASE_URL=https://api.openai.com
@@ -239,7 +254,7 @@ OPEN_WINDOW=true
 OPEN_BROWSER=false
 ```
 
-本地 API 不需要访问令牌，外部客户端可以直接调用所有兼容入口。普通客户端的一键配置不会写入 API Key 或 Bearer Token；如果第三方客户端的界面强制要求填写 API Key，这是该客户端自身的限制，Vision Relay 本地 API 不会校验该值。Codex 开启“切换第三方时保留官方登录”时是唯一例外：provider 配置会写入仅用于本地路由隔离的无害 Bearer 标记。该标记不是上游 API Key，也不会被本地 API 校验，其作用是防止 Codex 将官方 ChatGPT 登录令牌用于第三方模型请求。关闭本地 API 后，客户端改为直连当前文本供应商，并写入供应商 API 地址、上游令牌和真实模型名；模型列表仍只包含当前供应商配置中已经添加的模型，不会自动导入上游的全部模型。
+中转 API 默认监听 `127.0.0.1`，此 loopback 模式不校验访问令牌。将 `VISION_RELAY_ADDR` 或页面监听地址改为 `0.0.0.0`、`::` 或其他非 loopback 地址时，服务会自动生成并持久化 `VISION_RELAY_TOKEN`，所有兼容入口都必须通过 `Authorization: Bearer`、`X-API-Key` 或 `X-Local-Token` 提交该令牌；也可在首次启动前显式设置环境变量。一键配置会在认证实际启用时把 Relay Token 写入对应客户端，而不会把它转发给上游。Codex 开启“切换第三方时保留官方登录”时，loopback 模式仍可能写入仅用于本地路由隔离的无害 Bearer 标记；它不是上游 API Key。关闭本地 API 后，客户端改为直连当前文本供应商，并写入供应商 API 地址、上游令牌和真实模型名；模型列表仍只包含当前供应商配置中已经添加的模型，不会自动导入上游的全部模型。
 
 “客户端接入”中的每个客户端都提供独立的**路由**开关。一键配置或点击该客户端分组供应商的“使用”都会写入对应客户端配置并自动开启路由，同时按“客户端行为”设置启动或重启客户端；关闭路由后，启动同步和其他分组的供应商切换不会重写该客户端配置。恢复 Codex 官方模式时会同时关闭 Codex 路由。
 
@@ -400,14 +415,18 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 
 1. 从 `xshentx/vision-relay` 的最新 GitHub Release 下载 `vision-relay.exe`；
 2. 必须下载 `vision-relay.exe.sha256` 并验证 SHA-256；缺少或校验失败时拒绝安装；
-3. 将当前程序直接换名备份为 `vision-relay.exe.old`，从固定的非可执行暂存文件 `vision-relay.update` 写入新版本并启动规范名称的新程序；
-4. 旧实例会确认新进程在启动检查窗口内没有提前退出；若安全软件隔离新文件或新程序立即崩溃，则恢复旧文件并保持旧实例运行；
-5. 新程序等待旧实例退出后获取单实例锁，并只清理程序目录内经过白名单验证的 `.old`、`vision-relay.update` 或旧版兼容暂存文件。
+3. 必须下载 `vision-relay.exe.sig`，并使用当前 EXE 内嵌的 Ed25519 公钥验证 SHA-256 摘要的发布者签名；未嵌入可信公钥、缺少签名或验签失败时拒绝安装；
+4. 将当前程序直接换名备份为 `vision-relay.exe.old`，从固定的非可执行暂存文件 `vision-relay.update` 写入新版本并启动规范名称的新程序；
+5. 旧实例会确认新进程在启动检查窗口内没有提前退出；若安全软件隔离新文件或新程序立即崩溃，则恢复旧文件并保持旧实例运行；
+6. 新程序等待旧实例退出后获取单实例锁，并只清理程序目录内经过白名单验证的 `.old`、`vision-relay.update` 或旧版兼容暂存文件。
 
 发布构建时请传入与 Git tag 相同的版本号：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.3.0
+.\tools\build-windows.ps1 `
+  -Version v2.3.1 `
+  -UpdateSigningPrivateKeyPath C:\secure\vision-relay-update-signing.key `
+  -RequireUpdateSignature
 ```
 
-构建脚本会生成 `vision-relay.exe` 和 `vision-relay.exe.sha256`，发布 Release 时必须同时上传这两个文件。当前 Windows Release 为无签名构建，SHA-256 仅用于验证下载完整性，首次运行可能出现 Windows SmartScreen 或未知发布者提示；代码签名与证书信誉仍是降低此类提示和安全软件误报的关键。自动更新仅支持经构建脚本生成的 Windows EXE；`go run` 开发模式只检查更新，不自动替换。
+提供更新签名密钥时，构建脚本会生成 `vision-relay.exe`、`vision-relay.exe.sha256` 和 `vision-relay.exe.sig`，发布 Release 时应同时上传三个文件。未提供密钥时只生成 EXE 与 `.sha256`，程序可检查并手动下载更新，但不会自动替换。SHA-256 用于验证下载完整性，Ed25519 签名在此基础上验证更新发布者；两者不能互相替代。Authenticode 和证书信誉是 Windows/SmartScreen 的另一层信任机制，当前标签工作流未配置该证书，因此首次运行仍可能出现 SmartScreen 或未知发布者提示。

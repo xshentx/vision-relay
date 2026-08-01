@@ -3496,12 +3496,7 @@ body:has(.el-message) > .toast {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.health-settings-grid {
-  grid-template-columns: minmax(220px, 420px);
-}
-
-.settings-cache-head,
-.settings-health-head {
+.settings-cache-head {
   align-items: center;
 }
 
@@ -3725,8 +3720,7 @@ body:has(.el-message) > .toast {
   }
 
   .api-settings-grid,
-  .cache-settings-grid,
-  .health-settings-grid {
+  .cache-settings-grid {
     grid-template-columns: 1fr;
   }
 

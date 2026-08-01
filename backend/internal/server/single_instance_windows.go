@@ -148,10 +148,16 @@ func finishDesktopInstanceActivation(alreadyFocused bool, focus func() bool, tim
 }
 
 func openDesktopManagementInCurrentSession() error {
+	managementURL := localServerURL(defaultManagementAddr)
+	token, err := loadOrCreateManagementToken("")
+	if err != nil {
+		return fmt.Errorf("load management token: %w", err)
+	}
+	launchURL := managementBootstrapURL(managementURL, token)
 	return openHealthyDesktopManagement(
-		localServerURL(defaultManagementAddr),
+		managementURL,
 		existingVisionRelayHealthy,
-		openBrowser,
+		func(string) error { return openBrowser(launchURL) },
 	)
 }
 

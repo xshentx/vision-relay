@@ -231,23 +231,12 @@
             <div class="settings-note"><strong>持久化范围</strong><span>SQLite 仅保存图片哈希键、识别文本和时间信息，不保存原始图片、Base64 内容或视觉模型密钥。识别失败的结果不会写入缓存。</span></div>
           </article>
 
-          <article class="component-card settings-health-card">
-            <div class="component-card-head settings-health-head">
-              <div><h4>供应商健康检查</h4><p>定期检查文本模型供应商；普通客户端请求和手动模型测试也会刷新健康状态。</p></div>
-              <label class="client-route-control"><span>启用检查</span><span class="switch-control"><input id="providerHealthCheckEnabled" type="checkbox"><span aria-hidden="true"></span></span></label>
-            </div>
-            <div class="settings-grid health-settings-grid">
-              <label><span>检查间隔（分钟）</span><input id="providerHealthCheckIntervalMinutes" type="number" min="1" max="1440" step="1" value="5" inputmode="numeric"><small>期间如果已有正常请求或模型测试，则从最近一次结果重新计时，不重复发起后台检查。</small></label>
-            </div>
-            <div class="settings-note"><strong>检查规则</strong><span>正常供应商也会周期检查；检查失败会计入连续失败和熔断统计，成功会恢复健康状态。关闭后仍保留已熔断供应商的恢复探测。</span></div>
-          </article>
-
           <article class="component-card settings-failover-card">
             <div class="component-card-head settings-failover-head">
-              <div><h4>供应商故障转移</h4><p>主供应商发生网络错误或 5xx 时，按 P1、P2 优先级自动尝试下一家。</p></div>
+              <div><h4>供应商故障转移</h4><p>主供应商发生网络错误、限流、认证或模型不可用等可重试错误时，按 P1、P2 优先级自动尝试下一家。</p></div>
               <label class="client-route-control"><span>启用故障转移</span><span class="switch-control"><input id="providerFailoverEnabled" type="checkbox"><span aria-hidden="true"></span></span></label>
             </div>
-            <div class="settings-note"><strong>生效规则</strong><span>只有在供应商列表中点击“加入”的供应商才会参与；已熔断供应商会自动跳过，恢复检查成功后重新参与。</span></div>
+            <div class="settings-note"><strong>生效规则</strong><span>只有在供应商列表中点击“加入”的供应商才会参与；已熔断供应商在冷却期内自动跳过，冷却结束后的下一次真实请求会作为半开探测，成功后重新参与。请求格式或语义错误（400/405/406/413/414/415/422/501）不切换供应商，也不影响熔断状态。</span></div>
           </article>
 
           <article class="component-card settings-behavior-card">

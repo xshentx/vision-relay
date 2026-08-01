@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func breakArmorTestConfig(homeDir string) config {
@@ -37,6 +38,29 @@ func TestRemovedBreakArmorEndpointsReturnNotFoundInsteadOfProxying(t *testing.T)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s status=%d, want %d", path, rec.Code, http.StatusNotFound)
 		}
+	}
+}
+
+func TestCreateBreakArmorSnapshotDirectoryNeverReusesTimestamp(t *testing.T) {
+	root := t.TempDir()
+	createdAt := time.Date(2026, time.August, 1, 12, 0, 0, 123, time.UTC)
+	existing := filepath.Join(root, createdAt.Format("20060102-150405.000000000"))
+	if err := os.Mkdir(existing, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, actual, err := createBreakArmorSnapshotDirectory(root, createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual != createdAt.Add(time.Nanosecond) {
+		t.Fatalf("created at = %s, want %s", actual, createdAt.Add(time.Nanosecond))
+	}
+	if dir == existing {
+		t.Fatal("snapshot directory reused an existing timestamp")
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Fatalf("allocated directory is unavailable: info=%v err=%v", info, err)
 	}
 }
 

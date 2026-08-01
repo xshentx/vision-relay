@@ -131,9 +131,9 @@ func TestHandleModelTestProviders(t *testing.T) {
 	}
 }
 
-func TestHandleModelTestSuccessCancelsRecoveryProbeAndRestoresProvider(t *testing.T) {
+func TestHandleModelTestSuccessDoesNotRestoreOpenCircuit(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"output_text": "recovered"})
+		writeJSON(w, http.StatusOK, map[string]any{"output_text": "ok"})
 	}))
 	defer upstream.Close()
 
@@ -148,14 +148,8 @@ func TestHandleModelTestSuccessCancelsRecoveryProbeAndRestoresProvider(t *testin
 	state := router.providerStateLocked(providerGroupCodex, "profile-1")
 	state.CircuitState = providerCircuitOpen
 	state.ConsecutiveFailures = providerFailureThreshold
-	state.OpenUntil = now
+	state.OpenUntil = now.Add(providerCircuitCooldown)
 	router.mu.Unlock()
-	candidate := router.claimDueRecoveryProbes(cfg)[0]
-	probeContext, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	if !router.attachRecoveryProbe(candidate, cancel) {
-		t.Fatal("failed to attach recovery probe")
-	}
 
 	a := &app{cfg: cfg, httpClient: upstream.Client(), providerRouter: router}
 	recorder := httptest.NewRecorder()
@@ -164,14 +158,9 @@ func TestHandleModelTestSuccessCancelsRecoveryProbeAndRestoresProvider(t *testin
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
 	}
-	select {
-	case <-probeContext.Done():
-	default:
-		t.Fatal("successful model test did not cancel the recovery probe")
-	}
 	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "profile-1")
-	if status.CircuitState != providerCircuitClosed || status.ConsecutiveFailure != 0 || status.LastSuccessAt == nil {
-		t.Fatalf("successful model test did not restore provider: %#v", status)
+	if status.CircuitState != providerCircuitOpen || status.ConsecutiveFailure != providerFailureThreshold || status.LastSuccessAt != nil {
+		t.Fatalf("manual model test changed real-traffic circuit state: %#v", status)
 	}
 }
 
@@ -231,8 +220,8 @@ func TestHandleModelTestReportsUpstreamError(t *testing.T) {
 		t.Fatalf("failed model test was not logged correctly: %#v", logs)
 	}
 	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "profile-1")
-	if status.ConsecutiveFailure != 0 || status.LastFailureAt != nil || status.LastHealthCheckAt == nil || status.LastSuccessAt == nil {
-		t.Fatalf("upstream 4xx should complete the health check without tripping the circuit: %#v", status)
+	if status.ConsecutiveFailure != 0 || status.LastFailureAt != nil || status.LastSuccessAt != nil {
+		t.Fatalf("manual model test changed real-traffic circuit state: %#v", status)
 	}
 }
 
@@ -261,7 +250,7 @@ func TestHandleModelTestDoesNotCountCanceledRequestAsProviderFailure(t *testing.
 	}
 }
 
-func TestHandleModelTestCountsUpstreamServerErrorAsProviderFailure(t *testing.T) {
+func TestHandleModelTestServerErrorDoesNotAffectCircuit(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
@@ -281,8 +270,8 @@ func TestHandleModelTestCountsUpstreamServerErrorAsProviderFailure(t *testing.T)
 	}
 
 	status := findProviderStatus(t, a.providerRouterStatus(), "codex", "profile-1")
-	if status.ConsecutiveFailure != 1 || status.LastFailureAt == nil || status.LastHealthCheckAt == nil || status.LastSuccessAt != nil {
-		t.Fatalf("upstream 5xx was not counted as a provider failure: %#v", status)
+	if status.ConsecutiveFailure != 0 || status.LastFailureAt != nil || status.LastSuccessAt != nil {
+		t.Fatalf("manual model test changed real-traffic circuit state: %#v", status)
 	}
 }
 

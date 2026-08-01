@@ -9,17 +9,49 @@ import (
 	"strings"
 )
 
-func withManagementAccess(next http.Handler) http.Handler {
+func withManagementAccess(next http.Handler, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isManagementRequest(r) && !managementRequestAllowed(r) {
+		if !isManagementRequest(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !managementRequestAllowed(r) {
 			writeError(w, http.StatusForbidden, errManagementAccessDenied)
+			return
+		}
+		if bootstrapToken := strings.TrimSpace(r.URL.Query().Get(managementTokenQuery)); bootstrapToken != "" {
+			if !accessTokenEqual(token, bootstrapToken) {
+				writeError(w, http.StatusUnauthorized, errManagementAuthenticationRequired)
+				return
+			}
+			http.SetCookie(w, &http.Cookie{
+				Name:     managementTokenCookie,
+				Value:    token,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				cleanURL := *r.URL
+				query := cleanURL.Query()
+				query.Del(managementTokenQuery)
+				cleanURL.RawQuery = query.Encode()
+				http.Redirect(w, r, cleanURL.String(), http.StatusSeeOther)
+				return
+			}
+		} else if !accessTokenEqual(token, managementRequestToken(r)) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="vision-relay-management"`)
+			writeError(w, http.StatusUnauthorized, errManagementAuthenticationRequired)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-var errManagementAccessDenied = errors.New("management interface is only available from the local origin")
+var (
+	errManagementAccessDenied           = errors.New("management interface is only available from the local origin")
+	errManagementAuthenticationRequired = errors.New("management authentication required")
+)
 
 func isManagementRequest(r *http.Request) bool {
 	if isManagementAPIPath(r.URL.Path) {
@@ -34,6 +66,7 @@ func isManagementAPIPath(path string) bool {
 	}
 	switch path {
 	case "/api/desktop/activate",
+		"/api/vision-cache",
 		"/api/relay/status",
 		"/api/provider-router/status",
 		"/api/config",

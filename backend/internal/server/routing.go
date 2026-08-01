@@ -26,8 +26,9 @@ func (a *app) handleRoute(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	body, err := captureRequestBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		a.logCompletedRequest(r, nil, []byte(err.Error()), http.StatusBadRequest, started)
+		status := requestBodyErrorStatus(err)
+		writeError(w, status, err)
+		a.logCompletedRequest(r, nil, []byte(err.Error()), status, started)
 		return
 	}
 	lrw := newLoggingResponseWriter(w, started)

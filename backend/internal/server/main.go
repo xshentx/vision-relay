@@ -73,7 +73,7 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 		log.Printf("database config load warning: %v", err)
 	} else if loaded, ok, err := migrateLegacyDBIfNeeded(db, dbPath); err == nil && ok {
 		cfg = mergeConfig(cfg, loaded)
-		log.Printf("migrated database from legacy config directory")
+		log.Printf("migrated database from legacy location")
 	} else if err != nil {
 		log.Printf("legacy database migration warning: %v", err)
 	} else if loaded, err := loadConfig(configPath); err == nil {
@@ -115,6 +115,13 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 		log.Fatal(err)
 	}
 	cfg.Addr = relayAddr
+	if generated, tokenErr := ensureRelayToken(&cfg); tokenErr != nil {
+		log.Fatalf("relay token initialization failed: %v", tokenErr)
+	} else if generated {
+		if saveErr := saveConfigToDB(db, cfg); saveErr != nil {
+			log.Fatalf("relay token persistence failed: %v", saveErr)
+		}
+	}
 	cfg.ManagementAddr = defaultManagementAddr
 	if *noOpen {
 		cfg.OpenWindow = false
@@ -143,12 +150,21 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 		log.Fatalf("relay API listen failed on %s: %v", cfg.Addr, err)
 	}
 
+	managementToken, err := loadOrCreateManagementToken("")
+	if err != nil {
+		_ = relayListener.Close()
+		_ = managementListener.Close()
+		log.Fatalf("management token initialization failed: %v", err)
+	}
+
 	a := &app{
-		cfg:        cfg,
-		configPath: configPath,
-		dbPath:     dbPath,
-		db:         db,
-		httpClient: &http.Client{Timeout: 180 * time.Second},
+		cfg:               cfg,
+		configPath:        configPath,
+		dbPath:            dbPath,
+		db:                db,
+		httpClient:        &http.Client{Timeout: 180 * time.Second},
+		managementToken:   managementToken,
+		relayAuthRequired: relayRequiresAuthentication(relayListener.Addr().String()),
 	}
 	if err := a.initializeVisionCache(); err != nil {
 		log.Printf("vision cache initialization warning: %v", err)
@@ -160,14 +176,19 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 		Addr:              cfg.ManagementAddr,
 		Handler:           managementHandler,
 		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 	relayServer := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           relayHandler,
 		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	managementURL := localServerURL(cfg.ManagementAddr)
+	managementLaunchURL := managementBootstrapURL(managementURL, managementToken)
 	relayURL := localServerURL(cfg.Addr)
 	log.Printf("%s management UI listening on %s", appSlug, managementURL)
 	log.Printf("%s relay API listening on %s", appSlug, relayURL)
@@ -176,7 +197,7 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	if cfg.OpenBrowser {
 		go func() {
 			time.Sleep(500 * time.Millisecond)
-			_ = openBrowser(managementURL)
+			_ = openBrowser(managementLaunchURL)
 		}()
 	}
 	type serverResult struct {
@@ -194,21 +215,17 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 	go serve("management UI", managementServer, managementListener)
 	go serve("relay API", relayServer, relayListener)
 
-	probeContext, stopProviderRecoveryProbes := context.WithCancel(context.Background())
-	go runProviderRecoveryProbes(probeContext, a)
-
 	// Client routes must always point at the relay API, never at the management UI.
 	go runStartupMaintenance(a, cfg, relayURL)
 
 	shutdownServers := func() {
-		stopProviderRecoveryProbes()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = managementServer.Shutdown(ctx)
 		_ = relayServer.Shutdown(ctx)
 	}
 	if cfg.OpenWindow {
-		runTrayApp(managementURL, desktopActivation, func() {
+		runTrayApp(managementLaunchURL, desktopActivation, func() {
 			shutdownServers()
 			for range 2 {
 				result := <-serverErr
@@ -316,14 +333,14 @@ func newManagementHandler(a *app, desktopActivation chan<- struct{}) http.Handle
 		}
 		a.handleWeb(w, r)
 	})
-	return withManagementAccess(withCORS(mux))
+	return withManagementAccess(withCORS(mux), a.managementToken)
 }
 
 func newRelayHandler(a *app) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", healthHandler("relay"))
 	mux.HandleFunc("/", a.handleRoute)
-	return withCORS(mux)
+	return withRelayAccess(a, withCORS(mux))
 }
 
 func healthHandler(surface string) http.HandlerFunc {

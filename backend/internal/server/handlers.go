@@ -103,7 +103,7 @@ func (a *app) handleRelayStatus(w http.ResponseWriter, r *http.Request) {
 func (a *app) handleOpenAIChat(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, requestBodyErrorStatus(err), err)
 		return
 	}
 	cfg := a.textConfigForRequest(r)
@@ -210,7 +210,7 @@ func (a *app) prepareOpenAIChatWithConfig(ctx context.Context, cfg config, body 
 func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, requestBodyErrorStatus(err), err)
 		return
 	}
 	cfg := a.textConfigForRequest(r)
@@ -408,7 +408,7 @@ func isImageViewToolName(name string) bool {
 func (a *app) handleAnthropicMessages(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, requestBodyErrorStatus(err), err)
 		return
 	}
 	cfg := a.textConfigForRequest(r)
@@ -514,7 +514,7 @@ func (a *app) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request)
 	}
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, requestBodyErrorStatus(err), err)
 		return
 	}
 	cfg := a.textConfigForRequest(r)
@@ -541,7 +541,7 @@ func (a *app) handleAnthropicCountTokens(w http.ResponseWriter, r *http.Request)
 func (a *app) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, requestBodyErrorStatus(err), err)
 		return
 	}
 	cfg := a.textConfigForRequest(r)
@@ -604,7 +604,7 @@ func (a *app) handleGeminiGenerate(w http.ResponseWriter, r *http.Request) {
 func (a *app) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, requestBodyErrorStatus(err), err)
 		return
 	}
 	cfg := a.textConfigForRequest(r)
@@ -650,7 +650,7 @@ func (a *app) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 func (a *app) handleOllamaGenerate(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, requestBodyErrorStatus(err), err)
 		return
 	}
 	cfg := a.textConfigForRequest(r)
@@ -714,7 +714,7 @@ func (a *app) forwardOllama(w http.ResponseWriter, r *http.Request, cfg config, 
 func (a *app) handleRawProxy(w http.ResponseWriter, r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, requestBodyErrorStatus(err), err)
 		return
 	}
 	cfg := a.currentConfig()

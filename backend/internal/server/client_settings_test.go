@@ -233,7 +233,7 @@ func TestConfigureClientRouteUsesCustomOpenCodePath(t *testing.T) {
 func TestDisabledLocalAPIStillServesManagementUI(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.LocalAPIEnabled = boolPtr(false)
-	a := &app{cfg: cfg}
+	a := &app{cfg: cfg, managementToken: testManagementToken}
 
 	apiRecorder := httptest.NewRecorder()
 	a.handleRoute(apiRecorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
@@ -246,6 +246,7 @@ func TestDisabledLocalAPIStillServesManagementUI(t *testing.T) {
 	uiRecorder := httptest.NewRecorder()
 	uiRequest := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:18473/", nil)
 	uiRequest.RemoteAddr = "127.0.0.1:5000"
+	uiRequest.Header.Set("Authorization", "Bearer "+testManagementToken)
 	newManagementHandler(a, make(chan struct{}, 1)).ServeHTTP(uiRecorder, uiRequest)
 	if uiRecorder.Code != http.StatusOK {
 		t.Fatalf("management UI status = %d, want %d", uiRecorder.Code, http.StatusOK)
