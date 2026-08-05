@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"vision-relay/backend/internal/protocol"
 )
 
 const (
@@ -38,6 +40,7 @@ type providerRouteRequest struct {
 	group          providerGroup
 	candidates     []providerRouteCandidate
 	configured     bool
+	path           string
 	originalModel  string
 	containsImages bool
 }
@@ -48,11 +51,12 @@ type providerRouteTrace struct {
 }
 
 type providerRouteSelection struct {
-	Group     providerGroup
-	ProfileID string
-	Name      string
-	Provider  string
-	Model     string
+	Group         providerGroup
+	ProfileID     string
+	Name          string
+	Provider      string
+	Model         string
+	TransformKind string
 }
 
 func withProviderRouteContext(ctx context.Context, group providerGroup) context.Context {
@@ -639,13 +643,26 @@ func providerAttemptError(resp *http.Response, err error) error {
 }
 
 func providerRouteCandidatesCompatible(route *providerRouteRequest, prepared, candidate providerRouteCandidate) bool {
-	if providerRequestTransformKind(prepared.Group, prepared.Config) != providerRequestTransformKind(candidate.Group, candidate.Config) {
+	if !providerRouteCanAdaptPerCandidate(route) && providerRequestTransformKind(prepared.Group, prepared.Config) != providerRequestTransformKind(candidate.Group, candidate.Config) {
 		return false
 	}
 	if route == nil || !route.containsImages {
 		return true
 	}
 	return textSupportsImages(prepared.Config, route.originalModel) == textSupportsImages(candidate.Config, route.originalModel)
+}
+
+func providerRouteCanAdaptPerCandidate(route *providerRouteRequest) bool {
+	return route != nil && route.group == providerGroupCodex && isOpenAIResponsesPath(route.path)
+}
+
+func providerRouteSelectedTransformKind(ctx context.Context) (string, bool) {
+	if trace := providerRouteTraceFromContext(ctx); trace != nil {
+		if selection, ok := trace.get(); ok && selection.TransformKind != "" {
+			return selection.TransformKind, true
+		}
+	}
+	return "", false
 }
 
 func providerRequestTransformKind(group providerGroup, cfg config) string {
@@ -678,8 +695,22 @@ func adaptProviderAttempt(candidate providerRouteCandidate, requestURI string, b
 	if payload == nil {
 		return adaptedURI, body
 	}
+	changed := false
+	if providerAttemptNeedsResponsesToChat(candidate, adaptedURI) {
+		chatPayload := protocol.ResponsesPayloadToChatCompletions(payload)
+		ensureStreamUsage(chatPayload)
+		sanitizeOpenAIChatPayload(chatPayload)
+		payload = chatPayload
+		adaptedURI = replaceRequestURIPath(adaptedURI, "/v1/chat/completions")
+		changed = true
+	}
 	current := strings.TrimSpace(firstString(payload["model"]))
 	if current == "" {
+		if changed {
+			if encoded, err := jsonMarshal(payload); err == nil {
+				return adaptedURI, encoded
+			}
+		}
 		return adaptedURI, body
 	}
 	requested := strings.TrimSpace(originalRequested)
@@ -692,11 +723,34 @@ func adaptProviderAttempt(candidate providerRouteCandidate, requestURI string, b
 	}
 	if desired != "" && desired != current {
 		payload["model"] = desired
+		changed = true
+	}
+	if changed {
 		if encoded, err := jsonMarshal(payload); err == nil {
 			return adaptedURI, encoded
 		}
 	}
 	return adaptedURI, body
+}
+
+func providerAttemptNeedsResponsesToChat(candidate providerRouteCandidate, requestURI string) bool {
+	if candidate.Group != providerGroupCodex || providerRequestTransformKind(candidate.Group, candidate.Config) != "openai_chat" {
+		return false
+	}
+	path, _ := splitRequestURIPathQuery(requestURI)
+	return isOpenAIResponsesPath(path)
+}
+
+func splitRequestURIPathQuery(requestURI string) (string, string) {
+	if idx := strings.Index(requestURI, "?"); idx >= 0 {
+		return requestURI[:idx], requestURI[idx:]
+	}
+	return requestURI, ""
+}
+
+func replaceRequestURIPath(requestURI, path string) string {
+	_, query := splitRequestURIPathQuery(requestURI)
+	return path + query
 }
 
 func replaceGeminiRequestedModel(requestURI, model string) string {

@@ -236,7 +236,7 @@
               <div><h4>供应商故障转移</h4><p>仅在本地 API 接口开启时可用；主供应商发生网络错误、限流、认证或模型不可用等可重试错误时，按 P1、P2 优先级自动尝试下一家。</p></div>
               <label class="client-route-control"><span>启用故障转移</span><span class="switch-control"><input id="providerFailoverEnabled" type="checkbox"><span aria-hidden="true"></span></span></label>
             </div>
-            <div class="settings-note"><strong>生效规则</strong><span>只有在供应商列表中点击“加入”的供应商才会参与；已熔断供应商在冷却期内自动跳过，冷却结束后的下一次真实请求会作为半开探测，成功后重新参与。请求格式或语义错误（400/405/406/413/414/415/422/501）不切换供应商，也不影响熔断状态。</span></div>
+            <div class="settings-note"><strong>生效规则</strong><span>启用故障转移后，供应商列表中的“使用”按钮会变成“加入/退出”；只有加入的供应商才会参与，已熔断供应商在冷却期内自动跳过，冷却结束后的下一次真实请求会作为半开探测，成功后重新参与。请求格式或语义错误（400/405/406/413/414/415/422/501）不切换供应商，也不影响熔断状态。</span></div>
           </article>
 
           <article class="component-card settings-behavior-card">

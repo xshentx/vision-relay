@@ -128,6 +128,7 @@ func (a *app) forwardRaw(ctx context.Context, ep endpoint, method, requestURI st
 		trace.set(providerRouteSelection{
 			Group: candidate.Group, ProfileID: candidate.ProfileID, Name: candidate.Name,
 			Provider: candidate.Endpoint.Provider, Model: candidate.Endpoint.ModelOverride,
+			TransformKind: providerRequestTransformKind(candidate.Group, candidate.Config),
 		})
 		router.recordSelection(candidate)
 		originalModel := ""

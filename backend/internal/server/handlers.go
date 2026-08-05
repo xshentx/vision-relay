@@ -232,6 +232,7 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 		payload["model"] = model
 	}
 	stream, _ := payload["stream"].(bool)
+	routed := providerRouteRequestFromContext(r.Context()) != nil
 	if stream {
 		if loggingWriter, ok := w.(*loggingResponseWriter); ok {
 			loggingWriter.enableDisconnectDrain()
@@ -240,7 +241,7 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 	forwardContext, keepStreamAfterHeaders, releaseStream := upstreamStreamContext(r.Context(), stream)
 	defer releaseStream()
 
-	if normalizeProvider(cfg.TextProvider) == "openai" && normalizeWireAPI(cfg.TextWireAPI) != "responses" {
+	if !routed && normalizeProvider(cfg.TextProvider) == "openai" && normalizeWireAPI(cfg.TextWireAPI) != "responses" {
 		chatPayload := protocol.ResponsesPayloadToChatCompletions(payload)
 		ensureStreamUsage(chatPayload)
 		sanitizeOpenAIChatPayload(chatPayload)
@@ -277,16 +278,34 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, forwardErr)
 		return
 	}
+	responsesViaChat := false
+	if kind, ok := providerRouteSelectedTransformKind(r.Context()); ok {
+		responsesViaChat = kind == "openai_chat"
+	} else if !routed {
+		responsesViaChat = providerRequestTransformKind(providerGroupCodex, cfg) == "openai_chat"
+	}
 	if !stream {
+		if responsesViaChat {
+			protocol.WriteResponsesFromChatCompletion(w, resp)
+			return
+		}
 		writeUpstream(w, resp)
 		return
 	}
 	if isEventStreamResponse(resp) {
 		keepStreamAfterHeaders()
+		if responsesViaChat {
+			protocol.WriteStreamingResponsesFromChatCompletion(w, resp)
+			return
+		}
 		writeUpstream(w, resp)
 		return
 	}
 	if !isSuccessfulResponse(resp) {
+		if responsesViaChat {
+			protocol.WriteStreamingResponsesFromChatCompletion(w, resp)
+			return
+		}
 		writeUpstream(w, resp)
 		return
 	}

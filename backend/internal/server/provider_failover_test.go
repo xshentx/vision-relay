@@ -376,15 +376,40 @@ func TestProviderFailoverMapsOriginalRequestedModelForEachAttempt(t *testing.T) 
 	}
 }
 
-func TestProviderFailoverSkipsProtocolIncompatibleBackup(t *testing.T) {
+func TestProviderFailoverConvertsResponsesRequestForChatCompletionsBackup(t *testing.T) {
+	var primaryCalls atomic.Int64
 	var backupCalls atomic.Int64
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		primaryCalls.Add(1)
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	defer primary.Close()
-	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		backupCalls.Add(1)
-		w.WriteHeader(http.StatusOK)
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("backup path = %q, want /v1/chat/completions", r.URL.Path)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := payload["messages"].([]any); !ok {
+			t.Fatalf("backup payload was not converted to chat completions: %#v", payload)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id":      "chatcmpl-backup",
+			"object":  "chat.completion",
+			"created": 1,
+			"model":   firstString(payload["model"]),
+			"choices": []any{map[string]any{
+				"index": 0,
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": "backup ok",
+				},
+				"finish_reason": "stop",
+			}},
+		})
 	}))
 	defer backup.Close()
 
@@ -402,8 +427,11 @@ func TestProviderFailoverSkipsProtocolIncompatibleBackup(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"requested","input":"hi"}`))
 	request.Header.Set("Content-Type", "application/json")
 	a.handleRoute(recorder, request)
-	if recorder.Code != http.StatusServiceUnavailable || backupCalls.Load() != 0 {
-		t.Fatalf("status=%d backup calls=%d body=%s", recorder.Code, backupCalls.Load(), recorder.Body.String())
+	if recorder.Code != http.StatusOK || primaryCalls.Load() != 1 || backupCalls.Load() != 1 {
+		t.Fatalf("status=%d primary=%d backup=%d body=%s", recorder.Code, primaryCalls.Load(), backupCalls.Load(), recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "backup ok") || !strings.Contains(recorder.Body.String(), "response") {
+		t.Fatalf("backup chat completion was not converted back to responses: %s", recorder.Body.String())
 	}
 }
 

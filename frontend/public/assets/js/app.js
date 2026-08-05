@@ -2970,6 +2970,16 @@ function renderProfileList(container, profiles, activeId, kind) {
     const row = document.createElement("div");
     row.className = `profile-row${profile.id === activeId ? " active" : ""}`;
     row.dataset.profileId = profile.id;
+    const failoverEnabled = kind === "text" && providerFailoverControlsEnabled();
+    const failoverJoined = failoverEnabled && providerFailoverRank(profile) > 0;
+    const primaryActionLabel = failoverEnabled ? (failoverJoined ? "退出" : "加入") : "使用";
+    const primaryActionTitle = failoverEnabled
+      ? (failoverJoined ? "点击退出故障转移" : "点击加入故障转移")
+      : (profile.id === activeId ? "已在使用" : "切换到该供应商");
+    const primaryActionClass = failoverEnabled
+      ? `secondary small-action profile-failover${failoverJoined ? " is-joined" : ""}`
+      : "secondary small-action profile-switch";
+    const primaryActionDisabled = !failoverEnabled && profile.id === activeId ? " disabled" : "";
     row.innerHTML = `
       <span class="profile-drag-handle" role="button" tabindex="0" aria-label="拖动 ${escapeHTML(profile.name || "未命名")} 排序" title="按住拖动排序">
         <span aria-hidden="true"></span>
@@ -2982,25 +2992,25 @@ function renderProfileList(container, profiles, activeId, kind) {
         </div>
       </div>
       <div class="profile-actions">
-        ${kind === "text" && providerFailoverControlsEnabled() ? `<button class="secondary small-action profile-failover${providerFailoverRank(profile) > 0 ? " is-joined" : ""}" type="button" data-action="failover" title="${providerFailoverRank(profile) > 0 ? "\u70b9\u51fb\u79fb\u51fa\u6545\u969c\u8f6c\u79fb" : "\u52a0\u5165\u540e\u624d\u53c2\u4e0e\u6545\u969c\u8f6c\u79fb"}">${providerFailoverRank(profile) > 0 ? "\u79fb\u51fa\u6545\u969c\u8f6c\u79fb" : "\u52a0\u5165\u6545\u969c\u8f6c\u79fb"}</button>` : ""}
-        ${kind === "text" ? '<button class="secondary small-action profile-test" type="button" data-action="test">\u6a21\u578b\u6d4b\u8bd5</button>' : ""}
-        <button class="secondary small-action profile-switch" type="button" data-action="switch"${profile.id === activeId ? " disabled" : ""}>使用</button>
+        ${kind === "text" ? '<button class="secondary small-action profile-test" type="button" data-action="test">模型测试</button>' : ""}
+        <button class="${primaryActionClass}" type="button" data-action="switch" title="${primaryActionTitle}"${primaryActionDisabled}>${primaryActionLabel}</button>
         <button class="secondary small-action" type="button" data-action="edit">编辑</button>
         <button class="danger small-action" type="button" data-action="delete">删除</button>
       </div>
     `;
-    row.querySelector('[data-action="failover"]')?.addEventListener("click", (event) => {
-      const button = event.currentTarget;
-      button.disabled = true;
-      toggleProviderFailoverProfile(profile).catch((err) => {
-        console.error(err);
-        showToast(`\u4fdd\u5b58\u6545\u969c\u8f6c\u79fb\u961f\u5217\u5931\u8d25\uff1a${err.message || err}`, "error");
-      });
-    });
     row.querySelector('[data-action="test"]')?.addEventListener("click", () => {
       openModelTestDrawer(profile);
     });
     row.querySelector('[data-action="switch"]').addEventListener("click", (event) => {
+      if (failoverEnabled) {
+        const button = event.currentTarget;
+        button.disabled = true;
+        toggleProviderFailoverProfile(profile).catch((err) => {
+          console.error(err);
+          showToast(`保存故障转移队列失败：${err.message || err}`, "error");
+        });
+        return;
+      }
       if (profile.id === activeId) return;
       const switchButton = event.currentTarget;
       switchButton.disabled = true;

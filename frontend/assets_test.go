@@ -334,7 +334,9 @@ func TestProfileSwitchUsesExplicitButtonAndSupportsPersistentDragSorting(t *test
 	for _, expected := range []string{
 		`class="profile-drag-handle"`,
 		`data-action="switch"`,
-		`data-action="switch"${profile.id === activeId ? " disabled" : ""}>使用</button>`,
+		`const primaryActionLabel = failoverEnabled ? (failoverJoined ? "退出" : "加入") : "使用";`,
+		`const primaryActionDisabled = !failoverEnabled && profile.id === activeId ? " disabled" : "";`,
+		`<button class="${primaryActionClass}" type="button" data-action="switch" title="${primaryActionTitle}"${primaryActionDisabled}>${primaryActionLabel}</button>`,
 		`dragHandle.addEventListener("mousedown"`,
 		`document.addEventListener("mousemove"`,
 		`document.addEventListener("mouseup"`,

@@ -179,6 +179,7 @@ func setProviderRouteRequestMetadata(ctx context.Context, path, requestURI strin
 		return
 	}
 	payload := decodeJSONMap(body)
+	route.path = canonicalRelayPath(path)
 	if payload != nil {
 		route.originalModel = strings.TrimSpace(firstString(payload["model"]))
 	}
