@@ -298,7 +298,7 @@ func (a *app) handleOpenAIResponses(w http.ResponseWriter, r *http.Request) {
 			protocol.WriteStreamingResponsesFromChatCompletion(w, resp)
 			return
 		}
-		writeUpstream(w, resp)
+		writeOpenAIResponsesStream(w, resp)
 		return
 	}
 	if !isSuccessfulResponse(resp) {

@@ -2968,10 +2968,13 @@ function renderProfileList(container, profiles, activeId, kind) {
   container.innerHTML = "";
   profiles.forEach((profile) => {
     const row = document.createElement("div");
-    row.className = `profile-row${profile.id === activeId ? " active" : ""}`;
-    row.dataset.profileId = profile.id;
     const failoverEnabled = kind === "text" && providerFailoverControlsEnabled();
     const failoverJoined = failoverEnabled && providerFailoverRank(profile) > 0;
+    const rowStateClass = failoverEnabled
+      ? (failoverJoined ? " failover-joined" : "")
+      : (profile.id === activeId ? " active" : "");
+    row.className = `profile-row${rowStateClass}`;
+    row.dataset.profileId = profile.id;
     const primaryActionLabel = failoverEnabled ? (failoverJoined ? "退出" : "加入") : "使用";
     const primaryActionTitle = failoverEnabled
       ? (failoverJoined ? "点击退出故障转移" : "点击加入故障转移")

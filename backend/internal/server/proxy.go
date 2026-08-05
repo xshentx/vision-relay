@@ -12,7 +12,11 @@ import (
 	"time"
 )
 
-const upstreamStreamDrainTimeout = 15 * time.Second
+const (
+	upstreamStreamDrainTimeout  = 15 * time.Second
+	upstreamRequestTimeout      = 300 * time.Second
+	upstreamResponseHeadTimeout = 300 * time.Second
+)
 
 type upstreamStreamingRequestKey struct{}
 
@@ -213,6 +217,16 @@ func (a *app) forwardRawOnce(ctx context.Context, ep endpoint, method, requestUR
 	if err != nil {
 		return nil, err
 	}
+	if upstreamStreamingRequest(ctx) && client.Timeout > 0 {
+		// http.Client.Timeout covers the response body as well as connection and
+		// headers. Applying it to SSE cuts a healthy long-running stream off at
+		// the deadline, before response.completed can arrive. Streaming requests
+		// are bounded by their context and the transport's response-header timeout
+		// instead; once headers arrive, the body may run for as long as needed.
+		streamClient := *client
+		streamClient.Timeout = 0
+		client = &streamClient
+	}
 	return client.Do(req)
 }
 
@@ -227,11 +241,12 @@ func (a *app) upstreamHTTPClient(proxyURL string) (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = http.ProxyURL(parsed)
+	transport.ResponseHeaderTimeout = upstreamResponseHeadTimeout
 	return &http.Client{
-		Timeout: 180 * time.Second,
-		Transport: &http.Transport{
-			Proxy: http.ProxyURL(parsed),
-		},
+		Timeout:       upstreamRequestTimeout,
+		Transport:     transport,
 		CheckRedirect: rejectUpstreamRedirect,
 	}, nil
 }

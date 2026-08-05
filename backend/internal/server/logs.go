@@ -77,6 +77,22 @@ func (w *loggingResponseWriter) enableDisconnectDrain() {
 	w.drainAfterDisconnect = true
 }
 
+// Flush preserves the streaming capability of the wrapped ResponseWriter.
+// Without this method, protocol writers cannot flush SSE event boundaries
+// through the logging middleware and small deltas may remain buffered locally.
+func (w *loggingResponseWriter) Flush() {
+	if w.downstreamGone {
+		return
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *loggingResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func (w *loggingResponseWriter) writeTail(p []byte) {
 	if len(p) == 0 {
 		return

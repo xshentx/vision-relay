@@ -774,6 +774,16 @@ h3 {
   border-color: #c8d8f8;
 }
 
+.profile-row.failover-joined {
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.profile-row.failover-joined:hover {
+  border-color: #4ade80;
+  background: #ecfdf5;
+}
+
 .profile-row.dragging {
   opacity: 0.46;
 }
@@ -910,19 +920,19 @@ h3 {
   margin-top: 7px;
   margin-left: 6px;
   padding: 3px 7px;
-  border: 1px solid #bfdbfe;
+  border: 1px solid #86efac;
   border-radius: 999px;
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: #f0fdf4;
+  color: #15803d;
   font-size: 11px;
   font-weight: 850;
   line-height: 1.35;
 }
 
 .profile-failover.is-joined {
-  border-color: #bfdbfe;
-  background: #eff6ff;
-  color: #1d4ed8;
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #15803d;
 }
 
 .profile-actions {

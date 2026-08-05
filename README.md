@@ -131,7 +131,7 @@ macOS 原生构建依赖 CGO、Cocoa 和 WebKit，因此必须在 macOS 上执�
 
 ```bash
 xcode-select --install  # 尚未安装 Command Line Tools 时执行
-bash ./tools/build-macos.sh --version v2.3.3 --arch arm64
+bash ./tools/build-macos.sh --version v2.3.4 --arch arm64
 ```
 
 支持的架构参数：
@@ -149,14 +149,14 @@ bash ./tools/build-macos.sh --version v2.3.3 --arch arm64
 Windows 本地开发构建（未提供更新签名密钥时，构建产物会禁用自动替换更新）：
 
 ```powershell
-.\tools\build-windows.ps1 -Version v2.3.3
+.\tools\build-windows.ps1 -Version v2.3.4
 ```
 
 如需启用 Windows 应用内自动替换更新，可选提供 Ed25519 更新签名私钥，使构建脚本把对应公钥嵌入 EXE，并生成独立的 `.sig` 附件：
 
 ```powershell
 .\tools\build-windows.ps1 `
-  -Version v2.3.3 `
+  -Version v2.3.4 `
   -UpdateSigningPrivateKeyPath C:\secure\vision-relay-update-signing.key `
   -RequireUpdateSignature
 ```
@@ -172,7 +172,7 @@ Windows 本地开发构建（未提供更新签名密钥时，构建产物会禁
 ```powershell
 .\tools\build-windows.ps1 `
   -Output dist\vision-relay.exe `
-  -Version v2.3.3 `
+  -Version v2.3.4 `
   -SigningCertificatePath C:\secure\vision-relay-code-signing.pfx `
   -SigningCertificatePassword '<PFX 密码>' `
   -RequireSignature
@@ -194,7 +194,7 @@ $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Filter s
 macOS 发布构建（在对应 Mac 或 macOS CI 上执行）：
 
 ```bash
-bash ./tools/build-macos.sh --version v2.3.3 --arch universal
+bash ./tools/build-macos.sh --version v2.3.4 --arch universal
 ```
 
 生成的 Release 附件：
@@ -210,14 +210,14 @@ vision-relay-darwin-universal.zip.sha256
 发布到 GitHub Release 时建议使用版本标签：
 
 ```powershell
-git tag v2.3.3
-git push origin v2.3.3
+git tag v2.3.4
+git push origin v2.3.4
 ```
 
 Release 标题建议为：
 
 ```text
-Vision Relay v2.3.3
+Vision Relay v2.3.4
 ```
 
 附件上传时应包含对应平台的程序包和同名 `.sha256` 文件；启用 Ed25519 更新签名时，Windows 还应包含 `vision-relay.exe.sig`。macOS 也可以分别发布 `vision-relay-darwin-arm64.zip` 与 `vision-relay-darwin-amd64.zip`。
@@ -424,7 +424,7 @@ Windows 与 macOS 桌面版默认都会在启动后访问 GitHub Releases 检查
 
 ```powershell
 .\tools\build-windows.ps1 `
-  -Version v2.3.3 `
+  -Version v2.3.4 `
   -UpdateSigningPrivateKeyPath C:\secure\vision-relay-update-signing.key `
   -RequireUpdateSignature
 ```

@@ -218,6 +218,14 @@ func (b *providerObservedBody) reportProviderFailure(err error) {
 	b.finish(err)
 }
 
+func (b *providerObservedBody) reportProviderSuccess() {
+	b.validationMu.Lock()
+	b.validationPending = false
+	b.pendingEOF = false
+	b.validationMu.Unlock()
+	b.finish(nil)
+}
+
 func (b *providerObservedBody) beginProtocolValidation() {
 	b.validationMu.Lock()
 	b.validationPending = true

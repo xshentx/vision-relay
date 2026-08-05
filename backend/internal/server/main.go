@@ -157,12 +157,14 @@ func runPrimaryInstance(desktopActivation chan struct{}) {
 		log.Fatalf("management token initialization failed: %v", err)
 	}
 
+	upstreamTransport := http.DefaultTransport.(*http.Transport).Clone()
+	upstreamTransport.ResponseHeaderTimeout = upstreamResponseHeadTimeout
 	a := &app{
 		cfg:               cfg,
 		configPath:        configPath,
 		dbPath:            dbPath,
 		db:                db,
-		httpClient:        &http.Client{Timeout: 180 * time.Second},
+		httpClient:        &http.Client{Timeout: upstreamRequestTimeout, Transport: upstreamTransport},
 		managementToken:   managementToken,
 		relayAuthRequired: relayRequiresAuthentication(relayListener.Addr().String()),
 	}

@@ -29,8 +29,33 @@ func TestProviderFailoverControlsAreEmbedded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(styleRaw), ".switch-control input:disabled + span") {
+	style := string(styleRaw)
+	if !strings.Contains(style, ".switch-control input:disabled + span") {
 		t.Fatal("disabled switch styling is missing")
+	}
+	joinedRow := cssRuleBody(t, style, ".profile-row.failover-joined")
+	for _, expected := range []string{"border-color: #86efac;", "background: #f0fdf4;"} {
+		if !strings.Contains(joinedRow, expected) {
+			t.Fatalf("joined row styling %q is missing from its CSS rule", expected)
+		}
+	}
+	hoveredJoinedRow := cssRuleBody(t, style, ".profile-row.failover-joined:hover")
+	for _, expected := range []string{"border-color: #4ade80;", "background: #ecfdf5;"} {
+		if !strings.Contains(hoveredJoinedRow, expected) {
+			t.Fatalf("joined row hover styling %q is missing from its CSS rule", expected)
+		}
+	}
+	failoverBadge := cssRuleBody(t, style, ".profile-main .provider-failover-badge")
+	for _, expected := range []string{"border: 1px solid #86efac;", "background: #f0fdf4;", "color: #15803d;"} {
+		if !strings.Contains(failoverBadge, expected) {
+			t.Fatalf("failover badge styling %q is missing from its CSS rule", expected)
+		}
+	}
+	joinedButton := cssRuleBody(t, style, ".profile-failover.is-joined")
+	for _, expected := range []string{"border-color: #86efac;", "background: #f0fdf4;", "color: #15803d;"} {
+		if !strings.Contains(joinedButton, expected) {
+			t.Fatalf("joined failover button styling %q is missing from its CSS rule", expected)
+		}
 	}
 
 	scriptRaw, err := fs.ReadFile(FS, "assets/js/app.js")
@@ -44,6 +69,9 @@ func TestProviderFailoverControlsAreEmbedded(t *testing.T) {
 		"normalizeProviderFailoverProfiles",
 		"const primaryActionLabel = failoverEnabled ? (failoverJoined ? \"\u9000\u51fa\" : \"\u52a0\u5165\") : \"\u4f7f\u7528\";",
 		`const primaryActionClass = failoverEnabled`,
+		`const rowStateClass = failoverEnabled`,
+		`? (failoverJoined ? " failover-joined" : "")`,
+		`row.className = ` + "`profile-row${rowStateClass}`" + `;`,
 		`data-action="switch" title="${primaryActionTitle}"${primaryActionDisabled}>${primaryActionLabel}</button>`,
 		`toggleProviderFailoverProfile(profile)`,
 		"providerFailoverBadge",
@@ -69,4 +97,18 @@ func TestProviderFailoverControlsAreEmbedded(t *testing.T) {
 	if persisted < 0 || markedSaved < persisted || refreshed < markedSaved {
 		t.Fatalf("settings save markers are in the wrong order: persist=%d saved=%d refresh=%d", persisted, markedSaved, refreshed)
 	}
+}
+
+func cssRuleBody(t *testing.T, css, selector string) string {
+	t.Helper()
+	start := strings.Index(css, selector+" {")
+	if start < 0 {
+		t.Fatalf("CSS rule %q is missing", selector)
+	}
+	bodyStart := start + len(selector) + len(" {")
+	bodyEnd := strings.Index(css[bodyStart:], "}")
+	if bodyEnd < 0 {
+		t.Fatalf("CSS rule %q is not closed", selector)
+	}
+	return css[bodyStart : bodyStart+bodyEnd]
 }
